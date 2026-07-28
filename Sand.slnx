@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="Sand/Sand.vcxproj" Id="5858613d-6fb6-425c-b3d4-8c7ac68a3bbe" />
+</Solution>

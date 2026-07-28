@@ -1,0 +1,1008 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout(std430, binding = 0) buffer VoxelGrid {
+    uint grid[];
+};
+
+layout(std430, binding = 1) buffer CloudStats {
+    uint steamTopCount;
+    uint revealedCount;
+    uint lastRevealTimeBits;
+    uint waterVoxelCount;
+    uint cloudWaterCount;
+    uint totalWaterEvaporated;   // NEW: monotonic — never drains, unlike cloudWaterCount
+    uint rainPhase;
+    uint rainPhaseTimeBits;
+    uint rainFinishedTimeBits;
+    uint cloudRevealTime[64];
+    uint cloudFootprintX[64];
+    uint cloudFootprintZ[64];
+    uint cloudFootprintRadius[64];
+};
+
+layout(std140, binding = 2) uniform TuningParams {
+    float rainChanceStart;
+    float rainChanceMax;
+    float rainRampDuration;
+    float cloudRevealCooldown;
+    uint cloudRevealTargetSlots;
+    uint rainStartLayers;
+    uint rainMinWaterInCubeLayers;
+    float rainDarkenDelay;
+} tuning;
+
+const uint LAYER_SIZE = 128u * 128u; // 16384 — one layer
+const uint CLOUD_MAX_SLOTS = 64u;
+
+layout(push_constant) uniform Constants {
+    float time;
+    float pitch;
+    float yaw;
+    float camX;
+    float camY;
+    float camZ;
+    int spawnX;
+    int spawnY;
+    int spawnZ;
+    int spawnActive;
+    int spawnType;
+    int spawnSize;
+    float fovDistance;
+    float perspectiveBlend;
+} pc;
+
+const int WIDTH = 128;
+const int HEIGHT = 128;
+const int DEPTH = 128;
+
+// FUNCTION: getHDir
+ivec3 getHDir(int d) {
+    if (d == 0) return ivec3(1, 0, 0);
+    if (d == 1) return ivec3(-1, 0, 0);
+    if (d == 2) return ivec3(0, 0, 1);
+    if (d == 3) return ivec3(0, 0, -1);
+    if (d == 4) return ivec3(1, 0, 1);
+    if (d == 5) return ivec3(1, 0, -1);
+    if (d == 6) return ivec3(-1, 0, 1);
+    return ivec3(-1, 0, -1);
+}
+
+// FUNCTION: getOrthoDir
+ivec3 getOrthoDir(int d) {
+    if (d == 0) return ivec3(1, 0, 0);
+    if (d == 1) return ivec3(-1, 0, 0);
+    if (d == 2) return ivec3(0, 1, 0);
+    if (d == 3) return ivec3(0, -1, 0);
+    if (d == 4) return ivec3(0, 0, 1);
+    return ivec3(0, 0, -1);
+}
+
+// FUNCTION: getIndex
+uint getIndex(ivec3 pos) {
+    return uint(pos.x + (pos.y * WIDTH) + (pos.z * WIDTH * HEIGHT));
+}
+
+// FUNCTION: pack
+uint pack(uint type, uint dir, uint sleep, uint age) {
+    return (type & 0xFFu) | ((dir & 0xFFu) << 8) | ((sleep & 0xFFu) << 16) | ((age & 0xFFu) << 24);
+}
+
+// FUNCTION: getType
+uint getType(uint val) {
+    return val & 0xFFu;
+}
+
+// FUNCTION: getDir
+uint getDir(uint val) {
+    return (val >> 8) & 0xFFu;
+}
+
+// FUNCTION: getSleep
+uint getSleep(uint val) {
+    return (val >> 16) & 0xFFu;
+}
+
+// FUNCTION: getAge
+uint getAge(uint val) {
+    return (val >> 24) & 0xFFu;
+}
+
+// FUNCTION: hash
+float hash(vec3 p) {
+    return fract(sin(dot(p, vec3(12.9898f, 78.233f, 45.164f))) * 43758.5453f);
+}
+
+// FUNCTION: incWater / decWater
+// Keeps a live running total of water voxels the system currently "owes" back.
+// Only changes on: user spawn/void of water, steam venting off the top of the grid, the
+// 200-tick age-timeout (which now also credits cloudWaterCount, making it fully recoverable
+// via rain rather than a permanent loss), and rain adding water back in. Sand/dirt moisture
+// absorption and fire->steam conversion do NOT touch this count, since water isn't leaving
+// the system in those cases, just changing storage form. Only the user's void brush now
+// causes genuinely permanent, unrecoverable water loss. decWater relies on uint wraparound
+// (adding 0xFFFFFFFFu == -1 under modular arithmetic) since atomicAdd has no signed form.
+void incWater() { atomicAdd(waterVoxelCount, 1u); }
+void decWater() { atomicAdd(waterVoxelCount, 0xFFFFFFFFu); }
+
+// FUNCTION: getRainThreshold / getCloudWaterPerSlot / getRainMinWaterInCube
+// These were compile-time `const` derived values before their inputs moved into the
+// TuningParams UBO; GLSL const initializers can't reference a uniform, so they're computed
+// on demand here instead. max(..., 1u) guards against a divide-by-zero if
+// cloudRevealTargetSlots is ever set to 0 in the config file.
+uint getRainThreshold() { return tuning.rainStartLayers * LAYER_SIZE; }
+uint getCloudWaterPerSlot() { return getRainThreshold() / max(tuning.cloudRevealTargetSlots, 1u); }
+uint getRainMinWaterInCube() { return tuning.rainMinWaterInCubeLayers * LAYER_SIZE; }
+
+// FUNCTION: tryRevealNextCloud
+// Gates cloud reveals to one-at-a-time: a slot must be both event-eligible AND past the cooldown
+// since the last reveal. atomicCompSwap on revealedCount ensures only one invocation ever wins,
+// even if many steam voxels vent in the same burst/dispatch.
+void tryRevealNextCloud() {
+    uint currentRevealed = revealedCount;
+    if (currentRevealed >= CLOUD_MAX_SLOTS) return;
+
+    uint requiredWater = (currentRevealed + 1u) * getCloudWaterPerSlot();
+    if (totalWaterEvaporated < requiredWater) return;
+
+    float lastTime = uintBitsToFloat(lastRevealTimeBits);
+    if (pc.time - lastTime < tuning.cloudRevealCooldown) return;
+
+    if (atomicCompSwap(revealedCount, currentRevealed, currentRevealed + 1u) == currentRevealed) {
+        cloudRevealTime[currentRevealed] = floatBitsToUint(pc.time);
+        atomicExchange(lastRevealTimeBits, floatBitsToUint(pc.time));
+
+        // Static horizontal footprint snapshot — mirrors raymarch.frag's placement hashes but
+        // omits the per-frame drift term, since this is captured once and not re-evaluated.
+        float h1 = hash(vec3(float(currentRevealed), 11.0f, 3.0f));
+        float h2 = hash(vec3(float(currentRevealed), 47.0f, 91.0f));
+        float h4 = hash(vec3(float(currentRevealed), 211.0f, 5.0f));
+        float h6 = hash(vec3(float(currentRevealed), 19.0f, 173.0f));
+
+        float angle = h1 * 6.28318f;
+        float orbitRadius = h2 * 55.0f;
+        float footprintX = 64.0f + cos(angle) * orbitRadius;
+        float footprintZ = 64.0f + sin(angle) * orbitRadius;
+
+        float rxz = 10.0f + h4 * 18.0f;
+        float rz2 = rxz * (0.7f + h6 * 0.6f);
+        float footprintRadius = (rxz + rz2) * 0.5f;
+
+        cloudFootprintX[currentRevealed] = floatBitsToUint(footprintX);
+        cloudFootprintZ[currentRevealed] = floatBitsToUint(footprintZ);
+        cloudFootprintRadius[currentRevealed] = floatBitsToUint(footprintRadius);
+    }
+}
+
+// FUNCTION: tryMove
+bool tryMove(uint currentIndex, uint currentValue, uint targetIndex, uint newValue) {
+    uint targetValue = grid[targetIndex];
+    uint targetType = getType(targetValue);
+    uint currentType = getType(currentValue);
+
+    if (targetType == 0u || ((currentType == 1u || currentType == 4u) && targetType == 2u) || (currentType == 6u && targetType == 5u)) {
+        if (atomicCompSwap(grid[currentIndex], currentValue, 0u) == currentValue) {
+            uint actual = atomicCompSwap(grid[targetIndex], targetValue, newValue);
+            if (actual == targetValue) {
+                if (targetType != 0u) {
+                    atomicExchange(grid[currentIndex], targetValue); 
+                }
+                return true;
+            } else {
+                atomicCompSwap(grid[currentIndex], 0u, currentValue);
+            }
+        }
+    }
+    return false;
+}
+
+// FUNCTION: tryDisplace
+bool tryDisplace(uint currentIndex, uint currentValue, uint targetIndex, uint targetValue, uint pushIndex) {
+    if (atomicCompSwap(grid[currentIndex], currentValue, 0u) == currentValue) {
+        uint displacedValue = pack(getType(targetValue), 0u, 0u, 0u); 
+        uint actualPush = atomicCompSwap(grid[pushIndex], 0u, displacedValue);
+        
+        if (actualPush == 0u) {
+            uint actualTarget = atomicCompSwap(grid[targetIndex], targetValue, currentValue);
+            if (actualTarget == targetValue) {
+                return true;
+            } else {
+                atomicCompSwap(grid[pushIndex], displacedValue, 0u);
+            }
+        }
+        atomicCompSwap(grid[currentIndex], 0u, currentValue);
+    }
+    return false;
+}
+
+
+// FUNCTION: tryClaimWaterUnit
+// Correctly floors an atomic decrement at 0 via CAS retry, closing the race the previous
+// add-then-undo pattern had: that approach let a transient underflow-wrapped value be
+// observed by a concurrent invocation as "plenty left," corrupting the reservoir upward.
+bool tryClaimWaterUnit() {
+    uint oldVal = cloudWaterCount;
+    while (oldVal > 0u) {
+        uint prev = atomicCompSwap(cloudWaterCount, oldVal, oldVal - 1u);
+        if (prev == oldVal) return true;
+        oldVal = prev;
+    }
+    return false;
+}
+
+
+// FUNCTION: updateSand
+void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, uint currentAge, float randVal) {
+    uint moisture = currentAge;
+    bool moistureModified = false;
+    
+    if (moisture < 10u) {
+        int startDir = int(fract(randVal * 17.0f) * 6.0f);
+        for(int i = 0; i < 6; i++) {
+            int d = (startDir + i) % 6;
+            if (d != 2) { 
+                ivec3 nPos = pos + getOrthoDir(d);
+                if (nPos.x > 0 && nPos.x < WIDTH-1 && nPos.y > 0 && nPos.y < HEIGHT-1 && nPos.z > 0 && nPos.z < DEPTH-1) {
+                    uint nIndex = getIndex(nPos);
+                    uint nVal = grid[nIndex];
+                    
+                    if (getType(nVal) == 2u) { 
+                        if (atomicCompSwap(grid[nIndex], nVal, 0u) == nVal) {
+                            atomicAdd(grid[currentIndex], 90u << 24); 
+                            moistureModified = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    if (!moistureModified && moisture > 0u) {
+        int d = int(fract(randVal * 31.0f) * 6.0f);
+        if (d != 2) { 
+            ivec3 nPos = pos + getOrthoDir(d);
+            if (nPos.x > 0 && nPos.x < WIDTH-1 && nPos.y > 0 && nPos.y < HEIGHT-1 && nPos.z > 0 && nPos.z < DEPTH-1) {
+                uint nIndex = getIndex(nPos);
+                uint nVal = grid[nIndex];
+                uint nType = getType(nVal);
+                
+                if (nType == 1u || nType == 4u) { 
+                    uint nMoisture = getAge(nVal);
+                    uint nCapacity = (nType == 4u) ? 30u : 10u; 
+                    
+                    if (moisture > nMoisture + 1u && nMoisture < nCapacity) {
+                        atomicAdd(grid[currentIndex], 0xFF000000u); 
+                        atomicAdd(grid[nIndex], 1u << 24);          
+                        moistureModified = true;
+                    }
+                }
+            }
+        }
+    }
+    
+    if (!moistureModified && moisture >= 90u) {
+        ivec3 leakPos = pos + ivec3(0, -1, 0);
+        if (leakPos.y > 0 && getType(grid[getIndex(leakPos)]) == 0u) {
+            if (atomicCompSwap(grid[getIndex(leakPos)], 0u, pack(2u, 0u, 0u, 0u)) == 0u) {
+                atomicAdd(grid[currentIndex], 0xA6000000u); 
+                moistureModified = true;
+            }
+        }
+    }
+    
+    if (moistureModified) return;
+
+    bool isClumped = false;
+    if (moisture > 0u && currentSleep > 5u) {
+        int emptyBelowCount = 0;
+        if (pos.y > 1) {
+            for (int x = -1; x <= 1; x++) {
+                for (int z = -1; z <= 1; z++) {
+                    ivec3 checkPos = pos + ivec3(x, -1, z);
+                    if (checkPos.x >= 0 && checkPos.x < WIDTH && checkPos.z >= 0 && checkPos.z < DEPTH) {
+                        if (getType(grid[getIndex(checkPos)]) == 0u) {
+                            emptyBelowCount++;
+                        }
+                    }
+                }
+            }
+        }
+        
+        if (emptyBelowCount >= 6) {
+            currentSleep = 0u; 
+        } else {
+            int clumpCount = 0;
+            for (int x = -1; x <= 1; x++) {
+                for (int y = -1; y <= 1; y++) {
+                    for (int z = -1; z <= 1; z++) {
+                        if (x == 0 && y == 0 && z == 0) continue;
+                        ivec3 nPos = pos + ivec3(x, y, z);
+                        if (nPos.x >= 0 && nPos.x < WIDTH && nPos.y >= 0 && nPos.y < HEIGHT && nPos.z >= 0 && nPos.z < DEPTH) {
+                            if (getType(grid[getIndex(nPos)]) == 1u) clumpCount++;
+                        }
+                    }
+                }
+            }
+            if (clumpCount >= 9) isClumped = true;
+        }
+    }
+
+    if (!isClumped) {
+        if (pos.y > 1) {
+            ivec3 belowPos = pos + ivec3(0, -1, 0);
+            if (getType(grid[getIndex(belowPos)]) == 0u) {
+                if (tryMove(currentIndex, rawValue, getIndex(belowPos), pack(1u, 0u, 0u, moisture))) return;
+            }
+        }
+
+        if (pos.y > 1) {
+            int dir = (fract(randVal * 10.0f) > 0.5f) ? 1 : -1;
+            ivec3 slidePos1, slidePos2;
+            
+            if (fract(randVal * 100.0f) > 0.5f) {
+                slidePos1 = pos + ivec3(dir, -1, 0); slidePos2 = pos + ivec3(0, -1, dir);
+            } else {
+                slidePos1 = pos + ivec3(0, -1, dir); slidePos2 = pos + ivec3(dir, -1, 0);
+            }
+
+            if (slidePos1.x > 0 && slidePos1.x < WIDTH - 1 && slidePos1.z > 0 && slidePos1.z < DEPTH - 1) {
+                if (getType(grid[getIndex(slidePos1)]) == 0u) {
+                    if (tryMove(currentIndex, rawValue, getIndex(slidePos1), pack(1u, 0u, 0u, moisture))) return;
+                }
+            }
+            if (slidePos2.x > 0 && slidePos2.x < WIDTH - 1 && slidePos2.z > 0 && slidePos2.z < DEPTH - 1) {
+                if (getType(grid[getIndex(slidePos2)]) == 0u) {
+                    if (tryMove(currentIndex, rawValue, getIndex(slidePos2), pack(1u, 0u, 0u, moisture))) return;
+                }
+            }
+        }
+
+        if (pos.y > 1) {
+            ivec3 belowPos = pos + ivec3(0, -1, 0);
+            uint belowIndex = getIndex(belowPos);
+            uint belowValue = grid[belowIndex];
+            
+            if (getType(belowValue) == 2u) {
+                int startDir = int(fract(randVal * 8.0f) * 8.0f);
+                for (int i = 0; i < 8; i++) {
+                    int d = (startDir + i) % 8;
+                    ivec3 pushPos = belowPos + getHDir(d);
+                    if (pushPos.x > 0 && pushPos.x < WIDTH - 1 && pushPos.z > 0 && pushPos.z < DEPTH - 1) {
+                        if (tryDisplace(currentIndex, pack(1u, 0u, 0u, moisture), belowIndex, belowValue, getIndex(pushPos))) return; 
+                    }
+                }
+                if (tryMove(currentIndex, rawValue, belowIndex, pack(1u, 0u, 0u, moisture))) return;
+            }
+
+            int dir = (fract(randVal * 10.0f) > 0.5f) ? 1 : -1;
+            ivec3 slidePos[2];
+            if (fract(randVal * 100.0f) > 0.5f) {
+                slidePos[0] = pos + ivec3(dir, -1, 0); slidePos[1] = pos + ivec3(0, -1, dir);
+            } else {
+                slidePos[0] = pos + ivec3(0, -1, dir); slidePos[1] = pos + ivec3(dir, -1, 0);
+            }
+
+            for (int s = 0; s < 2; s++) {
+                ivec3 sPos = slidePos[s];
+                if (sPos.x > 0 && sPos.x < WIDTH - 1 && sPos.z > 0 && sPos.z < DEPTH - 1) {
+                    uint sIndex = getIndex(sPos);
+                    uint sValue = grid[sIndex];
+                    if (getType(sValue) == 2u) {
+                        int startDir = int(fract(randVal * 8.0f + float(s)) * 8.0f);
+                        for (int i = 0; i < 8; i++) {
+                            int d = (startDir + i) % 8;
+                            ivec3 pushPos = sPos + getHDir(d);
+                            if (pushPos.x > 0 && pushPos.x < WIDTH - 1 && pushPos.z > 0 && pushPos.z < DEPTH - 1) {
+                                if (tryDisplace(currentIndex, pack(1u, 0u, 0u, moisture), sIndex, sValue, getIndex(pushPos))) return;
+                            }
+                        }
+                        if (tryMove(currentIndex, rawValue, sIndex, pack(1u, 0u, 0u, moisture))) return;
+                    }
+                }
+            }
+        }
+    }
+
+    uint newSleep = min(currentSleep + 1u, 255u);
+    atomicCompSwap(grid[currentIndex], rawValue, pack(1u, 0u, newSleep, moisture));
+}
+
+// FUNCTION: updateDirt
+void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentSleep, uint currentAge, float randVal) {
+    uint moisture = currentAge;
+    bool moistureModified = false;
+    
+    if (moisture < 30u) {
+        int startDir = int(fract(randVal * 17.0f) * 6.0f);
+        for(int i = 0; i < 6; i++) {
+            int d = (startDir + i) % 6;
+            ivec3 nPos = pos + getOrthoDir(d);
+            if (nPos.x > 0 && nPos.x < WIDTH-1 && nPos.y > 0 && nPos.y < HEIGHT-1 && nPos.z > 0 && nPos.z < DEPTH-1) {
+                uint nIndex = getIndex(nPos);
+                uint nVal = grid[nIndex];
+                
+                if (getType(nVal) == 2u) { 
+                    if (atomicCompSwap(grid[nIndex], nVal, 0u) == nVal) {
+                        atomicAdd(grid[currentIndex], 90u << 24); 
+                        moistureModified = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    if (!moistureModified && moisture > 0u) {
+        int d = int(fract(randVal * 31.0f) * 6.0f);
+        ivec3 nPos = pos + getOrthoDir(d);
+        if (nPos.x > 0 && nPos.x < WIDTH-1 && nPos.y > 0 && nPos.y < HEIGHT-1 && nPos.z > 0 && nPos.z < DEPTH-1) {
+            uint nIndex = getIndex(nPos);
+            uint nVal = grid[nIndex];
+            uint nType = getType(nVal);
+            
+            if (nType == 4u || nType == 1u) { 
+                uint nMoisture = getAge(nVal);
+                uint nCapacity = (nType == 4u) ? 30u : 10u; 
+                
+                if (moisture > nMoisture + 1u && nMoisture < nCapacity) {
+                    atomicAdd(grid[currentIndex], 0xFF000000u); 
+                    atomicAdd(grid[nIndex], 1u << 24);          
+                    moistureModified = true;
+                }
+            }
+        }
+    }
+    
+    if (moistureModified) return;
+
+    bool isClumped = false;
+    if (currentSleep > 5u) {
+        int emptyBelowCount = 0;
+        if (pos.y > 1) {
+            for (int x = -1; x <= 1; x++) {
+                for (int z = -1; z <= 1; z++) {
+                    ivec3 checkPos = pos + ivec3(x, -1, z);
+                    if (checkPos.x >= 0 && checkPos.x < WIDTH && checkPos.z >= 0 && checkPos.z < DEPTH) {
+                        if (getType(grid[getIndex(checkPos)]) == 0u) {
+                            emptyBelowCount++;
+                        }
+                    }
+                }
+            }
+        }
+        
+        if (emptyBelowCount >= 6) {
+            currentSleep = 0u; 
+        } else {
+            int clumpCount = 0;
+            for (int x = -1; x <= 1; x++) {
+                for (int y = -1; y <= 1; y++) {
+                    for (int z = -1; z <= 1; z++) {
+                        if (x == 0 && y == 0 && z == 0) continue;
+                        ivec3 nPos = pos + ivec3(x, y, z);
+                        if (nPos.x >= 0 && nPos.x < WIDTH && nPos.y >= 0 && nPos.y < HEIGHT && nPos.z >= 0 && nPos.z < DEPTH) {
+                            if (getType(grid[getIndex(nPos)]) == 4u) clumpCount++;
+                        }
+                    }
+                }
+            }
+            if (clumpCount >= 5) isClumped = true;
+        }
+    }
+
+    if (!isClumped) {
+        if (pos.y > 1) {
+            ivec3 belowPos = pos + ivec3(0, -1, 0);
+            if (getType(grid[getIndex(belowPos)]) == 0u) {
+                if (tryMove(currentIndex, rawValue, getIndex(belowPos), pack(4u, 0u, 0u, moisture))) return;
+            }
+        }
+
+        if (pos.y > 1) {
+            int dir = (fract(randVal * 10.0f) > 0.5f) ? 1 : -1;
+            ivec3 slidePos1, slidePos2;
+            
+            if (fract(randVal * 100.0f) > 0.5f) {
+                slidePos1 = pos + ivec3(dir, -1, 0); slidePos2 = pos + ivec3(0, -1, dir);
+            } else {
+                slidePos1 = pos + ivec3(0, -1, dir); slidePos2 = pos + ivec3(dir, -1, 0);
+            }
+
+            if (slidePos1.x > 0 && slidePos1.x < WIDTH - 1 && slidePos1.z > 0 && slidePos1.z < DEPTH - 1) {
+                if (getType(grid[getIndex(slidePos1)]) == 0u) {
+                    if (tryMove(currentIndex, rawValue, getIndex(slidePos1), pack(4u, 0u, 0u, moisture))) return;
+                }
+            }
+            if (slidePos2.x > 0 && slidePos2.x < WIDTH - 1 && slidePos2.z > 0 && slidePos2.z < DEPTH - 1) {
+                if (getType(grid[getIndex(slidePos2)]) == 0u) {
+                    if (tryMove(currentIndex, rawValue, getIndex(slidePos2), pack(4u, 0u, 0u, moisture))) return;
+                }
+            }
+        }
+
+        if (pos.y > 1) {
+            ivec3 belowPos = pos + ivec3(0, -1, 0);
+            uint belowIndex = getIndex(belowPos);
+            uint belowValue = grid[belowIndex];
+            
+            if (getType(belowValue) == 2u) {
+                int startDir = int(fract(randVal * 8.0f) * 8.0f);
+                for (int i = 0; i < 8; i++) {
+                    int d = (startDir + i) % 8;
+                    ivec3 pushPos = belowPos + getHDir(d);
+                    if (pushPos.x > 0 && pushPos.x < WIDTH - 1 && pushPos.z > 0 && pushPos.z < DEPTH - 1) {
+                        if (tryDisplace(currentIndex, pack(4u, 0u, 0u, moisture), belowIndex, belowValue, getIndex(pushPos))) return; 
+                    }
+                }
+                if (tryMove(currentIndex, rawValue, belowIndex, pack(4u, 0u, 0u, moisture))) return;
+            }
+
+            int dir = (fract(randVal * 10.0f) > 0.5f) ? 1 : -1;
+            ivec3 slidePos[2];
+            if (fract(randVal * 100.0f) > 0.5f) {
+                slidePos[0] = pos + ivec3(dir, -1, 0); slidePos[1] = pos + ivec3(0, -1, dir);
+            } else {
+                slidePos[0] = pos + ivec3(0, -1, dir); slidePos[1] = pos + ivec3(dir, -1, 0);
+            }
+
+            for (int s = 0; s < 2; s++) {
+                ivec3 sPos = slidePos[s];
+                if (sPos.x > 0 && sPos.x < WIDTH - 1 && sPos.z > 0 && sPos.z < DEPTH - 1) {
+                    uint sIndex = getIndex(sPos);
+                    uint sValue = grid[sIndex];
+                    if (getType(sValue) == 2u) {
+                        int startDir = int(fract(randVal * 8.0f + float(s)) * 8.0f);
+                        for (int i = 0; i < 8; i++) {
+                            int d = (startDir + i) % 8;
+                            ivec3 pushPos = sPos + getHDir(d);
+                            if (pushPos.x > 0 && pushPos.x < WIDTH - 1 && pushPos.z > 0 && pushPos.z < DEPTH - 1) {
+                                if (tryDisplace(currentIndex, pack(4u, 0u, 0u, moisture), sIndex, sValue, getIndex(pushPos))) return;
+                            }
+                        }
+                        if (tryMove(currentIndex, rawValue, sIndex, pack(4u, 0u, 0u, moisture))) return;
+                    }
+                }
+            }
+        }
+    }
+
+    uint floraState = currentDir;
+    
+    if (isClumped || currentSleep > 5u) {
+        ivec3 abovePos = pos + ivec3(0, 1, 0);
+        uint aboveType = (abovePos.y < HEIGHT - 1) ? getType(grid[getIndex(abovePos)]) : 0u;
+
+        if (aboveType == 0u) {
+            if (moisture >= 5u && floraState < 100u) {
+                if (fract(randVal * 55.0f) < 0.001f) floraState++;
+            }
+            if (floraState > 100u) floraState = 100u;
+        } else if (aboveType == 2u) {
+            if (floraState > 0u) {
+                if (floraState <= 100u) floraState = 101u; 
+                if (fract(randVal * 66.0f) < 0.1f) floraState++;
+                if (floraState >= 200u) floraState = 0u; 
+            }
+        } else if (aboveType != 5u) {
+            floraState = 0u;
+        }
+    }
+
+    uint newSleep = min(currentSleep + 1u, 255u);
+    atomicCompSwap(grid[currentIndex], rawValue, pack(4u, floraState, newSleep, moisture));
+}
+
+// FUNCTION: updateWater
+void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentSleep, uint currentAge, float randVal) {
+    if (currentSleep > 5u) {
+        bool wake = false;
+        if (pos.y > 1 && getType(grid[getIndex(pos + ivec3(0, -1, 0))]) == 0u) {
+            wake = true; 
+        } else {
+            bool hasPressure = (pos.y < HEIGHT - 2) ? (getType(grid[getIndex(pos + ivec3(0, 1, 0))]) != 0u) : false;
+            bool isStackedOnWater = (pos.y > 1) ? (getType(grid[getIndex(pos + ivec3(0, -1, 0))]) == 2u) : false;
+
+            for(int d = 0; d < 8; d++) {
+                ivec3 nPos = pos + getHDir(d);
+                if (nPos.x > 0 && nPos.x < WIDTH - 1 && nPos.z > 0 && nPos.z < DEPTH - 1) {
+                    if (getType(grid[getIndex(nPos)]) == 0u) {
+                        uint belowNeighbor = getType(grid[getIndex(nPos + ivec3(0, -1, 0))]);
+                        if (belowNeighbor == 0u || hasPressure || isStackedOnWater || belowNeighbor == 2u) { 
+                            wake = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if (!wake) return; 
+        currentSleep = 0u; 
+        currentAge = 0u;   
+    }
+    
+    uint newAge = currentAge + 1u;
+    if (rainPhase != 2u && newAge > 200u) {
+        decWater();
+	atomicAdd(cloudWaterCount, 1u);
+	atomicAdd(totalWaterEvaporated, 1u);
+	tryRevealNextCloud();
+        atomicExchange(grid[currentIndex], 0u);
+        return;
+    }
+
+    if (pos.y > 1) {
+        ivec3 belowPos = pos + ivec3(0, -1, 0);
+        if (getType(grid[getIndex(belowPos)]) == 0u) {
+            if (tryMove(currentIndex, rawValue, getIndex(belowPos), pack(2u, 0u, 0u, newAge))) return;
+        }
+    }
+
+    uint newDir = currentDir;
+    
+    if (newDir == 0u || newDir == 9u) {
+        float r = fract(randVal * 77.0f);
+        if (r < 0.25f) newDir = 1u;      
+        else if (r < 0.50f) newDir = 2u; 
+        else if (r < 0.75f) newDir = 3u; 
+        else newDir = 4u;                  
+    }
+    
+    if (newAge % 3u == 0u && newAge > 0u) {
+        uint diagDir = newDir;
+        if (diagDir >= 1u && diagDir <= 4u) {
+            float r = fract(randVal * 133.0f);
+            if (diagDir == 1u) diagDir = (r > 0.5f) ? 5u : 6u;      
+            else if (diagDir == 2u) diagDir = (r > 0.5f) ? 7u : 8u; 
+            else if (diagDir == 3u) diagDir = (r > 0.5f) ? 5u : 7u; 
+            else if (diagDir == 4u) diagDir = (r > 0.5f) ? 6u : 8u; 
+        }
+        
+        ivec3 stepPos = pos + getHDir(int(diagDir) - 1);
+        if (stepPos.x > 0 && stepPos.x < WIDTH - 1 && stepPos.z > 0 && stepPos.z < DEPTH - 1) {
+            if (getType(grid[getIndex(stepPos)]) == 0u) {
+                uint newValue = pack(2u, newDir, 0u, newAge);
+                if (tryMove(currentIndex, rawValue, getIndex(stepPos), newValue)) return;
+            }
+        }
+    }
+
+    ivec3 bestDropPos = pos;
+    bool foundDrop = false;
+    
+    uint blockedMask = 0u;
+    int startDir = int(fract(randVal * 8.0f) * 8.0f);
+
+    for (int r = 1; r <= 128; r++) {
+        if (blockedMask == 255u) break;
+
+        for (int i = 0; i < 8; i++) {
+            int d = (startDir + i) % 8;
+
+            if ((blockedMask & (1u << d)) == 0u) {
+                ivec3 c = pos + getHDir(d) * r;
+                
+                if (c.x <= 0 || c.x >= WIDTH - 1 || c.z <= 0 || c.z >= DEPTH - 1 || getType(grid[getIndex(c)]) != 0u) {
+                    blockedMask |= (1u << d);
+                } else if (c.y > 1 && getType(grid[getIndex(c + ivec3(0, -1, 0))]) == 0u) {
+                    bestDropPos = c; 
+                    foundDrop = true; 
+                    break;
+                }
+            }
+        }
+        if (foundDrop) break;
+    }
+    
+    if (foundDrop) {
+        uint newValue = pack(2u, 0u, 0u, 0u); 
+        if (tryMove(currentIndex, rawValue, getIndex(bestDropPos), newValue)) return;
+    } else {
+        bool hasPressure = (pos.y < HEIGHT - 2) ? (getType(grid[getIndex(pos + ivec3(0, 1, 0))]) != 0u) : false;
+        bool isStackedOnWater = (pos.y > 1) ? (getType(grid[getIndex(pos + ivec3(0, -1, 0))]) == 2u) : false;
+        
+        bool canStepOntoPool = false;
+        for(int d = 0; d < 8; d++) {
+            ivec3 nPos = pos + getHDir(d);
+            if(nPos.x > 0 && nPos.x < WIDTH - 1 && nPos.z > 0 && nPos.z < DEPTH - 1) {
+                if(getType(grid[getIndex(nPos)]) == 0u && pos.y > 1 && getType(grid[getIndex(nPos + ivec3(0,-1,0))]) == 2u) {
+                    canStepOntoPool = true; 
+                    break;
+                }
+            }
+        }
+        
+        if (hasPressure || isStackedOnWater || canStepOntoPool) {
+            int startSpreadDir = int(fract(randVal * 8.0f) * 8.0f);
+            for(int i = 0; i < 8; i++) {
+                int d = (startSpreadDir + i) % 8;
+                ivec3 targetPos = pos + getHDir(d);
+                if (targetPos.x > 0 && targetPos.x < WIDTH - 1 && targetPos.z > 0 && targetPos.z < DEPTH - 1) {
+                    if (getType(grid[getIndex(targetPos)]) == 0u) {
+                        uint newValue = pack(2u, uint(d + 1), 0u, newAge);
+                        if (tryMove(currentIndex, rawValue, getIndex(targetPos), newValue)) return;
+                    }
+                }
+            }
+        }
+    }
+    
+    uint newSleep = min(currentSleep + 1u, 255u);
+    uint sleepValue = pack(2u, 0u, newSleep, newAge);
+    atomicCompSwap(grid[currentIndex], rawValue, sleepValue);
+}
+
+// FUNCTION: updateFire
+void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentSleep, uint currentAge, float randVal) {
+    uint newAge = currentAge + 1u;
+    bool isBurningGrass = false;
+
+    for (int i = 0; i < 6; i++) {
+        ivec3 nPos = pos + getOrthoDir(i);
+        if (nPos.x > 0 && nPos.x < WIDTH-1 && nPos.y > 0 && nPos.y < HEIGHT-1 && nPos.z > 0 && nPos.z < DEPTH-1) {
+            uint nIndex = getIndex(nPos);
+            uint nVal = grid[nIndex];
+            if (getType(nVal) == 2u) {
+                if (atomicCompSwap(grid[nIndex], nVal, pack(6u, 0u, 0u, 0u)) == nVal) {
+                    atomicExchange(grid[currentIndex], 0u);
+                    return;
+                }
+            }
+        }
+    }
+
+    if (pos.y > 1) {
+        ivec3 belowPos = pos + ivec3(0, -1, 0);
+        uint belowIndex = getIndex(belowPos);
+        uint belowValue = grid[belowIndex];
+        uint belowType = getType(belowValue);
+
+        if (belowType == 0u) {
+            if (tryMove(currentIndex, rawValue, belowIndex, pack(5u, 0u, 0u, newAge))) return;
+        } else if (belowType == 2u) {
+            atomicExchange(grid[currentIndex], 0u);
+            return;
+        } else if (belowType == 1u) {
+            uint moisture = getAge(belowValue);
+            if (moisture > 0u) {
+                uint newMoisture = (moisture > 5u) ? moisture - 5u : 0u;
+                uint newVal = pack(1u, getDir(belowValue), 0u, newMoisture);
+                if (atomicCompSwap(grid[belowIndex], belowValue, newVal) == belowValue) {
+                    atomicExchange(grid[currentIndex], 0u);
+                    return;
+                }
+            }
+        } else if (belowType == 4u) {
+            uint flora = (belowValue >> 8) & 0xFFu;
+            if (flora > 10u && flora <= 100u) {
+                isBurningGrass = true;
+                newAge = 0u; 
+                
+                if (fract(randVal * 100.0f) < 0.05f) { 
+                    uint newFlora = flora - 1u;
+                    uint newVal = pack(4u, newFlora, 0u, getAge(belowValue));
+                    atomicCompSwap(grid[belowIndex], belowValue, newVal);
+                }
+                
+                if (fract(randVal * 100.0f) < 0.1f) { 
+                    int d = int(fract(randVal * 10.0f) * 8.0f);
+                    ivec3 targetPos = pos + getHDir(d);
+                    if (targetPos.x > 0 && targetPos.x < WIDTH-1 && targetPos.z > 0 && targetPos.z < DEPTH-1) {
+                        uint targetIndex = getIndex(targetPos);
+                        if (getType(grid[targetIndex]) == 0u) {
+                            ivec3 targetBelow = targetPos + ivec3(0, -1, 0);
+                            uint tBelowVal = grid[getIndex(targetBelow)];
+                            if (getType(tBelowVal) == 4u) {
+                                uint tFlora = (tBelowVal >> 8) & 0xFFu;
+                                if (tFlora > 10u && tFlora <= 100u) {
+                                    atomicCompSwap(grid[targetIndex], 0u, pack(5u, 0u, 0u, 0u));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (newAge > 30u) {
+        atomicExchange(grid[currentIndex], 0u);
+        return;
+    }
+
+    atomicCompSwap(grid[currentIndex], rawValue, pack(5u, 0u, 0u, newAge));
+}
+
+
+// FUNCTION: updateRainPhase
+// Drives the rain state machine: 0 = accumulating (white), 1 = darkening (waiting to rain),
+// 2 = raining (draining). Only invocation (0,0,0) performs transitions, mirroring the
+// single-writer approach used by tryRevealNextCloud, to avoid redundant atomics across
+// every voxel in the grid. Other invocations may observe a transition up to one dispatch
+// late, which is invisible at this timescale.
+void updateRainPhase() {
+    if (gl_GlobalInvocationID.x != 0u || gl_GlobalInvocationID.y != 0u || gl_GlobalInvocationID.z != 0u) return;
+
+    if (rainPhase == 0u) {
+        if (cloudWaterCount > getRainThreshold() && waterVoxelCount >= getRainMinWaterInCube()) {
+            rainPhase = 1u;
+            rainPhaseTimeBits = floatBitsToUint(pc.time);
+        }
+    } else if (rainPhase == 1u) {
+        float crossedTime = uintBitsToFloat(rainPhaseTimeBits);
+        if (pc.time - crossedTime >= tuning.rainDarkenDelay) {
+            rainPhase = 2u;
+            rainPhaseTimeBits = floatBitsToUint(pc.time); // repurposed: now marks rain start time
+        }
+    } else if (rainPhase == 2u) {
+        if (cloudWaterCount == 0u) {
+            rainPhase = 0u;
+            rainPhaseTimeBits = 0u;
+            rainFinishedTimeBits = floatBitsToUint(pc.time);
+        }
+    }
+}
+
+// FUNCTION: updateSteam
+void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, uint currentAge, float randVal) {
+    if (pos.y >= HEIGHT - 2) {
+        atomicAdd(steamTopCount, 1u);
+        atomicAdd(cloudWaterCount, 1u);
+	atomicAdd(totalWaterEvaporated, 1u);
+        tryRevealNextCloud();
+        decWater();
+        atomicExchange(grid[currentIndex], 0u);
+        return;
+    }
+
+    uint newAge = min(currentAge + 1u, 255u);
+
+    // 1. Scatter randomly (horizontal or vertical) with a 30% chance per frame
+    if (fract(randVal * 88.0f) < 0.3f) {
+        int d = int(fract(randVal * 13.0f) * 6.0f);
+        ivec3 scatterPos = pos + getOrthoDir(d);
+        if (scatterPos.x > 0 && scatterPos.x < WIDTH - 1 && scatterPos.y > 0 && scatterPos.y < HEIGHT - 1 && scatterPos.z > 0 && scatterPos.z < DEPTH - 1) {
+            uint sType = getType(grid[getIndex(scatterPos)]);
+            if (sType == 0u || sType == 5u) {
+                if (tryMove(currentIndex, rawValue, getIndex(scatterPos), pack(6u, 0u, 0u, newAge))) return;
+            }
+        }
+    }
+
+    ivec3 checkPos[3];
+    checkPos[0] = pos + ivec3(0, 1, 0);
+    int dir = (fract(randVal * 10.0f) > 0.5f) ? 1 : -1;
+    if (fract(randVal * 100.0f) > 0.5f) {
+        checkPos[1] = pos + ivec3(dir, 1, 0); checkPos[2] = pos + ivec3(0, 1, dir);
+    } else {
+        checkPos[1] = pos + ivec3(0, 1, dir); checkPos[2] = pos + ivec3(dir, 1, 0);
+    }
+
+    // 2. Check for moisture-absorbing blocks (Sand = 1u, Dirt = 4u)
+    for (int i = 0; i < 3; i++) {
+        ivec3 cPos = checkPos[i];
+        if (cPos.x > 0 && cPos.x < WIDTH - 1 && cPos.z > 0 && cPos.z < DEPTH - 1) {
+            uint cIndex = getIndex(cPos);
+            uint cVal = grid[cIndex];
+            uint cType = getType(cVal);
+            
+            if (cType == 1u || cType == 4u) {
+                uint moisture = getAge(cVal);
+                uint capacity = (cType == 4u) ? 30u : 10u;
+                if (moisture < capacity) {
+                    if (atomicCompSwap(grid[currentIndex], rawValue, 0u) == rawValue) {
+                        atomicAdd(grid[cIndex], 1u << 24);
+                        return; 
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Try moving upwards or diagonally upwards (Air = 0u, Fire = 5u)
+    for (int i = 0; i < 3; i++) {
+        ivec3 sPos = checkPos[i];
+        if (sPos.x > 0 && sPos.x < WIDTH - 1 && sPos.z > 0 && sPos.z < DEPTH - 1) {
+            uint sType = getType(grid[getIndex(sPos)]);
+            if (sType == 0u || sType == 5u) {
+                if (tryMove(currentIndex, rawValue, getIndex(sPos), pack(6u, 0u, 0u, newAge))) return;
+            }
+        }
+    }
+    
+    uint newSleep = min(currentSleep + 1u, 255u);
+    atomicCompSwap(grid[currentIndex], rawValue, pack(6u, 0u, newSleep, newAge));
+}
+
+// FUNCTION: main
+void main() {
+    ivec3 pos = ivec3(gl_GlobalInvocationID.xyz);
+
+    updateRainPhase();
+
+    if (pc.spawnActive == 1) {
+        int halfDistMin = pc.spawnSize / 2;
+        int halfDistMax = (pc.spawnSize - 1) / 2;
+    
+        if (pos.x >= pc.spawnX - halfDistMin && pos.x <= pc.spawnX + halfDistMax && 
+            pos.y >= pc.spawnY - halfDistMin && pos.y <= pc.spawnY + halfDistMax && 
+            pos.z >= pc.spawnZ - halfDistMin && pos.z <= pc.spawnZ + halfDistMax) {
+            uint oldType = getType(grid[getIndex(pos)]);
+            uint newType = uint(pc.spawnType);
+            if (oldType != newType) {
+                if (oldType == 2u) decWater();
+                if (newType == 2u) incWater();
+            }
+            grid[getIndex(pos)] = pack(newType, 0u, 0u, 0u); 
+        }
+    }
+
+    if (pos.x < 1 || pos.x >= WIDTH - 1 || 
+        pos.y < 1 || pos.y >= HEIGHT - 1 || 
+        pos.z < 1 || pos.z >= DEPTH - 1) {
+        return;
+    }
+
+    uint currentIndex = getIndex(pos);
+    uint rawValue = grid[currentIndex];
+    uint currentType = getType(rawValue);
+
+    // --- RAIN: while draining, void cells at the top boundary (same layer steam vents from)
+    // have a chance to become falling water, ramping faster the longer it's been raining.
+    if (currentType == 0u && rainPhase == 2u && pos.y == HEIGHT - 2) {
+        bool underCloud = false;
+        for (uint ci = 0u; ci < revealedCount; ci++) {
+            float fx = uintBitsToFloat(cloudFootprintX[ci]);
+            float fz = uintBitsToFloat(cloudFootprintZ[ci]);
+            float fr = uintBitsToFloat(cloudFootprintRadius[ci]);
+            float dx = float(pos.x) - fx;
+            float dz = float(pos.z) - fz;
+            if (dx * dx + dz * dz <= fr * fr) { underCloud = true; break; }
+        }
+
+        if (underCloud) {
+            float rainElapsed = pc.time - uintBitsToFloat(rainPhaseTimeBits);
+            float dropChance = mix(tuning.rainChanceStart, tuning.rainChanceMax, clamp(rainElapsed / tuning.rainRampDuration, 0.0f, 1.0f));
+            float rainRandVal = hash(vec3(pos) + vec3(pc.time * 1.7f, 51.0f, 0.0f));
+
+            if (rainRandVal < dropChance) {
+                if (tryClaimWaterUnit()) {
+                    if (atomicCompSwap(grid[currentIndex], rawValue, pack(2u, 0u, 0u, 0u)) == rawValue) {
+                        incWater();
+                        return;
+                    } else {
+                        atomicAdd(cloudWaterCount, 1u);
+                    }
+                }
+            }
+        }
+    }
+    
+    if (currentType == 0u || currentType == 3u) return; 
+    
+    uint currentDir = getDir(rawValue);
+    uint currentSleep = getSleep(rawValue);
+    uint currentAge = getAge(rawValue);
+    float randVal = hash(vec3(pos) + vec3(pc.time));
+
+    switch (currentType) {
+        case 1u:
+            updateSand(pos, currentIndex, rawValue, currentSleep, currentAge, randVal);
+            break;
+        case 2u:
+            updateWater(pos, currentIndex, rawValue, currentDir, currentSleep, currentAge, randVal);
+            break;
+        case 4u:
+            updateDirt(pos, currentIndex, rawValue, currentDir, currentSleep, currentAge, randVal);
+            break;
+        case 5u:
+            updateFire(pos, currentIndex, rawValue, currentDir, currentSleep, currentAge, randVal);
+            break;
+        case 6u:
+            updateSteam(pos, currentIndex, rawValue, currentSleep, currentAge, randVal);
+            break;
+        default:
+            break;
+    }
+}
