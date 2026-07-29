@@ -69,17 +69,17 @@ Config loadConfig(const std::string& path) {
     Config config; // struct defaults apply unless overridden below
     auto values = parseKeyValueFile(path);
 
-    config.tuning.rainChanceStart = getFloat(values, "rain.chance_start", config.tuning.rainChanceStart);
-    config.tuning.rainChanceMax = getFloat(values, "rain.chance_max", config.tuning.rainChanceMax);
-    config.tuning.rainRampDuration = getFloat(values, "rain.ramp_duration", config.tuning.rainRampDuration);
-    config.tuning.cloudRevealCooldown = getFloat(values, "cloud.reveal_cooldown", config.tuning.cloudRevealCooldown);
-    config.tuning.cloudRevealTargetSlots = getUint(values, "cloud.reveal_target_slots", config.tuning.cloudRevealTargetSlots);
     config.tuning.rainStartLayers = getUint(values, "rain.start_layers", config.tuning.rainStartLayers);
-    config.tuning.rainMinWaterInCubeLayers = getUint(values, "rain.min_water_in_cube_layers", config.tuning.rainMinWaterInCubeLayers);
+    config.tuning.rainDropsPerTick = getUint(values, "rain.drops_per_tick", config.tuning.rainDropsPerTick);
+    config.tuning.rainOvershoot = getFloat(values, "rain.overshoot", config.tuning.rainOvershoot);
     config.tuning.rainDarkenDelay = getFloat(values, "rain.darken_delay", config.tuning.rainDarkenDelay);
-    config.tuning.cloudFadeDuration = getFloat(values, "cloud.fade_duration", config.tuning.cloudFadeDuration);
-    config.tuning.cloudDensitySaturation = getFloat(values, "cloud.density_saturation", config.tuning.cloudDensitySaturation);
-    config.tuning.cloudDisappearDuration = getFloat(values, "cloud.disappear_duration", config.tuning.cloudDisappearDuration);
+    config.tuning.cloudCount = getUint(values, "cloud.count", config.tuning.cloudCount);
+    config.tuning.cloudDriftSpeed = getFloat(values, "cloud.drift_speed", config.tuning.cloudDriftSpeed);
+    config.tuning.cloudEdgeFadeDist = getFloat(values, "cloud.edge_fade_dist", config.tuning.cloudEdgeFadeDist);
+    config.tuning.cloudChargeSaturation = getFloat(values, "cloud.charge_saturation", config.tuning.cloudChargeSaturation);
+    config.tuning.cloudChargeEaseRate = getFloat(values, "cloud.charge_ease_rate", config.tuning.cloudChargeEaseRate);
+    config.tuning.cloudMinAlpha = getFloat(values, "cloud.min_alpha", config.tuning.cloudMinAlpha);
+    config.tuning.cloudMaxAlpha = getFloat(values, "cloud.max_alpha", config.tuning.cloudMaxAlpha);
     config.tuning.cloudVoxelSize = getFloat(values, "cloud.voxel_size", config.tuning.cloudVoxelSize);
     config.tuning.cloudEdgeThresholdMin = getFloat(values, "cloud.edge_threshold_min", config.tuning.cloudEdgeThresholdMin);
     config.tuning.cloudEdgeThresholdMax = getFloat(values, "cloud.edge_threshold_max", config.tuning.cloudEdgeThresholdMax);
@@ -91,7 +91,6 @@ Config loadConfig(const std::string& path) {
     config.tuning.dirtClumpThreshold = getUint(values, "physics.dirt_clump_threshold", config.tuning.dirtClumpThreshold);
     config.tuning.wakeSleepThreshold = getUint(values, "physics.wake_sleep_threshold", config.tuning.wakeSleepThreshold);
     config.tuning.emptyBelowWakeCount = getUint(values, "physics.empty_below_wake_count", config.tuning.emptyBelowWakeCount);
-    config.tuning.waterAgeTimeout = getUint(values, "physics.water_age_timeout", config.tuning.waterAgeTimeout);
     config.tuning.fireLifetime = getUint(values, "physics.fire_lifetime", config.tuning.fireLifetime);
     config.tuning.fireDryRate = getUint(values, "physics.fire_dry_rate", config.tuning.fireDryRate);
     config.tuning.grassGrowChance = getFloat(values, "physics.grass_grow_chance", config.tuning.grassGrowChance);

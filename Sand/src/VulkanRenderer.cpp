@@ -35,12 +35,15 @@ void VulkanRenderer::initVulkan() {
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
 
-    // Cloud/water tracking stats buffer: steamTopCount, revealedCount, lastRevealTimeBits,
-    // waterVoxelCount, + 64 per-slot cloud reveal timestamps. Bound at descriptor binding 1,
-    // shared between the compute and fragment stages.
+    // Cloud/water tracking stats buffer: 9 scalar fields (waterVoxelCount, waterHighMark,
+    // cloudWaterCount, rainPhase, rainPhaseTimeBits, rainTargetLevel, rainCandidateCount,
+    // rainCandidateEstimate, cloudChargeBits). The per-slot cloud arrays are gone -- layout is a
+    // function of (index, time) computed identically in both shaders, so there is nothing
+    // per-cloud left to store. Must stay in sync with the CloudStats block in
+    // falling_sand.comp and raymarch.frag. Bound at binding 1, shared by compute and fragment.
     steamCounterBuffer = std::make_unique<VulkanBuffer>(
         context.get(),
-        sizeof(uint32_t) * (9 + 64*4),   // was (4 + 64) — CloudStats now has 7 scalar fields, not 4
+        sizeof(uint32_t) * 9,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
@@ -160,10 +163,9 @@ void VulkanRenderer::seedParticles() {
     memset(data, 0, sizeof(uint32_t) * totalVoxels);
     ssboBuffer->unmapMemory();
 
-    // steamTopCount = 0, revealedCount = 0, lastRevealTimeBits = 0, waterVoxelCount = 0,
-    // all 64 cloudRevealTime entries = 0 (unused/unread until revealedCount advances past them)
-    std::vector<uint32_t> statsInit(9 + 64*4, 0u);
-    statsInit[8] = 0xFFFFFFFFu;
+    // Every CloudStats field starts at 0, including cloudChargeBits -- a zero bit pattern is
+    // +0.0f as a float, so the sky correctly starts completely uncharged with no sentinel needed.
+    std::vector<uint32_t> statsInit(9, 0u);
     void* counterData = steamCounterBuffer->mapMemory();
     memcpy(counterData, statsInit.data(), sizeof(uint32_t) * statsInit.size());
     steamCounterBuffer->unmapMemory();

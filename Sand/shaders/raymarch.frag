@@ -8,30 +8,47 @@ layout(std430, binding = 0) readonly buffer VoxelGrid {
 };
 
 layout(std430, binding = 1) buffer CloudStats {
-    uint steamTopCount;
-    uint revealedCount;
-    uint lastRevealTimeBits;
     uint waterVoxelCount;
+    uint waterHighMark;
     uint cloudWaterCount;
-    uint totalWaterEvaporated;
     uint rainPhase;
     uint rainPhaseTimeBits;
-    uint rainFinishedTimeBits;
-    uint cloudRevealTime[64];
-    uint cloudFootprintX[64];
-    uint cloudFootprintZ[64];
-    uint cloudFootprintRadius[64];
+    uint rainTargetLevel;
+    uint rainCandidateCount;
+    uint rainCandidateEstimate;
+    uint cloudChargeBits;
 };
 
 layout(std140, binding = 2) uniform TuningParams {
-    float rainChanceStart;
-    float rainChanceMax;
-    float rainRampDuration;
-    float cloudRevealCooldown;
-    uint cloudRevealTargetSlots;
     uint rainStartLayers;
-    uint rainMinWaterInCubeLayers;
+    uint rainDropsPerTick;
+    float rainOvershoot;
     float rainDarkenDelay;
+    uint cloudCount;
+    float cloudDriftSpeed;
+    float cloudEdgeFadeDist;
+    float cloudChargeSaturation;
+    float cloudChargeEaseRate;
+    float cloudMinAlpha;
+    float cloudMaxAlpha;
+    float cloudVoxelSize;
+    float cloudEdgeThresholdMin;
+    float cloudEdgeThresholdMax;
+    uint maxCloudSteps;
+    uint sandMoistureCapacity;
+    uint dirtMoistureCapacity;
+    uint sandWaterAbsorbUnit;
+    uint sandClumpThreshold;
+    uint dirtClumpThreshold;
+    uint wakeSleepThreshold;
+    uint emptyBelowWakeCount;
+    uint fireLifetime;
+    uint fireDryRate;
+    float grassGrowChance;
+    float grassSubmergedDecayChance;
+    float fireBurnGrassChance;
+    float fireSpreadChance;
+    float steamScatterChance;
 } tuning;
 
 layout(push_constant) uniform Constants {
@@ -255,6 +272,52 @@ vec3 renderSteam(ivec3 voxelPos, vec3 baseLighting) {
     return baseColor * baseLighting * 0.9f;
 }
 
+// =================================================================================================
+// CLOUD FIELD -- shared placement math. THIS BLOCK IS DUPLICATED VERBATIM IN falling_sand.comp.
+//
+// Cloud layout is a pure function of (index, time) and is stored nowhere. Both stages receive the
+// same pc.time in a single vkCmdPushConstants call, so the compute stage (deciding which columns
+// sit under a cloud and may rain) and the fragment stage (drawing them) derive byte-identical
+// positions with no synchronisation and no per-slot buffer. If you edit one copy you MUST edit
+// the other, or rain will fall out of a clear sky.
+//
+// The population is fixed: clouds scroll along +X and wrap, so one drifts out of the far border
+// exactly as another drifts in at the near one. Nothing is ever "revealed" or "retired".
+// =================================================================================================
+const int CLOUD_MAX = 64;
+
+// FUNCTION: cloudRadii
+vec3 cloudRadii(int i) {
+    float h4 = hash(vec3(float(i), 211.0f, 5.0f));
+    float h5 = hash(vec3(float(i), 71.0f, 61.0f));
+    float h6 = hash(vec3(float(i), 19.0f, 173.0f));
+    float rxz = 10.0f + h4 * 18.0f;
+    return vec3(rxz, 4.0f + h5 * 6.0f, rxz * (0.7f + h6 * 0.6f));
+}
+
+// FUNCTION: cloudCenterXZ
+vec2 cloudCenterXZ(int i, float t) {
+    float h1 = hash(vec3(float(i), 11.0f, 3.0f));
+    float h2 = hash(vec3(float(i), 47.0f, 91.0f));
+    float phase = hash(vec3(float(i), 91.0f, 250.0f)) * 6.28318f;
+
+    float x = mod(h1 * 128.0f + t * tuning.cloudDriftSpeed, 128.0f);
+    float z = mod(h2 * 128.0f + sin(t * 0.12f + phase) * 3.0f, 128.0f);
+    return vec2(x, z);
+}
+
+// FUNCTION: cloudEdgeFade
+// 1 over the middle of the cube, falling to 0 at each border. The fade has to happen INSIDE the
+// footprint because clouds are already hard-clipped to the cube's XZ column -- fading outside it
+// would be invisible and clouds would still pop at the boundary. This is what makes a cloud
+// dissolve as it reaches the border and re-emerge on the opposite side.
+float cloudEdgeFade(vec2 c) {
+    float d = max(tuning.cloudEdgeFadeDist, 0.001f);
+    float fx = smoothstep(0.0f, d, c.x) * smoothstep(0.0f, d, 128.0f - c.x);
+    float fz = smoothstep(0.0f, d, c.y) * smoothstep(0.0f, d, 128.0f - c.y);
+    return fx * fz;
+}
+
 // FUNCTION: marchBlockyCloud
 // Walks a per-cloud voxel grid (same DDA stepping pattern as the primary raymarch loop) bounded
 // to the ray's intersection interval with the cloud's ellipsoid. A cell counts as solid only if
@@ -287,6 +350,13 @@ bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, vec3 center, vec3 radii, floa
     vec3 normal = vec3(0.0f);
     float t = tEnter;
 
+    // Hash the blocky fill in the cloud's OWN cell space, not world space. Now that clouds drift,
+    // a world-anchored pattern would boil and shimmer as cells slid through a stationary noise
+    // field. Subtracting the cloud's (rounded) cell origin pins the pattern to the cloud, so it
+    // holds its shape and simply translates -- the motion quantises to whole voxel steps, which
+    // reads correctly for a deliberately cube-faceted look.
+    ivec3 cloudOrigin = ivec3(round(center / tuning.cloudVoxelSize));
+
     for (int i = 0; i < int(tuning.maxCloudSteps); i++) {
         if (t > tExit) break;
 
@@ -295,13 +365,14 @@ bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, vec3 center, vec3 radii, floa
         float localLen = length(local);
 
         if (localLen <= 1.0f) {
-            float fillHash = hash(vec3(cellPos) + vec3(cloudSeed * 13.0f, cloudSeed * 7.0f, cloudSeed * 29.0f));
+            vec3 localCell = vec3(cellPos - cloudOrigin);
+            float fillHash = hash(localCell + vec3(cloudSeed * 13.0f, cloudSeed * 7.0f, cloudSeed * 29.0f));
             float edgeFactor = clamp(localLen, 0.0f, 1.0f);
             float threshold = mix(tuning.cloudEdgeThresholdMin, tuning.cloudEdgeThresholdMax, edgeFactor); // sparser near the edge, denser near the center
 
             if (fillHash > threshold) {
                 tHit = t;
-                float shadeHash = hash(vec3(cellPos) * 3.71f + vec3(91.0f, cloudSeed, 7.0f));
+                float shadeHash = hash(localCell * 3.71f + vec3(91.0f, cloudSeed, 7.0f));
                 vec3 baseColor = mix(vec3(0.76f, 0.76f, 0.78f), vec3(1.0f), shadeHash); // white -> light grey
                 vec3 stormColor = vec3(0.32f, 0.33f, 0.36f);
                 baseColor = mix(baseColor, stormColor, greyness);
@@ -498,95 +569,83 @@ void main() {
         finalColor = vec4(1.0f, 0.2f, 0.2f, 1.0f);
     }
 
-    // --- CLOUD LAYER: reveals one at a time with a fade-in, clipped to the cube's footprint,
-    // rendered as blocky/voxelized cubes bounded within a smooth ellipsoid envelope, greying
-    // toward storm-grey as the rain reservoir darkens and eventually starts to drain ---
+    // --- CLOUD LAYER: a fixed population of clouds constantly drifting along +X and wrapping,
+    // clipped to the cube's footprint and rendered as blocky/voxelized cubes bounded within a
+    // smooth ellipsoid envelope. The whole field shares ONE charge value, so the sky thickens
+    // from near-transparent to opaque storm-grey as a body rather than individual clouds
+    // popping in and out; each cloud additionally dissolves as it drifts into a border. ---
     {
-        const int CLOUD_MAX_SLOTS = 64;
+        // Group charge, eased on the compute side. Drives opacity and colour together, which is
+        // what makes the sky read as a single mass reacting to the water cycle.
+        float charge = clamp(uintBitsToFloat(cloudChargeBits), 0.0f, 1.0f);
+        float groupAlpha = mix(tuning.cloudMinAlpha, tuning.cloudMaxAlpha, charge);
 
-        float densityFactor = 1.0f - exp(-float(steamTopCount) / tuning.cloudDensitySaturation);
+        // Colour tracks charge as well, so a lightly-charged sky is pale and a heavy one is grey
+        // before the storm even breaks; the rain phases then force it the rest of the way.
+        float cloudGreyness = charge;
+        if (rainPhase == 1u) {
+            float crossedTime = uintBitsToFloat(rainPhaseTimeBits);
+            cloudGreyness = max(charge, clamp((pc.time - crossedTime) / tuning.rainDarkenDelay, 0.0f, 1.0f));
+        } else if (rainPhase == 2u) {
+            cloudGreyness = 1.0f;
+        }
 
-        float cloudGreyness = 0.0f;
-	const float CLOUD_DISAPPEAR_DURATION = 5.0f;
+        if (groupAlpha > 0.002f) {
+            vec2 footprintClip = intersectAABB(rayOrigin, rayDir, vec3(0.0f, -1000000.0f, 0.0f), vec3(128.0f, 1000000.0f, 128.0f));
+            vec3 cloudSunDir = normalize(vec3(0.8f, 1.0f, 0.5f));
 
-	float cloudDisappearFactor = 1.0f;
-    float cloudDisappearFactor = 1.0f;
-    if (rainPhase == 0u && rainFinishedTimeBits != 0xFFFFFFFFu) {
-        float finishedTime = uintBitsToFloat(rainFinishedTimeBits);
-        float sinceFinished = pc.time - finishedTime;
-        cloudDisappearFactor = 1.0f - clamp(sinceFinished / tuning.cloudDisappearDuration, 0.0f, 1.0f);
-    }
-    if (rainPhase == 1u) {
-        float crossedTime = uintBitsToFloat(rainPhaseTimeBits);
-        cloudGreyness = clamp((pc.time - crossedTime) / tuning.rainDarkenDelay, 0.0f, 1.0f);
-    } else if (rainPhase == 2u) {
-        cloudGreyness = 1.0f;
-    }
+            float bestT = 1000000.0f;
+            vec3 bestColor = vec3(0.0f);
+            float bestAlpha = 0.0f;
+            bool foundCloud = false;
 
-        vec2 footprintClip = intersectAABB(rayOrigin, rayDir, vec3(0.0f, -1000000.0f, 0.0f), vec3(128.0f, 1000000.0f, 128.0f));
-        vec3 cloudSunDir = normalize(vec3(0.8f, 1.0f, 0.5f));
+            int cloudN = int(min(tuning.cloudCount, uint(CLOUD_MAX)));
+            for (int i = 0; i < cloudN; i++) {
+                vec2 centerXZ = cloudCenterXZ(i, pc.time);
+                float edgeFade = cloudEdgeFade(centerXZ);
+                if (edgeFade <= 0.01f) continue;
 
-        float bestT = 1000000.0f;
-        vec3 bestColor = vec3(0.0f);
-        float bestAlpha = 0.0f;
-        bool foundCloud = false;
+                float h3 = hash(vec3(float(i), 133.0f, 7.0f));
+                vec3 radii = cloudRadii(i);
+                vec3 center = vec3(
+                    centerXZ.x,
+                    128.0f + radii.y + h3 * 4.0f,   // bottom edge sits right at the cube's top, 0-4 units of gap
+                    centerXZ.y
+                );
 
-        for (int i = 0; i < int(revealedCount); i++) {
-            float revealTime = uintBitsToFloat(cloudRevealTime[i]);
-            float fadeIn = smoothstep(0.0f, 1.0f, clamp((pc.time - revealTime) / tuning.cloudFadeDuration, 0.0f, 1.0f));
-            if (fadeIn <= 0.0f) continue;
+                vec3 oc = (rayOrigin - center) / radii;
+                vec3 rdn = rayDir / radii;
+                float a = dot(rdn, rdn);
+                float b = dot(oc, rdn);
+                float c = dot(oc, oc) - 1.0f;
+                float disc = b * b - a * c;
 
-            float h1 = hash(vec3(float(i), 11.0f, 3.0f));
-            float h2 = hash(vec3(float(i), 47.0f, 91.0f));
-            float h3 = hash(vec3(float(i), 133.0f, 7.0f));
-            float h4 = hash(vec3(float(i), 211.0f, 5.0f));
-            float h5 = hash(vec3(float(i), 71.0f, 61.0f));
-            float h6 = hash(vec3(float(i), 19.0f, 173.0f));
-            float phase = hash(vec3(float(i), 91.0f, 250.0f)) * 6.28318f;
+                if (disc > 0.0f) {
+                    float sq = sqrt(disc);
+                    float t0 = (-b - sq) / a;
+                    float t1 = (-b + sq) / a;
 
-	    float rxz = 10.0f + h4 * 18.0f;
-	    vec3 radii = vec3(rxz, 4.0f + h5 * 6.0f, rxz * (0.7f + h6 * 0.6f));
+                    float clippedNear = max(t0, footprintClip.x);
+                    float clippedFar = min(t1, footprintClip.y);
 
-	    float angle = h1 * 6.28318f;
-	    float orbitRadius = h2 * 55.0f;
-	    vec3 center = vec3(
-	        64.0f + cos(angle) * orbitRadius + sin(pc.time * 0.15f + phase) * 3.0f,
-	        128.0f + radii.y + h3 * 4.0f,   // bottom edge sits right at the cube's top, 0-4 units of gap
-	        64.0f + sin(angle) * orbitRadius + cos(pc.time * 0.12f + phase) * 3.0f
-	    );
-
-            vec3 oc = (rayOrigin - center) / radii;
-            vec3 rdn = rayDir / radii;
-            float a = dot(rdn, rdn);
-            float b = dot(oc, rdn);
-            float c = dot(oc, oc) - 1.0f;
-            float disc = b * b - a * c;
-
-            if (disc > 0.0f) {
-                float sq = sqrt(disc);
-                float t0 = (-b - sq) / a;
-                float t1 = (-b + sq) / a;
-
-                float clippedNear = max(t0, footprintClip.x);
-                float clippedFar = min(t1, footprintClip.y);
-
-                if (clippedNear < clippedFar && clippedFar > 0.0f) {
-                    float cloudTHit;
-                    vec3 cloudColor;
-                    if (marchBlockyCloud(rayOrigin, rayDir, center, radii, float(i), clippedNear, clippedFar, cloudSunDir, cloudGreyness, cloudTHit, cloudColor)) {
-                        if (cloudTHit > 0.0f && cloudTHit < bestT) {
-                            bestT = cloudTHit;
-                            bestColor = cloudColor;
-                            bestAlpha = clamp(0.35f + densityFactor * 0.55f, 0.0f, 0.95f) * fadeIn * cloudDisappearFactor;
-                            foundCloud = true;
+                    if (clippedNear < clippedFar && clippedFar > 0.0f) {
+                        float cloudTHit;
+                        vec3 cloudColor;
+                        if (marchBlockyCloud(rayOrigin, rayDir, center, radii, float(i), clippedNear, clippedFar, cloudSunDir, cloudGreyness, cloudTHit, cloudColor)) {
+                            if (cloudTHit > 0.0f && cloudTHit < bestT) {
+                                bestT = cloudTHit;
+                                bestColor = cloudColor;
+                                bestAlpha = clamp(groupAlpha * edgeFade, 0.0f, 0.95f);
+                                foundCloud = true;
+                            }
                         }
                     }
                 }
             }
-        }
 
-        if (foundCloud && bestT < finalDist) {
-            finalColor.rgb = mix(finalColor.rgb, bestColor, bestAlpha);
+            if (foundCloud && bestT < finalDist) {
+                finalColor.rgb = mix(finalColor.rgb, bestColor, bestAlpha);
+            }
         }
     }
     

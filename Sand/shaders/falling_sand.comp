@@ -6,35 +6,54 @@ layout(std430, binding = 0) buffer VoxelGrid {
     uint grid[];
 };
 
+// The per-slot reveal/footprint arrays are gone: the cloud field is now a fixed drifting
+// population whose layout is a pure function of (index, time), so there is nothing per-cloud
+// left to store. See the CLOUD FIELD section below.
 layout(std430, binding = 1) buffer CloudStats {
-    uint steamTopCount;
-    uint revealedCount;
-    uint lastRevealTimeBits;
     uint waterVoxelCount;
-    uint cloudWaterCount;
-    uint totalWaterEvaporated;   // NEW: monotonic — never drains, unlike cloudWaterCount
+    uint waterHighMark;          // peak water level ever observed -- the target rain restores to
+    uint cloudWaterCount;        // steam banked since the last storm; drives how charged the sky looks
     uint rainPhase;
     uint rainPhaseTimeBits;
-    uint rainFinishedTimeBits;
-    uint cloudRevealTime[64];
-    uint cloudFootprintX[64];
-    uint cloudFootprintZ[64];
-    uint cloudFootprintRadius[64];
+    uint rainTargetLevel;        // water level this storm rains toward (deficit + overshoot)
+    uint rainCandidateCount;     // census of rainable columns, rebuilt every dispatch
+    uint rainCandidateEstimate;  // last dispatch's census -- the divisor that sets drop odds
+    uint cloudChargeBits;        // float bits: eased 0..1 group-wide cloud opacity/greyness
 };
 
 layout(std140, binding = 2) uniform TuningParams {
-    float rainChanceStart;
-    float rainChanceMax;
-    float rainRampDuration;
-    float cloudRevealCooldown;
-    uint cloudRevealTargetSlots;
     uint rainStartLayers;
-    uint rainMinWaterInCubeLayers;
+    uint rainDropsPerTick;
+    float rainOvershoot;
     float rainDarkenDelay;
+    uint cloudCount;
+    float cloudDriftSpeed;
+    float cloudEdgeFadeDist;
+    float cloudChargeSaturation;
+    float cloudChargeEaseRate;
+    float cloudMinAlpha;
+    float cloudMaxAlpha;
+    float cloudVoxelSize;
+    float cloudEdgeThresholdMin;
+    float cloudEdgeThresholdMax;
+    uint maxCloudSteps;
+    uint sandMoistureCapacity;
+    uint dirtMoistureCapacity;
+    uint sandWaterAbsorbUnit;
+    uint sandClumpThreshold;
+    uint dirtClumpThreshold;
+    uint wakeSleepThreshold;
+    uint emptyBelowWakeCount;
+    uint fireLifetime;
+    uint fireDryRate;
+    float grassGrowChance;
+    float grassSubmergedDecayChance;
+    float fireBurnGrassChance;
+    float fireSpreadChance;
+    float steamScatterChance;
 } tuning;
 
 const uint LAYER_SIZE = 128u * 128u; // 16384 — one layer
-const uint CLOUD_MAX_SLOTS = 64u;
 
 layout(push_constant) uniform Constants {
     float time;
@@ -115,64 +134,79 @@ float hash(vec3 p) {
 }
 
 // FUNCTION: incWater / decWater
-// Keeps a live running total of water voxels the system currently "owes" back.
-// Only changes on: user spawn/void of water, steam venting off the top of the grid, the
-// 200-tick age-timeout (which now also credits cloudWaterCount, making it fully recoverable
-// via rain rather than a permanent loss), and rain adding water back in. Sand/dirt moisture
-// absorption and fire->steam conversion do NOT touch this count, since water isn't leaving
-// the system in those cases, just changing storage form. Only the user's void brush now
-// causes genuinely permanent, unrecoverable water loss. decWater relies on uint wraparound
-// (adding 0xFFFFFFFFu == -1 under modular arithmetic) since atomicAdd has no signed form.
+// waterVoxelCount tracks exactly one thing: how many type-2 water voxels currently exist in
+// the grid. Not "water in the system" -- water stored as soil moisture or as airborne steam is
+// deliberately NOT counted, because those are different storage forms with their own state.
+// Keeping this to a single, directly-observable meaning is what makes the conservation loop
+// auditable: water voxel -> steam (dec) -> vents off the top (cloudWaterCount +1) -> rains back
+// down (cloudWaterCount -1, inc) balances exactly, and soil absorption (dec) / percolation (inc)
+// balance against each other. Every transition that creates or destroys a water voxel must call
+// one of these. decWater relies on uint wraparound (adding 0xFFFFFFFFu == -1 under modular
+// arithmetic) since atomicAdd has no signed form.
 void incWater() { atomicAdd(waterVoxelCount, 1u); }
 void decWater() { atomicAdd(waterVoxelCount, 0xFFFFFFFFu); }
 
-// FUNCTION: getRainThreshold / getCloudWaterPerSlot / getRainMinWaterInCube
-// These were compile-time `const` derived values before their inputs moved into the
-// TuningParams UBO; GLSL const initializers can't reference a uniform, so they're computed
-// on demand here instead. max(..., 1u) guards against a divide-by-zero if
-// cloudRevealTargetSlots is ever set to 0 in the config file.
+// FUNCTION: getRainThreshold
+// Was a compile-time `const` before its input moved into the TuningParams UBO; GLSL const
+// initializers can't reference a uniform, so it's computed on demand here instead.
 uint getRainThreshold() { return tuning.rainStartLayers * LAYER_SIZE; }
-uint getCloudWaterPerSlot() { return getRainThreshold() / max(tuning.cloudRevealTargetSlots, 1u); }
-uint getRainMinWaterInCube() { return tuning.rainMinWaterInCubeLayers * LAYER_SIZE; }
 
-// FUNCTION: tryRevealNextCloud
-// Gates cloud reveals to one-at-a-time: a slot must be both event-eligible AND past the cooldown
-// since the last reveal. atomicCompSwap on revealedCount ensures only one invocation ever wins,
-// even if many steam voxels vent in the same burst/dispatch.
-void tryRevealNextCloud() {
-    uint currentRevealed = revealedCount;
-    if (currentRevealed >= CLOUD_MAX_SLOTS) return;
+// =================================================================================================
+// CLOUD FIELD -- shared placement math. THIS BLOCK IS DUPLICATED VERBATIM IN raymarch.frag.
+//
+// Cloud layout is a pure function of (index, time) and is stored nowhere. Both stages receive the
+// same pc.time in a single vkCmdPushConstants call, so the compute stage (deciding which columns
+// sit under a cloud and may rain) and the fragment stage (drawing them) derive byte-identical
+// positions with no synchronisation and no per-slot buffer. If you edit one copy you MUST edit
+// the other, or rain will fall out of a clear sky.
+//
+// The population is fixed: clouds scroll along +X and wrap, so one drifts out of the far border
+// exactly as another drifts in at the near one. Nothing is ever "revealed" or "retired".
+// =================================================================================================
+const int CLOUD_MAX = 64;
 
-    uint requiredWater = (currentRevealed + 1u) * getCloudWaterPerSlot();
-    if (totalWaterEvaporated < requiredWater) return;
+// FUNCTION: cloudRadii
+vec3 cloudRadii(int i) {
+    float h4 = hash(vec3(float(i), 211.0f, 5.0f));
+    float h5 = hash(vec3(float(i), 71.0f, 61.0f));
+    float h6 = hash(vec3(float(i), 19.0f, 173.0f));
+    float rxz = 10.0f + h4 * 18.0f;
+    return vec3(rxz, 4.0f + h5 * 6.0f, rxz * (0.7f + h6 * 0.6f));
+}
 
-    float lastTime = uintBitsToFloat(lastRevealTimeBits);
-    if (pc.time - lastTime < tuning.cloudRevealCooldown) return;
+// FUNCTION: cloudCenterXZ
+vec2 cloudCenterXZ(int i, float t) {
+    float h1 = hash(vec3(float(i), 11.0f, 3.0f));
+    float h2 = hash(vec3(float(i), 47.0f, 91.0f));
+    float phase = hash(vec3(float(i), 91.0f, 250.0f)) * 6.28318f;
 
-    if (atomicCompSwap(revealedCount, currentRevealed, currentRevealed + 1u) == currentRevealed) {
-        cloudRevealTime[currentRevealed] = floatBitsToUint(pc.time);
-        atomicExchange(lastRevealTimeBits, floatBitsToUint(pc.time));
+    float x = mod(h1 * 128.0f + t * tuning.cloudDriftSpeed, 128.0f);
+    float z = mod(h2 * 128.0f + sin(t * 0.12f + phase) * 3.0f, 128.0f);
+    return vec2(x, z);
+}
 
-        // Static horizontal footprint snapshot — mirrors raymarch.frag's placement hashes but
-        // omits the per-frame drift term, since this is captured once and not re-evaluated.
-        float h1 = hash(vec3(float(currentRevealed), 11.0f, 3.0f));
-        float h2 = hash(vec3(float(currentRevealed), 47.0f, 91.0f));
-        float h4 = hash(vec3(float(currentRevealed), 211.0f, 5.0f));
-        float h6 = hash(vec3(float(currentRevealed), 19.0f, 173.0f));
+// FUNCTION: cloudEdgeFade
+// 1 over the middle of the cube, falling to 0 at each border. The fade has to happen INSIDE the
+// footprint because the renderer already hard-clips clouds to the cube's XZ column -- fading
+// outside it would be invisible and clouds would still pop at the boundary. This is what makes a
+// cloud dissolve as it reaches the border and re-emerge on the opposite side.
+float cloudEdgeFade(vec2 c) {
+    float d = max(tuning.cloudEdgeFadeDist, 0.001f);
+    float fx = smoothstep(0.0f, d, c.x) * smoothstep(0.0f, d, 128.0f - c.x);
+    float fz = smoothstep(0.0f, d, c.y) * smoothstep(0.0f, d, 128.0f - c.y);
+    return fx * fz;
+}
 
-        float angle = h1 * 6.28318f;
-        float orbitRadius = h2 * 55.0f;
-        float footprintX = 64.0f + cos(angle) * orbitRadius;
-        float footprintZ = 64.0f + sin(angle) * orbitRadius;
-
-        float rxz = 10.0f + h4 * 18.0f;
-        float rz2 = rxz * (0.7f + h6 * 0.6f);
-        float footprintRadius = (rxz + rz2) * 0.5f;
-
-        cloudFootprintX[currentRevealed] = floatBitsToUint(footprintX);
-        cloudFootprintZ[currentRevealed] = floatBitsToUint(footprintZ);
-        cloudFootprintRadius[currentRevealed] = floatBitsToUint(footprintRadius);
-    }
+// FUNCTION: getWaterDeficit
+// How far the cube's water level has fallen below its peak -- this, not a running tally of
+// evaporation events, is what a storm has to repay. Counting events could only ever undercount
+// the real loss, because water leaves the visible pool through paths that were never credited:
+// steam absorbed into soil on the way up never reaches the top to be banked, and rain absorbed
+// into soil on the way down repaid the old debt while adding no water back. Measuring the level
+// directly is immune to all of that -- however water went missing, and wherever it went, the
+// deficit reflects it, and rain keeps falling until the level is actually restored.
+uint getWaterDeficit() {
+    return (waterHighMark > waterVoxelCount) ? (waterHighMark - waterVoxelCount) : 0u;
 }
 
 // FUNCTION: tryMove
@@ -217,18 +251,26 @@ bool tryDisplace(uint currentIndex, uint currentValue, uint targetIndex, uint ta
 }
 
 
-// FUNCTION: tryClaimWaterUnit
-// Correctly floors an atomic decrement at 0 via CAS retry, closing the race the previous
-// add-then-undo pattern had: that approach let a transient underflow-wrapped value be
-// observed by a concurrent invocation as "plenty left," corrupting the reservoir upward.
-bool tryClaimWaterUnit() {
-    uint oldVal = cloudWaterCount;
-    while (oldVal > 0u) {
-        uint prev = atomicCompSwap(cloudWaterCount, oldVal, oldVal - 1u);
-        if (prev == oldVal) return true;
-        oldVal = prev;
-    }
-    return false;
+// FUNCTION: getRainDropChance
+// Rain's rate control, expressed as a per-column probability rather than a shared allowance.
+//
+// The obvious implementation -- a global budget of N drops that columns claim atomically until
+// it runs out -- silently biases rain to one side of the cube. Workgroups are dispatched in
+// roughly spatial order, so low-x/low-z columns reliably reach the counter first and drain the
+// whole allowance before the far side ever attempts a claim. The rate comes out correct while
+// the distribution is badly skewed, which is exactly the sort of bug that looks like a rendering
+// problem and isn't.
+//
+// Instead, every eligible column rolls independently against the same probability, so placement
+// carries no dependence on execution order whatsoever. To keep the *rate* fixed while doing that,
+// the odds are divided by a live census of how many columns are currently rainable (counted last
+// dispatch): odds = wanted_drops / candidates, giving an expected wanted_drops per tick no matter
+// whether one small cloud or a full overcast sky is overhead. Capping wanted_drops at the
+// outstanding deficit tapers the final tick so a storm can't overshoot and ratchet the high mark.
+float getRainDropChance(uint candidates, uint remaining) {
+    if (candidates == 0u) return 0.0f;
+    uint want = min(tuning.rainDropsPerTick, remaining);
+    return clamp(float(want) / float(candidates), 0.0f, 1.0f);
 }
 
 
@@ -237,19 +279,20 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
     uint moisture = currentAge;
     bool moistureModified = false;
     
-    if (moisture < 10u) {
+    if (moisture < tuning.sandMoistureCapacity) {
         int startDir = int(fract(randVal * 17.0f) * 6.0f);
         for(int i = 0; i < 6; i++) {
             int d = (startDir + i) % 6;
-            if (d != 2) { 
+            if (d != 2) {
                 ivec3 nPos = pos + getOrthoDir(d);
                 if (nPos.x > 0 && nPos.x < WIDTH-1 && nPos.y > 0 && nPos.y < HEIGHT-1 && nPos.z > 0 && nPos.z < DEPTH-1) {
                     uint nIndex = getIndex(nPos);
                     uint nVal = grid[nIndex];
-                    
-                    if (getType(nVal) == 2u) { 
+
+                    if (getType(nVal) == 2u) {
                         if (atomicCompSwap(grid[nIndex], nVal, 0u) == nVal) {
-                            atomicAdd(grid[currentIndex], 90u << 24); 
+                            atomicAdd(grid[currentIndex], tuning.sandWaterAbsorbUnit << 24);
+                            decWater(); // water voxel consumed into soil moisture
                             moistureModified = true;
                             break;
                         }
@@ -258,44 +301,48 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
             }
         }
     }
-    
+
     if (!moistureModified && moisture > 0u) {
         int d = int(fract(randVal * 31.0f) * 6.0f);
-        if (d != 2) { 
+        if (d != 2) {
             ivec3 nPos = pos + getOrthoDir(d);
             if (nPos.x > 0 && nPos.x < WIDTH-1 && nPos.y > 0 && nPos.y < HEIGHT-1 && nPos.z > 0 && nPos.z < DEPTH-1) {
                 uint nIndex = getIndex(nPos);
                 uint nVal = grid[nIndex];
                 uint nType = getType(nVal);
-                
-                if (nType == 1u || nType == 4u) { 
+
+                if (nType == 1u || nType == 4u) {
                     uint nMoisture = getAge(nVal);
-                    uint nCapacity = (nType == 4u) ? 30u : 10u; 
-                    
+                    uint nCapacity = (nType == 4u) ? tuning.dirtMoistureCapacity : tuning.sandMoistureCapacity;
+
                     if (moisture > nMoisture + 1u && nMoisture < nCapacity) {
-                        atomicAdd(grid[currentIndex], 0xFF000000u); 
-                        atomicAdd(grid[nIndex], 1u << 24);          
+                        atomicAdd(grid[currentIndex], 0xFF000000u);
+                        atomicAdd(grid[nIndex], 1u << 24);
                         moistureModified = true;
                     }
                 }
             }
         }
     }
-    
-    if (!moistureModified && moisture >= 90u) {
+
+    if (!moistureModified && moisture >= tuning.sandWaterAbsorbUnit) {
         ivec3 leakPos = pos + ivec3(0, -1, 0);
         if (leakPos.y > 0 && getType(grid[getIndex(leakPos)]) == 0u) {
             if (atomicCompSwap(grid[getIndex(leakPos)], 0u, pack(2u, 0u, 0u, 0u)) == 0u) {
-                atomicAdd(grid[currentIndex], 0xA6000000u); 
+                // Release exactly what one absorption stored. Was hardcoded 0xA6000000u, which
+                // is (-90 << 24) and so silently assumed sandWaterAbsorbUnit == 90; deriving it
+                // keeps percolation balanced if that value is ever retuned in the config.
+                atomicAdd(grid[currentIndex], (0u - tuning.sandWaterAbsorbUnit) << 24);
+                incWater(); // moisture percolated back out as a real water voxel
                 moistureModified = true;
             }
         }
     }
-    
+
     if (moistureModified) return;
 
     bool isClumped = false;
-    if (moisture > 0u && currentSleep > 5u) {
+    if (moisture > 0u && currentSleep > tuning.wakeSleepThreshold) {
         int emptyBelowCount = 0;
         if (pos.y > 1) {
             for (int x = -1; x <= 1; x++) {
@@ -309,9 +356,9 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
                 }
             }
         }
-        
-        if (emptyBelowCount >= 6) {
-            currentSleep = 0u; 
+
+        if (emptyBelowCount >= int(tuning.emptyBelowWakeCount)) {
+            currentSleep = 0u;
         } else {
             int clumpCount = 0;
             for (int x = -1; x <= 1; x++) {
@@ -325,7 +372,7 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
                     }
                 }
             }
-            if (clumpCount >= 9) isClumped = true;
+            if (clumpCount >= int(tuning.sandClumpThreshold)) isClumped = true;
         }
     }
 
@@ -414,7 +461,7 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
     uint moisture = currentAge;
     bool moistureModified = false;
     
-    if (moisture < 30u) {
+    if (moisture < tuning.dirtMoistureCapacity) {
         int startDir = int(fract(randVal * 17.0f) * 6.0f);
         for(int i = 0; i < 6; i++) {
             int d = (startDir + i) % 6;
@@ -422,10 +469,11 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
             if (nPos.x > 0 && nPos.x < WIDTH-1 && nPos.y > 0 && nPos.y < HEIGHT-1 && nPos.z > 0 && nPos.z < DEPTH-1) {
                 uint nIndex = getIndex(nPos);
                 uint nVal = grid[nIndex];
-                
-                if (getType(nVal) == 2u) { 
+
+                if (getType(nVal) == 2u) {
                     if (atomicCompSwap(grid[nIndex], nVal, 0u) == nVal) {
-                        atomicAdd(grid[currentIndex], 90u << 24); 
+                        atomicAdd(grid[currentIndex], tuning.sandWaterAbsorbUnit << 24);
+                        decWater(); // water voxel consumed into soil moisture
                         moistureModified = true;
                         break;
                     }
@@ -433,7 +481,7 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
             }
         }
     }
-    
+
     if (!moistureModified && moisture > 0u) {
         int d = int(fract(randVal * 31.0f) * 6.0f);
         ivec3 nPos = pos + getOrthoDir(d);
@@ -441,24 +489,24 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
             uint nIndex = getIndex(nPos);
             uint nVal = grid[nIndex];
             uint nType = getType(nVal);
-            
-            if (nType == 4u || nType == 1u) { 
+
+            if (nType == 4u || nType == 1u) {
                 uint nMoisture = getAge(nVal);
-                uint nCapacity = (nType == 4u) ? 30u : 10u; 
-                
+                uint nCapacity = (nType == 4u) ? tuning.dirtMoistureCapacity : tuning.sandMoistureCapacity;
+
                 if (moisture > nMoisture + 1u && nMoisture < nCapacity) {
-                    atomicAdd(grid[currentIndex], 0xFF000000u); 
-                    atomicAdd(grid[nIndex], 1u << 24);          
+                    atomicAdd(grid[currentIndex], 0xFF000000u);
+                    atomicAdd(grid[nIndex], 1u << 24);
                     moistureModified = true;
                 }
             }
         }
     }
-    
+
     if (moistureModified) return;
 
     bool isClumped = false;
-    if (currentSleep > 5u) {
+    if (currentSleep > tuning.wakeSleepThreshold) {
         int emptyBelowCount = 0;
         if (pos.y > 1) {
             for (int x = -1; x <= 1; x++) {
@@ -472,9 +520,9 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
                 }
             }
         }
-        
-        if (emptyBelowCount >= 6) {
-            currentSleep = 0u; 
+
+        if (emptyBelowCount >= int(tuning.emptyBelowWakeCount)) {
+            currentSleep = 0u;
         } else {
             int clumpCount = 0;
             for (int x = -1; x <= 1; x++) {
@@ -488,7 +536,7 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
                     }
                 }
             }
-            if (clumpCount >= 5) isClumped = true;
+            if (clumpCount >= int(tuning.dirtClumpThreshold)) isClumped = true;
         }
     }
 
@@ -570,20 +618,20 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
 
     uint floraState = currentDir;
     
-    if (isClumped || currentSleep > 5u) {
+    if (isClumped || currentSleep > tuning.wakeSleepThreshold) {
         ivec3 abovePos = pos + ivec3(0, 1, 0);
         uint aboveType = (abovePos.y < HEIGHT - 1) ? getType(grid[getIndex(abovePos)]) : 0u;
 
         if (aboveType == 0u) {
             if (moisture >= 5u && floraState < 100u) {
-                if (fract(randVal * 55.0f) < 0.001f) floraState++;
+                if (fract(randVal * 55.0f) < tuning.grassGrowChance) floraState++;
             }
             if (floraState > 100u) floraState = 100u;
         } else if (aboveType == 2u) {
             if (floraState > 0u) {
-                if (floraState <= 100u) floraState = 101u; 
-                if (fract(randVal * 66.0f) < 0.1f) floraState++;
-                if (floraState >= 200u) floraState = 0u; 
+                if (floraState <= 100u) floraState = 101u;
+                if (fract(randVal * 66.0f) < tuning.grassSubmergedDecayChance) floraState++;
+                if (floraState >= 200u) floraState = 0u;
             }
         } else if (aboveType != 5u) {
             floraState = 0u;
@@ -595,11 +643,17 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
 }
 
 // FUNCTION: updateWater
+// Water that is genuinely dormant -- sleeping past wakeSleepThreshold AND unable to wake this
+// tick -- goes fully inert and stays that way indefinitely; it does NOT age out or evaporate.
+// A settled lake/pool is meant to reach a steady state and remain there. The only ways water
+// leaves the system are the user's void brush and fire boiling it into steam (see updateFire),
+// and cloud moisture is only ever banked by that steam venting off the top of the grid (see
+// updateSteam) -- this function must never call atomicAdd(cloudWaterCount, ...).
 void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentSleep, uint currentAge, float randVal) {
-    if (currentSleep > 5u) {
+    if (currentSleep > tuning.wakeSleepThreshold) {
         bool wake = false;
         if (pos.y > 1 && getType(grid[getIndex(pos + ivec3(0, -1, 0))]) == 0u) {
-            wake = true; 
+            wake = true;
         } else {
             bool hasPressure = (pos.y < HEIGHT - 2) ? (getType(grid[getIndex(pos + ivec3(0, 1, 0))]) != 0u) : false;
             bool isStackedOnWater = (pos.y > 1) ? (getType(grid[getIndex(pos + ivec3(0, -1, 0))]) == 2u) : false;
@@ -609,7 +663,7 @@ void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
                 if (nPos.x > 0 && nPos.x < WIDTH - 1 && nPos.z > 0 && nPos.z < DEPTH - 1) {
                     if (getType(grid[getIndex(nPos)]) == 0u) {
                         uint belowNeighbor = getType(grid[getIndex(nPos + ivec3(0, -1, 0))]);
-                        if (belowNeighbor == 0u || hasPressure || isStackedOnWater || belowNeighbor == 2u) { 
+                        if (belowNeighbor == 0u || hasPressure || isStackedOnWater || belowNeighbor == 2u) {
                             wake = true;
                             break;
                         }
@@ -617,20 +671,12 @@ void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
                 }
             }
         }
-        if (!wake) return; 
-        currentSleep = 0u; 
-        currentAge = 0u;   
+        if (!wake) return;
+        currentSleep = 0u;
+        currentAge = 0u;
     }
-    
+
     uint newAge = currentAge + 1u;
-    if (rainPhase != 2u && newAge > 200u) {
-        decWater();
-	atomicAdd(cloudWaterCount, 1u);
-	atomicAdd(totalWaterEvaporated, 1u);
-	tryRevealNextCloud();
-        atomicExchange(grid[currentIndex], 0u);
-        return;
-    }
 
     if (pos.y > 1) {
         ivec3 belowPos = pos + ivec3(0, -1, 0);
@@ -745,6 +791,7 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
             uint nVal = grid[nIndex];
             if (getType(nVal) == 2u) {
                 if (atomicCompSwap(grid[nIndex], nVal, pack(6u, 0u, 0u, 0u)) == nVal) {
+                    decWater(); // water voxel became steam; it is no longer a water voxel
                     atomicExchange(grid[currentIndex], 0u);
                     return;
                 }
@@ -766,7 +813,7 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
         } else if (belowType == 1u) {
             uint moisture = getAge(belowValue);
             if (moisture > 0u) {
-                uint newMoisture = (moisture > 5u) ? moisture - 5u : 0u;
+                uint newMoisture = (moisture > tuning.fireDryRate) ? moisture - tuning.fireDryRate : 0u;
                 uint newVal = pack(1u, getDir(belowValue), 0u, newMoisture);
                 if (atomicCompSwap(grid[belowIndex], belowValue, newVal) == belowValue) {
                     atomicExchange(grid[currentIndex], 0u);
@@ -777,15 +824,15 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
             uint flora = (belowValue >> 8) & 0xFFu;
             if (flora > 10u && flora <= 100u) {
                 isBurningGrass = true;
-                newAge = 0u; 
-                
-                if (fract(randVal * 100.0f) < 0.05f) { 
+                newAge = 0u;
+
+                if (fract(randVal * 100.0f) < tuning.fireBurnGrassChance) {
                     uint newFlora = flora - 1u;
                     uint newVal = pack(4u, newFlora, 0u, getAge(belowValue));
                     atomicCompSwap(grid[belowIndex], belowValue, newVal);
                 }
-                
-                if (fract(randVal * 100.0f) < 0.1f) { 
+
+                if (fract(randVal * 100.0f) < tuning.fireSpreadChance) {
                     int d = int(fract(randVal * 10.0f) * 8.0f);
                     ivec3 targetPos = pos + getHDir(d);
                     if (targetPos.x > 0 && targetPos.x < WIDTH-1 && targetPos.z > 0 && targetPos.z < DEPTH-1) {
@@ -806,7 +853,7 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
         }
     }
 
-    if (newAge > 30u) {
+    if (newAge > tuning.fireLifetime) {
         atomicExchange(grid[currentIndex], 0u);
         return;
     }
@@ -817,17 +864,56 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
 
 // FUNCTION: updateRainPhase
 // Drives the rain state machine: 0 = accumulating (white), 1 = darkening (waiting to rain),
-// 2 = raining (draining). Only invocation (0,0,0) performs transitions, mirroring the
-// single-writer approach used by tryRevealNextCloud, to avoid redundant atomics across
-// every voxel in the grid. Other invocations may observe a transition up to one dispatch
-// late, which is invisible at this timescale.
+// 2 = raining (draining). Only invocation (0,0,0) performs transitions and eases the cloud
+// charge, keeping those single-writer rather than having every voxel in the grid contend on the
+// same atomics. Other invocations may observe a transition up to one dispatch late, which is
+// invisible at this timescale.
 void updateRainPhase() {
     if (gl_GlobalInvocationID.x != 0u || gl_GlobalInvocationID.y != 0u || gl_GlobalInvocationID.z != 0u) return;
 
+    // The peak water level is the target a storm restores to. Only tracked while no storm is in
+    // progress: a storm deliberately overshoots past the old peak, and letting the mark chase
+    // that would move the goalposts mid-storm and stop it from ever finishing. Only a deliberate
+    // user void lowers it, so erasing water on purpose leaves no debt the sky keeps repaying.
+    if (rainPhase == 0u && waterVoxelCount > waterHighMark) waterHighMark = waterVoxelCount;
+
+    uint deficit = getWaterDeficit();
+
+    // Rotate the rainable-column census: last dispatch's tally becomes this dispatch's divisor,
+    // and a fresh tally starts. Columns racing this swap land in one bucket or the other, which
+    // only jitters the estimate slightly -- it is a denominator for probability, not a hard
+    // allowance, so being a little stale costs nothing and no drop is ever lost to the race.
+    rainCandidateEstimate = rainCandidateCount;
+    rainCandidateCount = 0u;
+
+    // --- Group cloud charge -------------------------------------------------------------------
+    // One value the entire sky renders from, so the whole field thickens and greys together
+    // rather than individual clouds blinking in and out. Before a storm it tracks banked steam,
+    // so the sky only darkens because smoke put moisture up there; once a storm is committed it
+    // tracks the outstanding deficit instead, so the clouds visibly thin out as the debt is
+    // repaid and are clear again exactly when the water is back. Eased rather than assigned so
+    // every transition -- including the source switch at the storm boundary -- is gradual.
+    uint remainingToTarget = (rainTargetLevel > waterVoxelCount) ? (rainTargetLevel - waterVoxelCount) : 0u;
+    uint chargeSource = (rainPhase == 0u) ? cloudWaterCount : remainingToTarget;
+    float chargeTarget = clamp(float(chargeSource) / max(tuning.cloudChargeSaturation, 1.0f), 0.0f, 1.0f);
+    float charge = uintBitsToFloat(cloudChargeBits);
+    charge += (chargeTarget - charge) * clamp(tuning.cloudChargeEaseRate, 0.0f, 1.0f);
+    cloudChargeBits = floatBitsToUint(clamp(charge, 0.0f, 1.0f));
+
     if (rainPhase == 0u) {
-        if (cloudWaterCount > getRainThreshold() && waterVoxelCount >= getRainMinWaterInCube()) {
+        // Two independent preconditions, deliberately kept separate: cloudWaterCount > 0 means
+        // smoke actually put moisture in the sky (rain still only ever follows steam), while the
+        // deficit decides whether there is anything worth raining for. Storm SIZE is not tied to
+        // how much steam happened to reach the top -- it's tied to what's actually gone.
+        if (cloudWaterCount > 0u && deficit > getRainThreshold()) {
             rainPhase = 1u;
             rainPhaseTimeBits = floatBitsToUint(pc.time);
+            // Aim past the deficit rather than exactly at it. Drops still in flight already count
+            // as water voxels, so the level reads "restored" a moment before those drops have
+            // actually landed -- and some of them then soak into soil instead of pooling. Without
+            // headroom every storm therefore quits a little early and the level ratchets down
+            // over time. rainOvershoot is that headroom.
+            rainTargetLevel = waterHighMark + uint(float(deficit) * max(tuning.rainOvershoot, 0.0f));
         }
     } else if (rainPhase == 1u) {
         float crossedTime = uintBitsToFloat(rainPhaseTimeBits);
@@ -836,10 +922,13 @@ void updateRainPhase() {
             rainPhaseTimeBits = floatBitsToUint(pc.time); // repurposed: now marks rain start time
         }
     } else if (rainPhase == 2u) {
-        if (cloudWaterCount == 0u) {
+        // Ends only when the level actually reaches the target, not when some separately-counted
+        // reservoir runs dry. Water absorbed by soil mid-storm keeps the gap open, so the storm
+        // simply continues until the ground is sated and real water pools again.
+        if (remainingToTarget == 0u) {
             rainPhase = 0u;
             rainPhaseTimeBits = 0u;
-            rainFinishedTimeBits = floatBitsToUint(pc.time);
+            cloudWaterCount = 0u; // clouds have spent their moisture; the sky eases back to clear
         }
     }
 }
@@ -847,19 +936,17 @@ void updateRainPhase() {
 // FUNCTION: updateSteam
 void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, uint currentAge, float randVal) {
     if (pos.y >= HEIGHT - 2) {
-        atomicAdd(steamTopCount, 1u);
+        // No decWater() here: this voxel stopped counting as water back when fire turned it
+        // into steam. Venting only banks it as cloud moisture, which is what charges the sky.
         atomicAdd(cloudWaterCount, 1u);
-	atomicAdd(totalWaterEvaporated, 1u);
-        tryRevealNextCloud();
-        decWater();
         atomicExchange(grid[currentIndex], 0u);
         return;
     }
 
     uint newAge = min(currentAge + 1u, 255u);
 
-    // 1. Scatter randomly (horizontal or vertical) with a 30% chance per frame
-    if (fract(randVal * 88.0f) < 0.3f) {
+    // 1. Scatter randomly (horizontal or vertical)
+    if (fract(randVal * 88.0f) < tuning.steamScatterChance) {
         int d = int(fract(randVal * 13.0f) * 6.0f);
         ivec3 scatterPos = pos + getOrthoDir(d);
         if (scatterPos.x > 0 && scatterPos.x < WIDTH - 1 && scatterPos.y > 0 && scatterPos.y < HEIGHT - 1 && scatterPos.z > 0 && scatterPos.z < DEPTH - 1) {
@@ -889,7 +976,7 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
             
             if (cType == 1u || cType == 4u) {
                 uint moisture = getAge(cVal);
-                uint capacity = (cType == 4u) ? 30u : 10u;
+                uint capacity = (cType == 4u) ? tuning.dirtMoistureCapacity : tuning.sandMoistureCapacity;
                 if (moisture < capacity) {
                     if (atomicCompSwap(grid[currentIndex], rawValue, 0u) == rawValue) {
                         atomicAdd(grid[cIndex], 1u << 24);
@@ -931,7 +1018,12 @@ void main() {
             uint oldType = getType(grid[getIndex(pos)]);
             uint newType = uint(pc.spawnType);
             if (oldType != newType) {
-                if (oldType == 2u) decWater();
+                if (oldType == 2u) {
+                    decWater();
+                    // Lower the target too: erasing water by hand is intentional, so it must not
+                    // register as a deficit that the sky then spends a storm trying to refill.
+                    atomicAdd(waterHighMark, 0xFFFFFFFFu);
+                }
                 if (newType == 2u) incWater();
             }
             grid[getIndex(pos)] = pack(newType, 0u, 0u, 0u); 
@@ -949,30 +1041,43 @@ void main() {
     uint currentType = getType(rawValue);
 
     // --- RAIN: while draining, void cells at the top boundary (same layer steam vents from)
-    // have a chance to become falling water, ramping faster the longer it's been raining.
-    if (currentType == 0u && rainPhase == 2u && pos.y == HEIGHT - 2) {
+    // may become falling water. The rate is constant for the whole storm and set by
+    // rainDropsPerTick; what varies is the storm's LENGTH, which is proportional to how much
+    // water was evaporated. There is deliberately no time-based ramp -- a ramp made the rate
+    // depend on when you happened to look, which is what made this so hard to reason about.
+    if (currentType == 0u && rainPhase >= 1u && pos.y == HEIGHT - 2) {
+        // Evaluated live from the same placement math the renderer uses, so rain always falls
+        // from a cloud that is actually drawn overhead -- and follows it as it drifts. The
+        // edge-fade test matters: a cloud dissolving at the border must stop raining as it goes,
+        // otherwise drops would keep falling from a patch of empty sky.
         bool underCloud = false;
-        for (uint ci = 0u; ci < revealedCount; ci++) {
-            float fx = uintBitsToFloat(cloudFootprintX[ci]);
-            float fz = uintBitsToFloat(cloudFootprintZ[ci]);
-            float fr = uintBitsToFloat(cloudFootprintRadius[ci]);
-            float dx = float(pos.x) - fx;
-            float dz = float(pos.z) - fz;
-            if (dx * dx + dz * dz <= fr * fr) { underCloud = true; break; }
+        int cloudN = int(min(tuning.cloudCount, uint(CLOUD_MAX)));
+        for (int ci = 0; ci < cloudN; ci++) {
+            vec2 c = cloudCenterXZ(ci, pc.time);
+            if (cloudEdgeFade(c) <= 0.01f) continue;
+            vec3 r = cloudRadii(ci);
+            vec2 d = (vec2(float(pos.x), float(pos.z)) - c) / vec2(r.x, r.z);
+            if (dot(d, d) <= 1.0f) { underCloud = true; break; }
         }
 
         if (underCloud) {
-            float rainElapsed = pc.time - uintBitsToFloat(rainPhaseTimeBits);
-            float dropChance = mix(tuning.rainChanceStart, tuning.rainChanceMax, clamp(rainElapsed / tuning.rainRampDuration, 0.0f, 1.0f));
-            float rainRandVal = hash(vec3(pos) + vec3(pc.time * 1.7f, 51.0f, 0.0f));
+            // Join this dispatch's census. Counting during the darkening phase too means the
+            // divisor is already warm the instant rain begins, so the first tick of a storm has
+            // correct odds instead of having to skip while an estimate builds.
+            atomicAdd(rainCandidateCount, 1u);
 
-            if (rainRandVal < dropChance) {
-                if (tryClaimWaterUnit()) {
+            if (rainPhase == 2u) {
+                // Independent roll, identical odds for every column under any cloud -- nothing
+                // here depends on which invocation got scheduled first, so rain lands evenly
+                // across the whole sky rather than piling up wherever the GPU happened to start.
+                uint remaining = (rainTargetLevel > waterVoxelCount) ? (rainTargetLevel - waterVoxelCount) : 0u;
+                float dropChance = getRainDropChance(rainCandidateEstimate, remaining);
+                float rainRandVal = hash(vec3(pos) + vec3(pc.time * 1.7f, 51.0f, 0.0f));
+
+                if (rainRandVal < dropChance) {
                     if (atomicCompSwap(grid[currentIndex], rawValue, pack(2u, 0u, 0u, 0u)) == rawValue) {
                         incWater();
                         return;
-                    } else {
-                        atomicAdd(cloudWaterCount, 1u);
                     }
                 }
             }

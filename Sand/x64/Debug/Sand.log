@@ -1,55 +1,57 @@
-﻿Build started 7/28/2026 2:21:36 AM.
-Logging verbosity is set to: Normal.     1>Project "C:\Users\Andre\source\repos\Sand\Sand\Sand.vcxproj" on node 2 (Build target(s)).
+﻿Build started 7/28/2026 7:43:28 PM.
+Logging verbosity is set to: Normal.     1>Project "C:\Users\Andre\source\repos\Sand\Sand\Sand.vcxproj" on node 2 (Rebuild target(s)).
      1>PreBuildEvent:
          "%VULKAN_SDK%\Bin\glslc.exe" "C:\Users\Andre\source\repos\Sand\Sand\shaders\falling_sand.comp" -o "C:\Users\Andre\source\repos\Sand\Sand\shaders\falling_sand.spv"
          "%VULKAN_SDK%\Bin\glslc.exe" "C:\Users\Andre\source\repos\Sand\Sand\shaders\screen.vert" -o "C:\Users\Andre\source\repos\Sand\Sand\shaders\screen.vert.spv"
          "%VULKAN_SDK%\Bin\glslc.exe" "C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag" -o "C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag.spv"
          :VCEnd
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:272: error: 'cloudVoxelSize' : no such field in structure 'tuning'
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:272: error: '/' :  wrong operand types: no operation '/' exists that takes a left-hand operand of type ' temp highp 3-component vector of float' and a right operand of type 'layout( binding=2 column_major std140) uniform block{layout( column_major std140 offset=0) uniform highp float rainChanceStart, layout( column_major std140 offset=4) uniform highp float rainChanceMax, layout( column_major std140 offset=8) uniform highp float rainRampDuration, layout( column_major std140 offset=12) uniform highp float cloudRevealCooldown, layout( column_major std140 offset=16) uniform highp uint cloudRevealTargetSlots, layout( column_major std140 offset=20) uniform highp uint rainStartLayers, layout( column_major std140 offset=24) uniform highp uint rainMinWaterInCubeLayers, layout( column_major std140 offset=28) uniform highp float rainDarkenDelay}' (or there is no acceptable conversion)
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:276: error: 'cloudVoxelSize' : no such field in structure 'tuning'
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:276: error: '/' :  wrong operand types: no operation '/' exists that takes a left-hand operand of type 'layout( binding=2 column_major std140) uniform block{layout( column_major std140 offset=0) uniform highp float rainChanceStart, layout( column_major std140 offset=4) uniform highp float rainChanceMax, layout( column_major std140 offset=8) uniform highp float rainRampDuration, layout( column_major std140 offset=12) uniform highp float cloudRevealCooldown, layout( column_major std140 offset=16) uniform highp uint cloudRevealTargetSlots, layout( column_major std140 offset=20) uniform highp uint rainStartLayers, layout( column_major std140 offset=24) uniform highp uint rainMinWaterInCubeLayers, layout( column_major std140 offset=28) uniform highp float rainDarkenDelay}' and a right operand of type ' temp highp float' (or there is no acceptable conversion)
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:276: error: 'abs' : no matching overloaded function found
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:277: error: 'cloudVoxelSize' : no such field in structure 'tuning'
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:277: error: '/' :  wrong operand types: no operation '/' exists that takes a left-hand operand of type 'layout( binding=2 column_major std140) uniform block{layout( column_major std140 offset=0) uniform highp float rainChanceStart, layout( column_major std140 offset=4) uniform highp float rainChanceMax, layout( column_major std140 offset=8) uniform highp float rainRampDuration, layout( column_major std140 offset=12) uniform highp float cloudRevealCooldown, layout( column_major std140 offset=16) uniform highp uint cloudRevealTargetSlots, layout( column_major std140 offset=20) uniform highp uint rainStartLayers, layout( column_major std140 offset=24) uniform highp uint rainMinWaterInCubeLayers, layout( column_major std140 offset=28) uniform highp float rainDarkenDelay}' and a right operand of type ' temp highp float' (or there is no acceptable conversion)
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:277: error: 'abs' : no matching overloaded function found
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:278: error: 'cloudVoxelSize' : no such field in structure 'tuning'
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:278: error: '/' :  wrong operand types: no operation '/' exists that takes a left-hand operand of type 'layout( binding=2 column_major std140) uniform block{layout( column_major std140 offset=0) uniform highp float rainChanceStart, layout( column_major std140 offset=4) uniform highp float rainChanceMax, layout( column_major std140 offset=8) uniform highp float rainRampDuration, layout( column_major std140 offset=12) uniform highp float cloudRevealCooldown, layout( column_major std140 offset=16) uniform highp uint cloudRevealTargetSlots, layout( column_major std140 offset=20) uniform highp uint rainStartLayers, layout( column_major std140 offset=24) uniform highp uint rainMinWaterInCubeLayers, layout( column_major std140 offset=28) uniform highp float rainDarkenDelay}' and a right operand of type ' temp highp float' (or there is no acceptable conversion)
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:278: error: 'abs' : no matching overloaded function found
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:280: error: 'cloudVoxelSize' : no such field in structure 'tuning'
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:280: error: '/' :  wrong operand types: no operation '/' exists that takes a left-hand operand of type ' temp highp 3-component vector of float' and a right operand of type 'layout( binding=2 column_major std140) uniform block{layout( column_major std140 offset=0) uniform highp float rainChanceStart, layout( column_major std140 offset=4) uniform highp float rainChanceMax, layout( column_major std140 offset=8) uniform highp float rainRampDuration, layout( column_major std140 offset=12) uniform highp float cloudRevealCooldown, layout( column_major std140 offset=16) uniform highp uint cloudRevealTargetSlots, layout( column_major std140 offset=20) uniform highp uint rainStartLayers, layout( column_major std140 offset=24) uniform highp uint rainMinWaterInCubeLayers, layout( column_major std140 offset=28) uniform highp float rainDarkenDelay}' (or there is no acceptable conversion)
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:290: error: 'maxCloudSteps' : no such field in structure 'tuning'
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:290: error: 'constructor' : can't convert
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:290: error: ' temp int' : cannot construct with these arguments
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:293: error: 'cloudVoxelSize' : no such field in structure 'tuning'
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:293: error: '*' :  wrong operand types: no operation '*' exists that takes a left-hand operand of type ' temp highp 3-component vector of float' and a right operand of type 'layout( binding=2 column_major std140) uniform block{layout( column_major std140 offset=0) uniform highp float rainChanceStart, layout( column_major std140 offset=4) uniform highp float rainChanceMax, layout( column_major std140 offset=8) uniform highp float rainRampDuration, layout( column_major std140 offset=12) uniform highp float cloudRevealCooldown, layout( column_major std140 offset=16) uniform highp uint cloudRevealTargetSlots, layout( column_major std140 offset=20) uniform highp uint rainStartLayers, layout( column_major std140 offset=24) uniform highp uint rainMinWaterInCubeLayers, layout( column_major std140 offset=28) uniform highp float rainDarkenDelay}' (or there is no acceptable conversion)
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:300: error: 'cloudEdgeThresholdMin' : no such field in structure 'tuning'
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:300: error: 'cloudEdgeThresholdMax' : no such field in structure 'tuning'
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:300: error: 'mix' : no matching overloaded function found
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:507: error: 'cloudDensitySaturation' : no such field in structure 'tuning'
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:507: error: '/' :  wrong operand types: no operation '/' exists that takes a left-hand operand of type ' temp highp float' and a right operand of type 'layout( binding=2 column_major std140) uniform block{layout( column_major std140 offset=0) uniform highp float rainChanceStart, layout( column_major std140 offset=4) uniform highp float rainChanceMax, layout( column_major std140 offset=8) uniform highp float rainRampDuration, layout( column_major std140 offset=12) uniform highp float cloudRevealCooldown, layout( column_major std140 offset=16) uniform highp uint cloudRevealTargetSlots, layout( column_major std140 offset=20) uniform highp uint rainStartLayers, layout( column_major std140 offset=24) uniform highp uint rainMinWaterInCubeLayers, layout( column_major std140 offset=28) uniform highp float rainDarkenDelay}' (or there is no acceptable conversion)
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:513: error: 'cloudDisappearFactor' : redefinition
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:517: error: 'cloudDisappearDuration' : no such field in structure 'tuning'
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:517: error: '/' :  wrong operand types: no operation '/' exists that takes a left-hand operand of type ' temp highp float' and a right operand of type 'layout( binding=2 column_major std140) uniform block{layout( column_major std140 offset=0) uniform highp float rainChanceStart, layout( column_major std140 offset=4) uniform highp float rainChanceMax, layout( column_major std140 offset=8) uniform highp float rainRampDuration, layout( column_major std140 offset=12) uniform highp float cloudRevealCooldown, layout( column_major std140 offset=16) uniform highp uint cloudRevealTargetSlots, layout( column_major std140 offset=20) uniform highp uint rainStartLayers, layout( column_major std140 offset=24) uniform highp uint rainMinWaterInCubeLayers, layout( column_major std140 offset=28) uniform highp float rainDarkenDelay}' (or there is no acceptable conversion)
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:536: error: 'cloudFadeDuration' : no such field in structure 'tuning'
-         C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag:536: error: '/' :  wrong operand types: no operation '/' exists that takes a left-hand operand of type ' temp highp float' and a right operand of type 'layout( binding=2 column_major std140) uniform block{layout( column_major std140 offset=0) uniform highp float rainChanceStart, layout( column_major std140 offset=4) uniform highp float rainChanceMax, layout( column_major std140 offset=8) uniform highp float rainRampDuration, layout( column_major std140 offset=12) uniform highp float cloudRevealCooldown, layout( column_major std140 offset=16) uniform highp uint cloudRevealTargetSlots, layout( column_major std140 offset=20) uniform highp uint rainStartLayers, layout( column_major std140 offset=24) uniform highp uint rainMinWaterInCubeLayers, layout( column_major std140 offset=28) uniform highp float rainDarkenDelay}' (or there is no acceptable conversion)
-         28 errors generated.
-     1>C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v180\Microsoft.CppCommon.targets(156,5): error MSB3073: The command ""%VULKAN_SDK%\Bin\glslc.exe" "C:\Users\Andre\source\repos\Sand\Sand\shaders\falling_sand.comp" -o "C:\Users\Andre\source\repos\Sand\Sand\shaders\falling_sand.spv"
-C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v180\Microsoft.CppCommon.targets(156,5): error MSB3073: "%VULKAN_SDK%\Bin\glslc.exe" "C:\Users\Andre\source\repos\Sand\Sand\shaders\screen.vert" -o "C:\Users\Andre\source\repos\Sand\Sand\shaders\screen.vert.spv"
-C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v180\Microsoft.CppCommon.targets(156,5): error MSB3073: "%VULKAN_SDK%\Bin\glslc.exe" "C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag" -o "C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag.spv"
-C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v180\Microsoft.CppCommon.targets(156,5): error MSB3073: :VCEnd" exited with code 1.
-     1>Done Building Project "C:\Users\Andre\source\repos\Sand\Sand\Sand.vcxproj" (Build target(s)) -- FAILED.
+       ClCompile:
+         C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\bin\HostX64\x64\CL.exe /c /IC:\Users\Andre\source\repos\Sand\Sand\include /IC:\Users\Andre\source\repos\Sand\Sand\vendor\glfw\include /IC:\Users\Andre\source\repos\Sand\Sand\vendor\glm /IC:\VulkanSDK\1.4.350.0\Include /IC:\Users\Andre\source\repos\Sand\Sand\vendor\imgui /IC:\Users\Andre\source\repos\Sand\Sand\vendor\imgui\backends /ZI /JMC /nologo /W3 /WX- /diagnostics:column /sdl /Od /D _DEBUG /D _CONSOLE /D _UNICODE /D UNICODE /Gm- /EHsc /RTC1 /MDd /GS /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /std:c++20 /permissive- /Fo"x64\Debug\\" /Fd"x64\Debug\vc145.pdb" /external:W3 /Gd /TP /FC /errorReport:prompt src\Config.cpp src\main.cpp src\VulkanContext.cpp src\VulkanBuffer.cpp src\VulkanPipeline.cpp src\VulkanSwapchain.cpp src\VulkanRenderer.cpp src\Window.cpp vendor\imgui\backends\imgui_impl_glfw.cpp vendor\imgui\backends\imgui_impl_vulkan.cpp vendor\imgui\imgui.cpp vendor\imgui\imgui_draw.cpp vendor\imgui\imgui_tables.cpp vendor\imgui\imgui_widgets.cpp include\Config.hpp
+         Config.cpp
+         main.cpp
+         VulkanContext.cpp
+         VulkanBuffer.cpp
+         VulkanPipeline.cpp
+         VulkanSwapchain.cpp
+         VulkanRenderer.cpp
+         Window.cpp
+         imgui_impl_glfw.cpp
+         imgui_impl_vulkan.cpp
+         imgui.cpp
+         imgui_draw.cpp
+         imgui_tables.cpp
+         imgui_widgets.cpp
+         Config.hpp
+         Generating Code...
+       Link:
+         C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\bin\HostX64\x64\link.exe /ERRORREPORT:PROMPT /OUT:"C:\Users\Andre\source\repos\Sand\x64\Debug\Sand.exe" /INCREMENTAL /ILK:"x64\Debug\Sand.ilk" /NOLOGO /LIBPATH:"C:\Users\Andre\source\repos\Sand\Sand\vendor\glfw\lib-vc2022" /LIBPATH:C:\VulkanSDK\1.4.350.0\Lib kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib "vulkan-1.lib" glfw3.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /manifestinput:"C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\Include\Manifest\segmentheap.manifest" /DEBUG /PDB:"C:\Users\Andre\source\repos\Sand\x64\Debug\Sand.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:"C:\Users\Andre\source\repos\Sand\x64\Debug\Sand.lib" /MACHINE:X64 x64\Debug\Config.obj
+         x64\Debug\main.obj
+         x64\Debug\VulkanContext.obj
+         x64\Debug\VulkanBuffer.obj
+         x64\Debug\VulkanPipeline.obj
+         x64\Debug\VulkanSwapchain.obj
+         x64\Debug\VulkanRenderer.obj
+         x64\Debug\Window.obj
+         x64\Debug\imgui_impl_glfw.obj
+         x64\Debug\imgui_impl_vulkan.obj
+         x64\Debug\imgui.obj
+         x64\Debug\imgui_draw.obj
+         x64\Debug\imgui_tables.obj
+         x64\Debug\imgui_widgets.obj
+         x64\Debug\Config.obj
+     1>x64\Debug\Config.obj : warning LNK4042: object specified more than once; extras ignored
+     1>LINK : warning LNK4098: defaultlib 'MSVCRT' conflicts with use of other libs; use /NODEFAULTLIB:library
+         Sand.vcxproj -> C:\Users\Andre\source\repos\Sand\x64\Debug\Sand.exe
+     1>Done Building Project "C:\Users\Andre\source\repos\Sand\Sand\Sand.vcxproj" (Rebuild target(s)).
 
-Build FAILED.
+Build succeeded.
 
-       "C:\Users\Andre\source\repos\Sand\Sand\Sand.vcxproj" (Build target) (1) ->
-       (PreBuildEvent target) -> 
-         C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v180\Microsoft.CppCommon.targets(156,5): error MSB3073: The command ""%VULKAN_SDK%\Bin\glslc.exe" "C:\Users\Andre\source\repos\Sand\Sand\shaders\falling_sand.comp" -o "C:\Users\Andre\source\repos\Sand\Sand\shaders\falling_sand.spv"
-       C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v180\Microsoft.CppCommon.targets(156,5): error MSB3073: "%VULKAN_SDK%\Bin\glslc.exe" "C:\Users\Andre\source\repos\Sand\Sand\shaders\screen.vert" -o "C:\Users\Andre\source\repos\Sand\Sand\shaders\screen.vert.spv"
-       C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v180\Microsoft.CppCommon.targets(156,5): error MSB3073: "%VULKAN_SDK%\Bin\glslc.exe" "C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag" -o "C:\Users\Andre\source\repos\Sand\Sand\shaders\raymarch.frag.spv"
-       C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v180\Microsoft.CppCommon.targets(156,5): error MSB3073: :VCEnd" exited with code 1.
+       "C:\Users\Andre\source\repos\Sand\Sand\Sand.vcxproj" (Rebuild target) (1) ->
+       (Link target) -> 
+         x64\Debug\Config.obj : warning LNK4042: object specified more than once; extras ignored
+         LINK : warning LNK4098: defaultlib 'MSVCRT' conflicts with use of other libs; use /NODEFAULTLIB:library
 
-    0 Warning(s)
-    1 Error(s)
+    2 Warning(s)
+    0 Error(s)
 
-Time Elapsed 00:00:00.45
+Time Elapsed 00:00:11.66

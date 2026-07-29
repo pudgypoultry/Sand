@@ -1,19 +1,43 @@
 # config.txt -- loaded once at startup, changes require relaunching the app
-rain.chance_start=0.0001
-rain.chance_max=0.002
-rain.ramp_duration=30.0
-cloud.reveal_cooldown=1.5
-cloud.reveal_target_slots=15
+
+# --- Rain ---
+# A storm begins once the water deficit (peak level minus current level) exceeds start_layers
+# full grid layers (1 layer = 128*128 = 16384). It then returns water at drops_per_tick per
+# compute dispatch and keeps raining until the deficit is fully repaid -- so however the water
+# went missing, and wherever it went, a bigger loss automatically means a longer storm.
+#   drops_per_tick = the rain RATE (water voxels returned per dispatch). The one rate knob.
+#                    Spread is automatic: this is divided across a live count of rainable
+#                    columns, so every column under any cloud gets identical odds.
+#   overshoot      = extra rain past the measured deficit, as a fraction. Drops still falling
+#                    already count as water, so the level reads restored just before they land
+#                    and some then soak into soil rather than pooling -- without headroom every
+#                    storm ends a touch early and the level creeps down. 0.2 = 20% extra.
 rain.start_layers=2
-rain.min_water_in_cube_layers=10
+rain.drops_per_tick=50
+rain.overshoot=0.2
 rain.darken_delay=6.0
-cloud.fade_duration=2.5
-cloud.density_saturation=300.0
-cloud.disappear_duration=5.0
+
+# --- Clouds ---
+# A fixed group of `count` clouds drifts along +X at drift_speed and wraps around, each one
+# dissolving over edge_fade_dist as it nears a border and re-emerging on the opposite side.
+# The whole field shares one "charge" (0..1): it eases toward banked steam before a storm and
+# toward the outstanding water deficit during one, driving opacity from min_alpha to max_alpha
+# and greying the field as it rises -- so the sky reacts as one mass, not cloud by cloud.
+#   charge_saturation = cloud water at which the sky is fully charged.
+#   min_alpha         = opacity with no evaporation at all. Set 0 for a totally clear sky.
+cloud.count=32
+cloud.drift_speed=2.0
+cloud.edge_fade_dist=20.0
+cloud.charge_saturation=20000.0
+cloud.charge_ease_rate=0.02
+cloud.min_alpha=0.05
+cloud.max_alpha=0.9
 cloud.voxel_size=3.0
 cloud.edge_threshold_min=0.15
 cloud.edge_threshold_max=0.7
 cloud.max_steps=32
+
+# --- Physics ---
 physics.sand_moisture_capacity=10
 physics.dirt_moisture_capacity=30
 physics.sand_water_absorb_unit=90
@@ -21,7 +45,6 @@ physics.sand_clump_threshold=9
 physics.dirt_clump_threshold=5
 physics.wake_sleep_threshold=5
 physics.empty_below_wake_count=6
-physics.water_age_timeout=200
 physics.fire_lifetime=30
 physics.fire_dry_rate=5
 physics.grass_grow_chance=0.001
