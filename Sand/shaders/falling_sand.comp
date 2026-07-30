@@ -418,8 +418,8 @@ bool tryDisplace(uint currentIndex, uint currentValue, uint targetIndex, uint ta
 // FUNCTION: orbitStep
 // Moves a captured particle one cell along `stepDir`, into empty space only. Orbiting matter
 // deliberately does NOT get the displacement rules the falling materials have: two particles
-// arriving at the same cell should queue up behind each other, because that queueing is what makes
-// the disk look dense and banded instead of letting everything pass through everything else.
+// arriving at the same cell should queue up behind each other, because that queueing is what gives
+// the shell visible density instead of letting everything pass through everything else.
 bool orbitStep(ivec3 pos, uint currentIndex, uint rawValue, ivec3 stepDir) {
     if (stepDir == ivec3(0)) return false;
 
@@ -447,18 +447,23 @@ ivec3 dominantAxis(vec3 dir, float relative) {
 
 // FUNCTION: updateOrbital
 // One tick of a particle held by a black hole. This replaces the particle's own material update
-// outright -- captured matter is on an orbit, not falling -- which is the whole reason the disk
+// outright -- captured matter is on an orbit, not falling -- which is the whole reason the shell
 // stays up instead of raining down onto the hole.
 //
-// The direction field is tangential FIRST and inward only as a small bias, so a particle that
-// wanders into range is swung sideways rather than yanked at the centre; the shallow inward
-// component is what makes the orbit decay over many revolutions instead of in one. A third term
-// holds the particle in its OWN orbital plane (see bhOrbitAxis), which is what keeps each great
-// circle crisp while the fan of planes covers every inclination.
+// There is no force, acceleration or velocity anywhere in here, and nowhere to put one: a voxel has
+// three spare bytes, all of them already spoken for by the materials. So a "gravity well" is instead
+// a direction field sampled fresh every tick, plus two probabilities. The direction is purely
+// sideways -- tangent to the particle's own orbital plane (see bhOrbitAxis), corrected back toward
+// that plane -- and the two rolls supply everything a magnitude normally would:
 //
-// Orbital speed can't be expressed as a magnitude when every move is exactly one voxel, so it is
-// expressed as how OFTEN a move happens: roughly speed/sqrt(distance), which reproduces the
-// Keplerian shear that makes inner orbits visibly outrun outer ones.
+//   speed  -- how OFTEN a step is taken, ~speed/sqrt(distance), reproducing the Keplerian shear
+//             that makes inner orbits visibly outrun outer ones.
+//   infall -- how often that step spirals inward instead of continuing around, which is what makes
+//             the orbit decay over many revolutions rather than in one.
+//
+// Both are probabilities for the same reason: a move is exactly one voxel, so a step has no room to
+// carry a magnitude. Encoding either as a vector weight instead fails in a way that looks like it
+// works -- see the note on the infall roll below.
 void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, int slot, uint level, float dist, float randVal) {
     uint type = getType(rawValue);
     uint sleep = getSleep(rawValue);
