@@ -107,6 +107,8 @@ Config loadConfig(const std::string& path) {
     config.tuning.blackHoleOrbitPlanes = getUint(values, "blackhole.orbit_planes", config.tuning.blackHoleOrbitPlanes);
     config.tuning.blackHoleGrowthCost = getFloat(values, "blackhole.growth_cost", config.tuning.blackHoleGrowthCost);
     config.tuning.blackHoleMaxLevel = getUint(values, "blackhole.max_level", config.tuning.blackHoleMaxLevel);
+    config.tuning.blackHoleStarveGrace = getUint(values, "blackhole.starve_grace", config.tuning.blackHoleStarveGrace);
+    config.tuning.blackHoleDecayRate = getUint(values, "blackhole.decay_rate", config.tuning.blackHoleDecayRate);
 
     return config;
 }

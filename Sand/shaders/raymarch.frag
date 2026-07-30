@@ -25,6 +25,7 @@ layout(std430, binding = 1) buffer SimStats {
     uint blackHoleCount;
     uint blackHoles[BLACK_HOLE_MAX];
     uint blackHoleMass[BLACK_HOLE_MAX];
+    uint blackHoleStarve[BLACK_HOLE_MAX];
 };
 
 layout(std140, binding = 2) uniform TuningParams {
@@ -66,6 +67,8 @@ layout(std140, binding = 2) uniform TuningParams {
     uint blackHoleOrbitPlanes;
     float blackHoleGrowthCost;
     uint blackHoleMaxLevel;
+    uint blackHoleStarveGrace;
+    uint blackHoleDecayRate;
 } tuning;
 
 layout(push_constant) uniform Constants {
@@ -306,16 +309,19 @@ ivec3 bhDecode(uint code) {
     return ivec3(int(i % uint(WIDTH)), int((i / uint(WIDTH)) % uint(HEIGHT)), int(i / uint(WIDTH * HEIGHT)));
 }
 
-// FUNCTION: bhLevel
+// FUNCTION: bhBodyRadius / bhLevel
 // DUPLICATED VERBATIM FROM falling_sand.comp. Both stages read the same swallowed-voxel count from
 // the same buffer, so they derive the same body size with nothing to synchronise. If you change the
 // growth curve in one you MUST change it in the other, or the body that gets drawn will stop
 // matching the body that eats.
+float bhBodyRadius(uint level) { return float(level) + 0.5f; }
+
 uint bhLevel(uint mass) {
     uint level = 0u;
     for (uint l = 1u; l <= min(tuning.blackHoleMaxLevel, 16u); l++) {
-        uint side = 2u * l + 1u;
-        if (float(mass) < tuning.blackHoleGrowthCost * float(side * side * side)) break;
+        float r = bhBodyRadius(l);
+        float volume = 4.18879f * r * r * r; // 4/3 pi r^3
+        if (float(mass) < tuning.blackHoleGrowthCost * volume) break;
         level = l;
     }
     return level;
@@ -544,9 +550,16 @@ void main() {
         }
         
         uint rawVoxel = getVoxel(voxelPos);
-        hitType = rawVoxel & 0xFFu;         
-        
-        if (hitType != 0u) { 
+        hitType = rawVoxel & 0xFFu;
+
+        // A black hole's centre voxel must not register as a solid cube: the body is drawn as a
+        // smooth ball after this loop, and at level 0 the voxel cube is strictly larger than the
+        // radius-0.5 ball inside it, so letting it hit here would draw a cube over the sphere and
+        // undo the shape entirely. The ray passes through instead -- the physics keeps the body's
+        // interior swept clear, so there is nothing else in there to occlude.
+        if (hitType == 7u) hitType = 0u;
+
+        if (hitType != 0u) {
             // Implementation of Dithered Transparency for Steam (Type 6)
             if (hitType == 6u) {
                 uint age = (rawVoxel >> 24) & 0xFFu;
@@ -628,18 +641,13 @@ void main() {
             case 6u:
                 finalVoxelColor = renderSteam(voxelPos, baseLighting);
                 break;
-            case 7u:
-                // Face normal, not the smoothed one: an isolated hole has no solid neighbours to
-                // smooth against, so getSmoothNormal falls back to a constant and the rim would
-                // shade every face identically.
-                finalVoxelColor = renderBlackHole(ddaNormal, rayDir);
-                break;
+            // No case for type 7: the march above never reports a black hole voxel as a hit, because
+            // the body is drawn as a ball further down rather than as the voxel it is anchored to.
             default:
                 break;
         }
 
-        // The hole itself stays black; only the matter around it heats up.
-        if (hitType != 7u) finalVoxelColor = accretionGlow(finalVoxelColor, voxelPos);
+        finalVoxelColor = accretionGlow(finalVoxelColor, voxelPos);
 
         float distanceTraveled = length(vec3(voxelPos) + vec3(0.5f) - rayOrigin);
         float MAX_VISIBILITY = max(300.0f, aabbHit.y * 1.5f);
@@ -653,41 +661,43 @@ void main() {
         finalColor = vec4(1.0f, 0.2f, 0.2f, 1.0f);
     }
 
-    // --- BLACK HOLE BODIES: a grown hole occupies a 2*level+1 cube, but only its CENTRE voxel is
-    // stored in the grid -- the rest of the body is empty space that the physics keeps swept clear.
-    // So the body is intersected analytically here, the way the cloud layer is, instead of being
-    // marched. Testing 8 table slots at each of the DDA loop's 400 steps would cost thousands of
-    // reads per pixel to draw a shape that a single ray/box test resolves exactly. ---
+    // --- BLACK HOLE BODIES: a hole's body is a ball of radius level+0.5, but only its CENTRE voxel
+    // is stored in the grid -- the rest is empty space the physics keeps swept clear. So the body is
+    // intersected analytically here, the way the cloud layer is, instead of being marched. Testing 8
+    // table slots at each of the DDA loop's 400 steps would cost thousands of reads per pixel to
+    // draw a shape one ray/sphere test resolves exactly, and it would come out voxel-stepped besides,
+    // where the point of a sphere is that it is smooth. ---
     if (blackHoleCount > 0u) {
         for (int i = 0; i < BLACK_HOLE_MAX; i++) {
             uint code = blackHoles[i];
             if (code == 0u) continue;
 
-            float level = float(bhLevel(blackHoleMass[i]));
-            vec3 center = vec3(bhDecode(code));
-            vec2 bodyHit = intersectAABB(rayOrigin, rayDir, center - vec3(level), center + vec3(level + 1.0f));
+            float bodyRadius = bhBodyRadius(bhLevel(blackHoleMass[i]));
+            // +0.5 puts the centre at the middle of its voxel rather than its min corner, so the
+            // ball is concentric with the region the physics clears.
+            vec3 center = vec3(bhDecode(code)) + vec3(0.5f);
 
-            if (bodyHit.x < bodyHit.y && bodyHit.y > 0.0f) {
-                float bodyDist = max(0.0f, bodyHit.x);
-                if (bodyDist < finalDist) {
-                    // Face normal from whichever slab the ray entered through, so the cube reads as
-                    // a cube rather than a flat silhouette.
-                    vec3 bodyMin = center - vec3(level);
-                    vec3 bodyMax = center + vec3(level + 1.0f);
-                    vec3 mid = (bodyMin + bodyMax) * 0.5f;
-                    vec3 local = (rayOrigin + rayDir * bodyDist - mid) / max((bodyMax - bodyMin) * 0.5f, vec3(0.0001f));
-                    vec3 a = abs(local);
-                    vec3 faceNormal = (a.x >= a.y && a.x >= a.z) ? vec3(sign(local.x), 0.0f, 0.0f)
-                                    : (a.y >= a.z)               ? vec3(0.0f, sign(local.y), 0.0f)
-                                                                 : vec3(0.0f, 0.0f, sign(local.z));
+            vec3 oc = rayOrigin - center;
+            float b = dot(oc, rayDir);
+            float c = dot(oc, oc) - bodyRadius * bodyRadius;
+            float disc = b * b - c;
+            if (disc <= 0.0f) continue;
 
-                    vec3 bodyColor = renderBlackHole(faceNormal, rayDir);
-                    float MAX_VISIBILITY = max(300.0f, aabbHit.y * 1.5f);
-                    bodyColor *= mix(1.0f, 0.0f, clamp(bodyDist / MAX_VISIBILITY, 0.0f, 1.0f));
+            float sq = sqrt(disc);
+            float tNear = -b - sq;
+            float tFar = -b + sq;
+            if (tFar <= 0.0f) continue;
 
-                    finalColor = vec4(bodyColor, 1.0f);
-                    finalDist = bodyDist;
-                }
+            float bodyDist = max(0.0f, tNear);
+            if (bodyDist < finalDist) {
+                vec3 surfaceNormal = normalize(rayOrigin + rayDir * bodyDist - center);
+
+                vec3 bodyColor = renderBlackHole(surfaceNormal, rayDir);
+                float MAX_VISIBILITY = max(300.0f, aabbHit.y * 1.5f);
+                bodyColor *= mix(1.0f, 0.0f, clamp(bodyDist / MAX_VISIBILITY, 0.0f, 1.0f));
+
+                finalColor = vec4(bodyColor, 1.0f);
+                finalDist = bodyDist;
             }
         }
     }

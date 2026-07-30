@@ -26,8 +26,9 @@ layout(std430, binding = 1) buffer SimStats {
     uint rainCandidateEstimate;  // last dispatch's census -- the divisor that sets drop odds
     uint cloudChargeBits;        // float bits: eased 0..1 group-wide cloud opacity/greyness
     uint blackHoleCount;         // live table entries; 0 lets every voxel skip the scan entirely
-    uint blackHoles[BLACK_HOLE_MAX];    // 0 = free slot, else BH_ACTIVE | linear voxel index
-    uint blackHoleMass[BLACK_HOLE_MAX]; // voxels swallowed; the hole's body size is derived from it
+    uint blackHoles[BLACK_HOLE_MAX];      // 0 = free slot, else BH_ACTIVE | linear voxel index
+    uint blackHoleMass[BLACK_HOLE_MAX];   // voxels swallowed; the hole's body size is derived from it
+    uint blackHoleStarve[BLACK_HOLE_MAX]; // dispatches since it last had anything captured
 };
 
 layout(std140, binding = 2) uniform TuningParams {
@@ -69,6 +70,8 @@ layout(std140, binding = 2) uniform TuningParams {
     uint blackHoleOrbitPlanes;
     float blackHoleGrowthCost;
     uint blackHoleMaxLevel;
+    uint blackHoleStarveGrace;
+    uint blackHoleDecayRate;
 } tuning;
 
 const uint LAYER_SIZE = 128u * 128u; // 16384 — one layer
@@ -193,7 +196,8 @@ bool bhRegister(ivec3 p) {
     uint code = BH_ACTIVE | getIndex(p);
     for (int i = 0; i < BLACK_HOLE_MAX; i++) {
         if (atomicCompSwap(blackHoles[i], 0u, code) == 0u) {
-            blackHoleMass[i] = 0u; // a fresh hole starts at level 0, whatever the last tenant ate
+            blackHoleMass[i] = 0u;   // a fresh hole starts at level 0, whatever the last tenant ate
+            blackHoleStarve[i] = 0u; // and gets a full grace period before it can evaporate
             return true;
         }
     }
@@ -208,10 +212,13 @@ void bhRelease(ivec3 p) {
     }
 }
 
+// FUNCTION: bhBodyRadius
+// The hole's body is a ball, so its diameter runs 1, 3, 5, ... voxels as it grows.
+float bhBodyRadius(uint level) { return float(level) + 0.5f; }
+
 // FUNCTION: bhLevel
-// Half-extent of the hole's body, so its side length is 2*level+1: 1x1x1, 3x3x3, 5x5x5, ... A hole
-// advances a level once it has swallowed as many voxels as the next size would occupy, so its body
-// ends up about as big as what it ate.
+// Size of the hole's body. It advances a level once it has swallowed as many voxels as the next size
+// would itself occupy, so its body ends up about as big as what it ate.
 //
 // Derived from the swallowed count rather than stored alongside it. There is deliberately no
 // separate "current size" field to keep in step: the drawn body and the eaten total cannot disagree
@@ -223,8 +230,9 @@ void bhRelease(ivec3 p) {
 uint bhLevel(uint mass) {
     uint level = 0u;
     for (uint l = 1u; l <= min(tuning.blackHoleMaxLevel, 16u); l++) {
-        uint side = 2u * l + 1u;
-        if (float(mass) < tuning.blackHoleGrowthCost * float(side * side * side)) break;
+        float r = bhBodyRadius(l);
+        float volume = 4.18879f * r * r * r; // 4/3 pi r^3
+        if (float(mass) < tuning.blackHoleGrowthCost * volume) break;
         level = l;
     }
     return level;
@@ -455,21 +463,18 @@ void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, in
     uint type = getType(rawValue);
     uint sleep = getSleep(rawValue);
 
-    // A hole voids a cubic shell around itself, not just the voxels its body occupies: Chebyshev
-    // distance <= body half-extent + horizon. At level 0 with horizon 1 that is a 3x3x3 region, so
-    // the hole always sits in cleared space rather than flush against whatever it is eating.
-    //
-    // Chebyshev, not euclidean, for two reasons. The body is a cube, and a spherical test left
-    // matter sitting in its corners -- hidden inside something drawn as solid black. And a radius-1
-    // euclidean test only reaches the six face neighbours, which is a plus-shape rather than the
-    // 3x3x3 cube you would expect from "within one voxel".
-    //
-    // The horizon is an offset PAST the body rather than an absolute distance, so the cleared region
-    // stays tied to the size the hole is drawn at as it grows.
-    ivec3 delta = abs(pos - center);
-    int chebyshev = max(delta.x, max(delta.y, delta.z));
+    // Something is captured, so the hole is not starving -- reset the clock before anything else,
+    // including before the swallow test, so a hole with matter merely orbiting it stays alive rather
+    // than having to actually eat to survive. A plain store rather than an atomic: every captured
+    // particle writes the same constant, so racing writes all agree, and the counter only ever feeds
+    // a coarse "has this hole seen anything lately" decision.
+    blackHoleStarve[slot] = 0u;
 
-    if (chebyshev <= int(level) + int(tuning.blackHoleHorizon)) {
+    // A hole voids a spherical shell around itself, not just the voxels its body occupies:
+    // everything within body radius + horizon. The horizon is an offset PAST the body rather than an
+    // absolute distance, so the cleared region stays tied to the size the hole is drawn at as it
+    // grows, and the hole never sits flush against whatever it is eating.
+    if (dist <= bhBodyRadius(level) + float(tuning.blackHoleHorizon)) {
         if (atomicCompSwap(grid[currentIndex], rawValue, 0u) == rawValue) {
             // Credited only on a successful swap, so two invocations racing the same voxel can
             // never both bill it -- the hole's size is a running total and would drift permanently.
@@ -1236,10 +1241,34 @@ void updateSimState() {
     for (int i = 0; i < BLACK_HOLE_MAX; i++) {
         uint code = blackHoles[i];
         if (code == 0u) continue;
-        if (getType(grid[code & BH_INDEX_MASK]) != 7u) {
+
+        uint voxel = code & BH_INDEX_MASK;
+        if (getType(grid[voxel]) != 7u) {
             blackHoles[i] = 0u;
             continue;
         }
+
+        // --- Starvation ----------------------------------------------------------------------
+        // Advanced here, and zeroed by any captured particle in updateOrbital. Incrementing from
+        // the single-writer sweep rather than having holes time themselves means the clock ticks
+        // once per dispatch no matter how much matter is in flight, which is what makes the grace
+        // period a predictable duration instead of something that depends on the scene.
+        uint starve = blackHoleStarve[i] + 1u;
+        blackHoleStarve[i] = starve;
+
+        if (starve > tuning.blackHoleStarveGrace) {
+            uint mass = blackHoleMass[i];
+            if (mass == 0u) {
+                // Nothing left to shed and nothing coming in: the hole evaporates. Clearing the
+                // voxel and the slot together is what keeps this from leaving an untracked black
+                // voxel behind -- and doing it from the sweep means it happens exactly once.
+                grid[voxel] = 0u;
+                blackHoles[i] = 0u;
+                continue;
+            }
+            blackHoleMass[i] = mass - min(mass, tuning.blackHoleDecayRate);
+        }
+
         live++;
     }
     blackHoleCount = live;

@@ -7,10 +7,10 @@
 #include <cfloat>
 
 // Size of the SimStats SSBO at binding 1, in uint32_t fields: 9 cloud/water scalars, then
-// blackHoleCount, then BLACK_HOLE_MAX table slots, then BLACK_HOLE_MAX swallowed-voxel counts. Must
-// match the SimStats block declared in falling_sand.comp and raymarch.frag.
+// blackHoleCount, then three BLACK_HOLE_MAX-sized arrays (table slots, swallowed-voxel counts,
+// starvation clocks). Must match the SimStats block declared in falling_sand.comp and raymarch.frag.
 static constexpr uint32_t BLACK_HOLE_MAX = 8;
-static constexpr uint32_t SIM_STATS_FIELDS = 9 + 1 + BLACK_HOLE_MAX + BLACK_HOLE_MAX;
+static constexpr uint32_t SIM_STATS_FIELDS = 9 + 1 + 3 * BLACK_HOLE_MAX;
 
 // Constructor: Initializes the managed architecture instances
 VulkanRenderer::VulkanRenderer() {
