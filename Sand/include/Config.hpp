@@ -96,18 +96,6 @@ struct TuningParams {
     uint32_t blackHoleMaxLevel = 8;     // 8 -> a 17-voxel-wide body at full size
     uint32_t blackHoleStarveGrace = 300; // dispatches with nothing captured before decay starts
     uint32_t blackHoleDecayRate = 1;     // mass shed per dispatch once starving
-    // --- Water surface ---
-    // A scrolling wave pattern perturbs the water's shading normal. Cosmetic only -- no geometry
-    // moves, the voxel silhouette is unchanged.
-    //
-    // This is no longer load-bearing for the jitter. getWaterNormal now derives the surface normal
-    // from a weighted density gradient, which cut the swing caused by one voxel shuffling from ~13
-    // degrees to ~3, so the pop is gone at the source rather than covered. These values are
-    // therefore a look knob: 1.5 gives a median tilt of 5 degrees with a 95th percentile of 20, i.e.
-    // mostly calm with occasional crests. Set waterWaveStrength to 0 for a flat, glassy surface.
-    float waterWaveStrength = 1.5f;
-    float waterWaveScale = 1.0f; // spatial frequency; higher = tighter, choppier ripples
-    float waterWaveSpeed = 0.6f; // how fast crests travel
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;
