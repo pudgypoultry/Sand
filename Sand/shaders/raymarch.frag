@@ -212,6 +212,45 @@ vec3 getSmoothNormal(ivec3 p, uint matchType) {
     return normalize(n);
 }
 
+// FUNCTION: getWaterNormal
+// Water's shading normal, taken as a distance-weighted density gradient over a radius-2
+// neighbourhood rather than the binary occupancy getSmoothNormal uses for everything else.
+//
+// This is the fix for surface jitter rather than a cover for it. In the binary version, one surface
+// voxel shuffling one cell flips a whole unit vector inside a sum whose magnitude is only 3-5, and
+// the normal swings ~13 degrees -- almost exactly the half-angle of the exponent-32 specular lobe,
+// so a highlight switches fully on or off and a 3%-of-cells motion reads as violent sparkle.
+// Spreading the same question across 80 weighted neighbours drops one cell's share to ~3 degrees,
+// comfortably inside the lobe, so the highlight slides instead of snapping.
+//
+// Radius 2 is where the curve flattens: radius 3 only reaches ~2.4 degrees for 178 taps. And 80 taps
+// at a single shading point is modest next to calculateShadow, which already walks up to 256 steps
+// for the same pixel.
+vec3 getWaterNormal(ivec3 p) {
+    vec3 n = vec3(0.0f);
+
+    for (int x = -2; x <= 2; x++) {
+        for (int y = -2; y <= 2; y++) {
+            for (int z = -2; z <= 2; z++) {
+                if (x == 0 && y == 0 && z == 0) continue;
+
+                vec3 offset = vec3(float(x), float(y), float(z));
+                float d = length(offset);
+                if (d > 2.5f) continue; // round the cube off, so the kernel has no corner bias
+
+                // Any solid counts as "inside", matching getSmoothNormal: water lying against sand
+                // should not bend its normal at the contact, only at the boundary with air.
+                if ((getVoxel(p + ivec3(x, y, z)) & 0xFFu) == 0u) continue;
+
+                n -= (offset / d) * (1.0f / d);
+            }
+        }
+    }
+
+    if (length(n) < 0.001f) return vec3(0.0f, 1.0f, 0.0f);
+    return normalize(n);
+}
+
 // FUNCTION: renderSand
 vec3 renderSand(uint rawVoxel, vec3 baseLighting) {
     uint moisture = (rawVoxel >> 24) & 0xFFu;
@@ -236,19 +275,37 @@ vec3 renderSand(uint rawVoxel, vec3 baseLighting) {
 // Three equal, aligned waves would read as fixed corrugation -- a texture stuck to the surface
 // rather than water moving across it.
 vec2 waterWaveGradient(vec2 p, float t) {
-    const vec2 dirs[3] = vec2[3](vec2(0.860f, 0.510f), vec2(-0.421f, 0.907f), vec2(0.707f, -0.707f));
-    const float freq[3] = float[3](0.19f, 0.31f, 0.53f);
-    const float amp[3]  = float[3](1.00f, 0.55f, 0.28f);
-    const float spd[3]  = float[3](1.00f, 1.37f, 0.83f);
+    float scale = max(tuning.waterWaveScale, 0.001f);
+
+    // Domain warp: displace the sample position by a large, slow wave before the detail octaves are
+    // evaluated. This is what stops the result reading as a few straight sine directions -- crests
+    // bend and braid along the warp instead of running parallel across the whole pool.
+    //
+    // The warp's own contribution to the derivative is deliberately dropped. What is needed here is
+    // a smooth vector field to tilt a normal with, not a mathematically exact gradient, and carrying
+    // the Jacobian through five octaves costs more than the difference is worth on screen.
+    float wt = t * tuning.waterWaveSpeed * 0.35f;
+    vec2 q = p + vec2(sin(p.y * 0.043f + wt), sin(p.x * 0.037f - wt * 0.8f)) * 6.0f;
+
+    const vec2 dirs[5] = vec2[5](vec2(0.860f, 0.510f), vec2(-0.421f, 0.907f), vec2(0.707f, -0.707f),
+                                 vec2(-0.966f, -0.259f), vec2(0.259f, 0.966f));
+    const float freq[5] = float[5](0.11f, 0.19f, 0.31f, 0.53f, 0.87f);
+    const float amp[5]  = float[5](1.00f, 0.62f, 0.38f, 0.24f, 0.15f);
+    const float spd[5]  = float[5](1.00f, 1.37f, 0.83f, 1.71f, 0.61f);
 
     vec2 grad = vec2(0.0f);
-    for (int i = 0; i < 3; i++) {
-        float f = freq[i] * max(tuning.waterWaveScale, 0.001f);
-        float phase = dot(dirs[i], p) * f + t * spd[i] * tuning.waterWaveSpeed;
+    for (int i = 0; i < 5; i++) {
+        float f = freq[i] * scale;
+        float phase = dot(dirs[i], q) * f + t * spd[i] * tuning.waterWaveSpeed;
         // d/dp of amp*sin(dot(dir,p)*f + ...) is amp*f*dir*cos(...)
         grad += dirs[i] * (amp[i] * f * cos(phase));
     }
-    return grad;
+
+    // Low-frequency envelope, evaluated on the UNWARPED position so it drifts independently of the
+    // crests. Without it every part of the surface is equally choppy at every moment, which is the
+    // single biggest reason a sum of sines reads as machine-made rather than as water.
+    float envelope = 0.45f + 0.55f * sin(p.x * 0.021f + p.y * 0.017f + t * 0.11f);
+    return grad * envelope;
 }
 
 // FUNCTION: applyWaterWaves
@@ -663,14 +720,20 @@ void main() {
         if (length(normal) < 0.1f) normal = -rayDir;
         
         vec3 ddaNormal = normal;
-        normal = getSmoothNormal(voxelPos, hitType);
 
-        // Applied here rather than inside renderWater so the waves drive the diffuse term too, not
-        // just the highlight. Perturbing further down would light the surface flat and then gloss a
-        // wave pattern over it, which reads as a moving texture instead of moving water.
+        // Water gets the wider density-gradient normal; everything else keeps the cheap binary one,
+        // which is fine for materials that are not in constant motion at their surface.
+        if (hitType == 2u) {
+            normal = applyWaterWaves(getWaterNormal(voxelPos), voxelPos);
+        } else {
+            normal = getSmoothNormal(voxelPos, hitType);
+        }
+
+        // Waves are applied above rather than inside renderWater so they drive the diffuse term too,
+        // not just the highlight. Perturbing further down would light the surface flat and then gloss
+        // a wave pattern over it, which reads as a moving texture instead of moving water.
         // ddaNormal is deliberately left alone -- it is the face the ray actually entered, and
         // calculateShadow steps from it, so bending it would make the shadow ray start off-surface.
-        if (hitType == 2u) normal = applyWaterWaves(normal, voxelPos);
 
 
         vec3 sunDir = normalize(vec3(0.8f, 1.0f, 0.5f)); 
