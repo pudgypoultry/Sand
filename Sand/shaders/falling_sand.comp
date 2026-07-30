@@ -455,17 +455,21 @@ void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, in
     uint type = getType(rawValue);
     uint sleep = getSleep(rawValue);
 
-    // Two ways to be swallowed: be inside the hole's body, or reach the horizon just outside it.
+    // A hole voids a cubic shell around itself, not just the voxels its body occupies: Chebyshev
+    // distance <= body half-extent + horizon. At level 0 with horizon 1 that is a 3x3x3 region, so
+    // the hole always sits in cleared space rather than flush against whatever it is eating.
     //
-    // The body test is Chebyshev because the body is a cube -- a spherical test would leave matter
-    // sitting in the corners, hidden inside something drawn as solid black. The horizon is measured
-    // as an offset PAST the body rather than as an absolute distance, so the region the hole clears
-    // stays tied to the size it is drawn at; an absolute horizon left a level-0 hole scouring a
-    // bubble several times wider than the single voxel it appeared to be.
+    // Chebyshev, not euclidean, for two reasons. The body is a cube, and a spherical test left
+    // matter sitting in its corners -- hidden inside something drawn as solid black. And a radius-1
+    // euclidean test only reaches the six face neighbours, which is a plus-shape rather than the
+    // 3x3x3 cube you would expect from "within one voxel".
+    //
+    // The horizon is an offset PAST the body rather than an absolute distance, so the cleared region
+    // stays tied to the size the hole is drawn at as it grows.
     ivec3 delta = abs(pos - center);
     int chebyshev = max(delta.x, max(delta.y, delta.z));
 
-    if (chebyshev <= int(level) || dist <= float(level) + float(tuning.blackHoleHorizon)) {
+    if (chebyshev <= int(level) + int(tuning.blackHoleHorizon)) {
         if (atomicCompSwap(grid[currentIndex], rawValue, 0u) == rawValue) {
             // Credited only on a successful swap, so two invocations racing the same voxel can
             // never both bill it -- the hole's size is a running total and would drift permanently.

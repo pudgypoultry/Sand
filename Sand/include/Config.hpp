@@ -66,9 +66,18 @@ struct TuningParams {
     // is how firmly a particle is held in its own plane -- drop it to 0 and orbits smear into a
     // diffuse cloud.
     //
-    // A hole's body grows with what it eats: side length 2*level+1 (1x1x1, 3x3x3, 5x5x5, ...),
-    // advancing a level once it has swallowed blackHoleGrowthCost times that size's voxel count, so
-    // it ends up about as big as what it consumed. Its reach grows with it, by one voxel per level.
+    // A hole voids a cubic shell around itself -- Chebyshev distance <= level + blackHoleHorizon --
+    // so at level 0 with horizon 1 it clears a 3x3x3 region and never sits flush against what it
+    // eats. Its body grows with what it swallows: side length 2*level+1 (1x1x1, 3x3x3, 5x5x5, ...),
+    // advancing a level once it has eaten blackHoleGrowthCost times that size's voxel count. Its
+    // reach grows with it, by one voxel per level.
+    //
+    // blackHoleGrowthCost must stay above 1, and that bound is not arbitrary. The void region at
+    // level L holds (2L+3)^3 voxels, which is exactly the count a cost of 1.0 requires to reach
+    // level L+1 -- so at 1.0 a hole dropped in solid matter is always paid for its next level by its
+    // own expansion and cascades to blackHoleMaxLevel in a few ticks. At 2.0 the void shell covers
+    // half of each level, so the rest has to be accreted from orbit and growth stays driven by what
+    // actually spirals in.
     uint32_t blackHoleHorizon = 1; // measured past the body's face, not from its centre
     uint32_t blackHoleRadius = 28;
     float blackHoleOrbitSpeed = 2.2f;
@@ -76,7 +85,7 @@ struct TuningParams {
     float blackHolePlaneGrip = 0.5f;
     float blackHoleGlow = 0.85f;
     uint32_t blackHoleOrbitPlanes = 16; // hard-capped at 32 by the shaders
-    float blackHoleGrowthCost = 1.0f;
+    float blackHoleGrowthCost = 2.0f; // keep above 1.0 -- see the cascade note above
     uint32_t blackHoleMaxLevel = 8;     // 8 -> a 17x17x17 body at full size
 };
 
