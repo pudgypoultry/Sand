@@ -6,6 +6,12 @@
 #include <cstring>
 #include <cfloat>
 
+// Size of the SimStats SSBO at binding 1, in uint32_t fields: 9 cloud/water scalars, then
+// blackHoleCount, then BLACK_HOLE_MAX table slots. Must match the SimStats block declared in
+// falling_sand.comp and raymarch.frag.
+static constexpr uint32_t BLACK_HOLE_MAX = 8;
+static constexpr uint32_t SIM_STATS_FIELDS = 9 + 1 + BLACK_HOLE_MAX;
+
 // Constructor: Initializes the managed architecture instances
 VulkanRenderer::VulkanRenderer() {
     config = loadConfig("config.txt");
@@ -35,22 +41,25 @@ void VulkanRenderer::initVulkan() {
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
 
-    // Cloud/water tracking stats buffer: 9 scalar fields (waterVoxelCount, waterHighMark,
+    // Shared simulation stats: 9 cloud/water scalars (waterVoxelCount, waterHighMark,
     // cloudWaterCount, rainPhase, rainPhaseTimeBits, rainTargetLevel, rainCandidateCount,
-    // rainCandidateEstimate, cloudChargeBits). The per-slot cloud arrays are gone -- layout is a
-    // function of (index, time) computed identically in both shaders, so there is nothing
-    // per-cloud left to store. Must stay in sync with the CloudStats block in
-    // falling_sand.comp and raymarch.frag. Bound at binding 1, shared by compute and fragment.
+    // rainCandidateEstimate, cloudChargeBits) followed by the black hole table (blackHoleCount plus
+    // BLACK_HOLE_MAX slots). The per-slot cloud arrays are gone -- layout is a function of
+    // (index, time) computed identically in both shaders, so there is nothing per-cloud left to
+    // store. Must stay in sync with the SimStats block in falling_sand.comp and raymarch.frag.
+    // Bound at binding 1, shared by compute and fragment.
     steamCounterBuffer = std::make_unique<VulkanBuffer>(
         context.get(),
-        sizeof(uint32_t) * 9,
+        sizeof(uint32_t) * SIM_STATS_FIELDS,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
 
+    // std140 rounds a uniform block up to a multiple of 16 bytes, so the bound range has to cover
+    // that padded size even though only sizeof(TuningParams) bytes are ever written.
     tuningBuffer = std::make_unique<VulkanBuffer>(
         context.get(),
-        sizeof(TuningParams),
+        (sizeof(TuningParams) + 15) & ~static_cast<VkDeviceSize>(15),
         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
@@ -163,9 +172,11 @@ void VulkanRenderer::seedParticles() {
     memset(data, 0, sizeof(uint32_t) * totalVoxels);
     ssboBuffer->unmapMemory();
 
-    // Every CloudStats field starts at 0, including cloudChargeBits -- a zero bit pattern is
+    // Every SimStats field starts at 0, including cloudChargeBits -- a zero bit pattern is
     // +0.0f as a float, so the sky correctly starts completely uncharged with no sentinel needed.
-    std::vector<uint32_t> statsInit(9, 0u);
+    // Zero is also the "free slot" marker for the black hole table, so clearing the grid correctly
+    // forgets every hole that was in it.
+    std::vector<uint32_t> statsInit(SIM_STATS_FIELDS, 0u);
     void* counterData = steamCounterBuffer->mapMemory();
     memcpy(counterData, statsInit.data(), sizeof(uint32_t) * statsInit.size());
     steamCounterBuffer->unmapMemory();
@@ -342,15 +353,23 @@ void VulkanRenderer::drawFrame() {
     pc.camZ = window->getCamZ();
     pc.spawnActive = 0;
 
-    pc.spawnSize = uiManager.getBrushSize();
+    // Read the selected material from the UI Manager
+    pc.spawnType = static_cast<int>(uiManager.getCurrentMaterial());
+
+    // A black hole is a single tracked object rather than paint, and the compute shader will only
+    // ever place the one at the brush's centre. Pinning the brush to 1 voxel here keeps the cursor
+    // honest about that instead of outlining a volume that a click won't fill.
+    int brushSize = (uiManager.getCurrentMaterial() == MaterialType::BlackHole)
+        ? 1
+        : uiManager.getBrushSize();
+
+    pc.spawnSize = brushSize;
+    pc.spawnShape = static_cast<int>(uiManager.getCursorShape());
     pc.fovDistance = uiManager.getFovDistance();
     pc.perspectiveBlend = uiManager.getPerspectiveBlend();
 
     // Set default out-of-bounds so the cursor hides if looking into the void
     pc.spawnX = -1; pc.spawnY = -1; pc.spawnZ = -1;
-
-    // Read the selected material from the UI Manager
-    pc.spawnType = static_cast<int>(uiManager.getCurrentMaterial());
 
     // --- CPU RAYCAST FOR MOUSE CURSOR AND CLICK ---
     float ndcX = window->getMouseNdcX();
@@ -405,7 +424,6 @@ void VulkanRenderer::drawFrame() {
 
     bool isInside = (ox > 0.0f && ox < 128.0f && oy > 0.0f && oy < 128.0f && oz > 0.0f && oz < 128.0f);
 
-    int brushSize = uiManager.getBrushSize();
     int halfDistMin = brushSize / 2;
     int halfDistMax = (brushSize - 1) / 2;
     int minBound = 1 + halfDistMin;

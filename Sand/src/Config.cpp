@@ -98,6 +98,12 @@ Config loadConfig(const std::string& path) {
     config.tuning.fireBurnGrassChance = getFloat(values, "physics.fire_burn_grass_chance", config.tuning.fireBurnGrassChance);
     config.tuning.fireSpreadChance = getFloat(values, "physics.fire_spread_chance", config.tuning.fireSpreadChance);
     config.tuning.steamScatterChance = getFloat(values, "physics.steam_scatter_chance", config.tuning.steamScatterChance);
+    config.tuning.blackHoleHorizon = getUint(values, "blackhole.horizon", config.tuning.blackHoleHorizon);
+    config.tuning.blackHoleRadius = getUint(values, "blackhole.radius", config.tuning.blackHoleRadius);
+    config.tuning.blackHoleOrbitSpeed = getFloat(values, "blackhole.orbit_speed", config.tuning.blackHoleOrbitSpeed);
+    config.tuning.blackHoleInfall = getFloat(values, "blackhole.infall", config.tuning.blackHoleInfall);
+    config.tuning.blackHoleDiskFlatten = getFloat(values, "blackhole.disk_flatten", config.tuning.blackHoleDiskFlatten);
+    config.tuning.blackHoleGlow = getFloat(values, "blackhole.glow", config.tuning.blackHoleGlow);
 
     return config;
 }

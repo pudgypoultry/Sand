@@ -19,7 +19,13 @@ enum class MaterialType {
     Stone = 3,
     Dirt = 4,
     Fire = 5,
-    Steam = 6
+    Steam = 6,
+    BlackHole = 7
+};
+
+enum class CursorShape {
+    Cube = 0,
+    Sphere = 1
 };
 
 class UIManager {
@@ -83,10 +89,20 @@ public:
 
         ImGui::Begin("Simulation Controls");
 
-        const char* items[] = { "Void", "Sand", "Water", "Stone", "Dirt", "Fire", "Steam" };
+        const char* items[] = { "Void", "Sand", "Water", "Stone", "Dirt", "Fire", "Steam", "Black Hole" };
         int currentMat = static_cast<int>(m_currentMaterial);
         if (ImGui::Combo("Material", &currentMat, items, IM_ARRAYSIZE(items))) {
             m_currentMaterial = static_cast<MaterialType>(currentMat);
+        }
+
+        const char* shapes[] = { "Cube", "Sphere" };
+        int currentShape = static_cast<int>(m_cursorShape);
+        if (ImGui::Combo("Cursor Shape (Tab)", &currentShape, shapes, IM_ARRAYSIZE(shapes))) {
+            m_cursorShape = static_cast<CursorShape>(currentShape);
+        }
+
+        if (m_currentMaterial == MaterialType::BlackHole) {
+            ImGui::TextDisabled("Black holes place one voxel (max 8).");
         }
 
         ImGui::SliderInt("Brush Size", &m_brushSize, 1, 32);
@@ -146,6 +162,7 @@ public:
     }
 
     int getBrushSize() const { return m_brushSize; }
+    CursorShape getCursorShape() const { return m_cursorShape; }
     float getPerspectiveBlend() const { return m_perspectiveBlend; }
     MaterialType getCurrentMaterial() const { return m_currentMaterial; }
     int getSimulationSpeed() const { return m_simulationSpeed; }
@@ -169,9 +186,11 @@ public:
     void setBrushSize(int size) { m_brushSize = std::clamp(size, 1, 32); }
     void setSimulationSpeed(int speed) { m_simulationSpeed = std::clamp(speed, 1, 10); }
     void setCurrentMaterial(MaterialType type) { m_currentMaterial = type; }
+    void setCursorShape(CursorShape shape) { m_cursorShape = shape; }
 
 private:
     int m_brushSize = 5;
+    CursorShape m_cursorShape = CursorShape::Cube;
     int m_simulationSpeed = 1;
     MaterialType m_currentMaterial = MaterialType::Sand;
     bool m_resetRequested = false;
@@ -192,6 +211,11 @@ private:
         if (ImGui::IsKeyPressed(ImGuiKey_5)) m_currentMaterial = MaterialType::Dirt;
         if (ImGui::IsKeyPressed(ImGuiKey_6)) m_currentMaterial = MaterialType::Fire;
         if (ImGui::IsKeyPressed(ImGuiKey_7)) m_currentMaterial = MaterialType::Steam;
+        if (ImGui::IsKeyPressed(ImGuiKey_8)) m_currentMaterial = MaterialType::BlackHole;
+
+        if (ImGui::IsKeyPressed(ImGuiKey_Tab)) {
+            m_cursorShape = (m_cursorShape == CursorShape::Cube) ? CursorShape::Sphere : CursorShape::Cube;
+        }
 
         if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket) || ImGui::IsKeyPressed(ImGuiKey_Q))
             m_brushSize = std::max(1, m_brushSize - 1);

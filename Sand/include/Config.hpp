@@ -53,6 +53,21 @@ struct TuningParams {
     float fireBurnGrassChance = 0.05f;
     float fireSpreadChance = 0.1f;
     float steamScatterChance = 0.3f;
+    // --- Black hole ---
+    // Anything inside blackHoleRadius stops running its own material update and follows the hole's
+    // orbit field instead. That field is overwhelmingly tangential: blackHoleInfall is how much
+    // straight-in pull is mixed on top, and keeping it small is what makes captured matter wind
+    // up into a spiral rather than dropping down the throat. blackHoleDiskFlatten pulls toward the
+    // hole's equatorial plane, which is what collapses a spherical swarm into a disk.
+    // blackHoleOrbitSpeed scales a per-tick step probability of ~speed/sqrt(radius), so the inner
+    // disk shears visibly past the outer one. Matter is only destroyed once it reaches
+    // blackHoleHorizon.
+    uint32_t blackHoleHorizon = 3;
+    uint32_t blackHoleRadius = 28;
+    float blackHoleOrbitSpeed = 2.2f;
+    float blackHoleInfall = 0.16f;
+    float blackHoleDiskFlatten = 0.4f;
+    float blackHoleGlow = 0.85f;
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

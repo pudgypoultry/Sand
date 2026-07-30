@@ -52,3 +52,20 @@ physics.grass_submerged_decay_chance=0.1
 physics.fire_burn_grass_chance=0.05
 physics.fire_spread_chance=0.1
 physics.steam_scatter_chance=0.3
+
+# --- Black hole ---
+# A black hole is a single tracked voxel (max 8 at once), not a paintable material. Anything
+# within `radius` stops running its own physics and follows the hole's orbit field instead.
+#   infall       = how much straight-in pull is mixed into an otherwise fully tangential step.
+#                  Small values spiral slowly; raise it and matter dives at the centre instead.
+#   disk_flatten = pull toward the hole's equatorial plane. This is what turns a spherical swarm
+#                  into a disk; set 0 to keep captured matter in a shell.
+#   orbit_speed  = scales a per-tick step chance of speed/sqrt(distance), so the inner disk
+#                  shears past the outer one. Above ~3 the whole disk moves every tick.
+#   horizon      = distance at which matter is finally destroyed.
+blackhole.horizon=3
+blackhole.radius=28
+blackhole.orbit_speed=2.2
+blackhole.infall=0.16
+blackhole.disk_flatten=0.4
+blackhole.glow=0.85

@@ -7,7 +7,12 @@ layout(std430, binding = 0) readonly buffer VoxelGrid {
     uint grid[];
 };
 
-layout(std430, binding = 1) buffer CloudStats {
+// Must stay byte-identical to the SimStats block in falling_sand.comp, and BH_INDEX_MASK must match
+// the slot encoding used there.
+const int BLACK_HOLE_MAX = 8;
+const uint BH_INDEX_MASK = 0x7FFFFFFFu;
+
+layout(std430, binding = 1) buffer SimStats {
     uint waterVoxelCount;
     uint waterHighMark;
     uint cloudWaterCount;
@@ -17,6 +22,8 @@ layout(std430, binding = 1) buffer CloudStats {
     uint rainCandidateCount;
     uint rainCandidateEstimate;
     uint cloudChargeBits;
+    uint blackHoleCount;
+    uint blackHoles[BLACK_HOLE_MAX];
 };
 
 layout(std140, binding = 2) uniform TuningParams {
@@ -49,6 +56,12 @@ layout(std140, binding = 2) uniform TuningParams {
     float fireBurnGrassChance;
     float fireSpreadChance;
     float steamScatterChance;
+    uint blackHoleHorizon;
+    uint blackHoleRadius;
+    float blackHoleOrbitSpeed;
+    float blackHoleInfall;
+    float blackHoleDiskFlatten;
+    float blackHoleGlow;
 } tuning;
 
 layout(push_constant) uniform Constants {
@@ -66,6 +79,7 @@ layout(push_constant) uniform Constants {
     int spawnSize;
     float fovDistance;
     float perspectiveBlend;
+    int spawnShape; // 0 = cube, 1 = sphere
 } pc;
 
 const int WIDTH = 128;
@@ -270,6 +284,45 @@ vec3 renderSteam(ivec3 voxelPos, vec3 baseLighting) {
     vec3 baseColor = vec3(val, val, val); 
     
     return baseColor * baseLighting * 0.9f;
+}
+
+// FUNCTION: renderBlackHole
+// Deliberately unlit: a surface that took the scene's diffuse term would read as a dark grey cube
+// sitting in the light, which is the one thing it must not look like. Only a thin grazing-angle rim
+// survives, so the voxel reads as a hole punched in the world with a lensed edge.
+vec3 renderBlackHole(vec3 normal, vec3 rayDir) {
+    float rim = 1.0f - abs(dot(normal, rayDir));
+    float glow = pow(clamp(rim, 0.0f, 1.0f), 4.0f);
+    return mix(vec3(0.01f, 0.01f, 0.02f), vec3(0.85f, 0.45f, 1.0f), glow * 0.7f);
+}
+
+// FUNCTION: accretionGlow
+// Tints whatever the ray hit by how deep inside a black hole's influence it sits. Purely cosmetic,
+// but it is what makes the disk legible: without it a captured stream of sand is the same yellow as
+// a dune and the orbit reads as a glitch rather than as matter being whipped around something.
+// Cheap enough to run at the single hit point -- at most BLACK_HOLE_MAX distance tests.
+vec3 accretionGlow(vec3 color, ivec3 voxelPos) {
+    if (blackHoleCount == 0u || tuning.blackHoleGlow <= 0.0f) return color;
+
+    float radius = float(tuning.blackHoleRadius);
+    float closest = radius;
+
+    for (int i = 0; i < BLACK_HOLE_MAX; i++) {
+        uint code = blackHoles[i];
+        if (code == 0u) continue;
+
+        uint idx = code & BH_INDEX_MASK;
+        ivec3 center = ivec3(int(idx % uint(WIDTH)), int((idx / uint(WIDTH)) % uint(HEIGHT)), int(idx / uint(WIDTH * HEIGHT)));
+        closest = min(closest, length(vec3(center - voxelPos)));
+    }
+
+    if (closest >= radius) return color;
+
+    // Ramps hard rather than linearly so only the inner disk actually glows -- a linear falloff
+    // washed the entire influence sphere in orange and lost the shape of the spiral.
+    float heat = pow(1.0f - closest / radius, 3.0f) * tuning.blackHoleGlow;
+    vec3 hot = mix(vec3(1.0f, 0.45f, 0.1f), vec3(1.0f, 0.95f, 0.85f), clamp(heat, 0.0f, 1.0f));
+    return mix(color, hot, clamp(heat, 0.0f, 1.0f));
 }
 
 // =================================================================================================
@@ -553,10 +606,19 @@ void main() {
             case 6u:
                 finalVoxelColor = renderSteam(voxelPos, baseLighting);
                 break;
+            case 7u:
+                // Face normal, not the smoothed one: an isolated hole has no solid neighbours to
+                // smooth against, so getSmoothNormal falls back to a constant and the rim would
+                // shade every face identically.
+                finalVoxelColor = renderBlackHole(ddaNormal, rayDir);
+                break;
             default:
                 break;
         }
-        
+
+        // The hole itself stays black; only the matter around it heats up.
+        if (hitType != 7u) finalVoxelColor = accretionGlow(finalVoxelColor, voxelPos);
+
         float distanceTraveled = length(vec3(voxelPos) + vec3(0.5f) - rayOrigin);
         float MAX_VISIBILITY = max(300.0f, aabbHit.y * 1.5f);
         finalVoxelColor *= mix(1.0f, 0.0f, clamp(distanceTraveled / MAX_VISIBILITY, 0.0f, 1.0f)); 
@@ -656,58 +718,97 @@ void main() {
         
         vec3 boxMin = vec3(float(pc.spawnX - halfDistMin), float(pc.spawnY - halfDistMin), float(pc.spawnZ - halfDistMin));
         vec3 boxMax = vec3(float(pc.spawnX + halfDistMax + 1), float(pc.spawnY + halfDistMax + 1), float(pc.spawnZ + halfDistMax + 1));
-        vec2 cursorHit = intersectAABB(rayOrigin, rayDir, boxMin, boxMax);
-        
-        if (cursorHit.x < cursorHit.y && cursorHit.y > 0.0f) {
-            float distFront = max(0.0f, cursorHit.x);
-            float distBack = cursorHit.y;
-            
-            vec3 hitPosFront = rayOrigin + rayDir * distFront;
-            vec3 hitPosBack = rayOrigin + rayDir * distBack;
-            
-            float e = 0.15f; 
-            
-            bool onFrontEdge = false;
-            int edgesFront = 0;
-            if (hitPosFront.x < boxMin.x + e || hitPosFront.x > boxMax.x - e) edgesFront++;
-            if (hitPosFront.y < boxMin.y + e || hitPosFront.y > boxMax.y - e) edgesFront++;
-            if (hitPosFront.z < boxMin.z + e || hitPosFront.z > boxMax.z - e) edgesFront++;
-            if (edgesFront >= 2) onFrontEdge = true;
 
-            bool onBackEdge = false;
-            int edgesBack = 0;
-            if (hitPosBack.x < boxMin.x + e || hitPosBack.x > boxMax.x - e) edgesBack++;
-            if (hitPosBack.y < boxMin.y + e || hitPosBack.y > boxMax.y - e) edgesBack++;
-            if (hitPosBack.z < boxMin.z + e || hitPosBack.z > boxMax.z - e) edgesBack++;
-            if (edgesBack >= 2) onBackEdge = true;
-            
-            vec3 cursorColor;
-            if (pc.spawnType == 0) {
-                cursorColor = vec3(0.1f, 0.1f, 0.1f);
-            } else if (pc.spawnType == 2) {
-                cursorColor = vec3(0.2f, 0.6f, 1.0f);
-            } else if (pc.spawnType == 3) {
-                cursorColor = vec3(0.6f, 0.6f, 0.6f);
-            } else if (pc.spawnType == 4) {
-                cursorColor = vec3(0.5f, 0.35f, 0.15f);
-            } else if (pc.spawnType == 5) {
-                cursorColor = vec3(1.0f, 0.5f, 0.0f);
-            } else if (pc.spawnType == 6) {
-                cursorColor = vec3(0.9f, 0.9f, 0.9f);
-            } else {
-                cursorColor = vec3(1.0f, 0.9f, 0.2f);
+        vec3 cursorColor;
+        if (pc.spawnType == 0) {
+            cursorColor = vec3(0.1f, 0.1f, 0.1f);
+        } else if (pc.spawnType == 2) {
+            cursorColor = vec3(0.2f, 0.6f, 1.0f);
+        } else if (pc.spawnType == 3) {
+            cursorColor = vec3(0.6f, 0.6f, 0.6f);
+        } else if (pc.spawnType == 4) {
+            cursorColor = vec3(0.5f, 0.35f, 0.15f);
+        } else if (pc.spawnType == 5) {
+            cursorColor = vec3(1.0f, 0.5f, 0.0f);
+        } else if (pc.spawnType == 6) {
+            cursorColor = vec3(0.9f, 0.9f, 0.9f);
+        } else if (pc.spawnType == 7) {
+            cursorColor = vec3(0.8f, 0.4f, 1.0f);
+        } else {
+            cursorColor = vec3(1.0f, 0.9f, 0.2f);
+        }
+
+        if (pc.spawnShape == 1) {
+            // Matched to inBrush() in falling_sand.comp: same centre, same radius, so the outline
+            // encloses exactly the voxels a click would write.
+            vec3 sphereCenter = (boxMin + boxMax) * 0.5f;
+            float sphereRadius = float(pc.spawnSize) * 0.5f;
+
+            vec3 oc = rayOrigin - sphereCenter;
+            float b = dot(oc, rayDir);
+            float c = dot(oc, oc) - sphereRadius * sphereRadius;
+            float disc = b * b - c;
+
+            if (disc > 0.0f) {
+                float sq = sqrt(disc);
+                float tNear = -b - sq;
+                float tFar = -b + sq;
+
+                if (tFar > 0.0f) {
+                    // Inside the brush the near hit is behind the camera, so shade from the far
+                    // side and dim it -- the same read as the box cursor's back edges.
+                    bool inside = tNear <= 0.0f;
+                    float cursorDist = inside ? tFar : tNear;
+                    vec3 shellNormal = normalize((rayOrigin + rayDir * cursorDist) - sphereCenter);
+
+                    // 1 where the ray grazes the shell, which is exactly the silhouette. Shading
+                    // the rim rather than filling the sphere keeps the world visible through it.
+                    float rim = 1.0f - abs(dot(shellNormal, rayDir));
+                    float alpha = mix(0.12f, 0.9f, smoothstep(0.55f, 0.97f, rim)) * (inside ? 0.35f : 1.0f);
+
+                    if (cursorDist < finalDist) {
+                        finalColor.rgb = mix(finalColor.rgb, cursorColor, alpha);
+                    }
+                }
             }
-            
-            if (onFrontEdge && distFront < finalDist) {
-                finalColor.rgb = mix(finalColor.rgb, cursorColor, 0.9f);
-            } else if (onBackEdge && distBack < finalDist) {
-                finalColor.rgb = mix(finalColor.rgb, cursorColor, 0.2f);
-            } else if (distFront < finalDist) {
-                finalColor.rgb = mix(finalColor.rgb, cursorColor, 0.15f);
+        } else {
+            vec2 cursorHit = intersectAABB(rayOrigin, rayDir, boxMin, boxMax);
+
+            if (cursorHit.x < cursorHit.y && cursorHit.y > 0.0f) {
+                float distFront = max(0.0f, cursorHit.x);
+                float distBack = cursorHit.y;
+
+                vec3 hitPosFront = rayOrigin + rayDir * distFront;
+                vec3 hitPosBack = rayOrigin + rayDir * distBack;
+
+                float e = 0.15f;
+
+                bool onFrontEdge = false;
+                int edgesFront = 0;
+                if (hitPosFront.x < boxMin.x + e || hitPosFront.x > boxMax.x - e) edgesFront++;
+                if (hitPosFront.y < boxMin.y + e || hitPosFront.y > boxMax.y - e) edgesFront++;
+                if (hitPosFront.z < boxMin.z + e || hitPosFront.z > boxMax.z - e) edgesFront++;
+                if (edgesFront >= 2) onFrontEdge = true;
+
+                bool onBackEdge = false;
+                int edgesBack = 0;
+                if (hitPosBack.x < boxMin.x + e || hitPosBack.x > boxMax.x - e) edgesBack++;
+                if (hitPosBack.y < boxMin.y + e || hitPosBack.y > boxMax.y - e) edgesBack++;
+                if (hitPosBack.z < boxMin.z + e || hitPosBack.z > boxMax.z - e) edgesBack++;
+                if (edgesBack >= 2) onBackEdge = true;
+
+                if (onFrontEdge && distFront < finalDist) {
+                    finalColor.rgb = mix(finalColor.rgb, cursorColor, 0.9f);
+                } else if (onBackEdge && distBack < finalDist) {
+                    finalColor.rgb = mix(finalColor.rgb, cursorColor, 0.2f);
+                } else if (distFront < finalDist) {
+                    finalColor.rgb = mix(finalColor.rgb, cursorColor, 0.15f);
+                }
             }
         }
     }
-    
+
+
     if (hitFrontBox) {
         finalColor = vec4(1.0f, 0.2f, 0.2f, 1.0f);
     }

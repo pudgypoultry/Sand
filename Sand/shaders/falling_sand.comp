@@ -6,10 +6,16 @@ layout(std430, binding = 0) buffer VoxelGrid {
     uint grid[];
 };
 
+// Black holes are the one thing in the sim that acts at a distance, so unlike every other
+// material they cannot be discovered by looking at neighbouring voxels. They live in a tiny fixed
+// table instead, which every captured particle scans in full -- 8 entries is cheap enough to read
+// per voxel per dispatch, and it means the orbit field is exact rather than sampled.
+const int BLACK_HOLE_MAX = 8;
+
 // The per-slot reveal/footprint arrays are gone: the cloud field is now a fixed drifting
 // population whose layout is a pure function of (index, time), so there is nothing per-cloud
 // left to store. See the CLOUD FIELD section below.
-layout(std430, binding = 1) buffer CloudStats {
+layout(std430, binding = 1) buffer SimStats {
     uint waterVoxelCount;
     uint waterHighMark;          // peak water level ever observed -- the target rain restores to
     uint cloudWaterCount;        // steam banked since the last storm; drives how charged the sky looks
@@ -19,6 +25,8 @@ layout(std430, binding = 1) buffer CloudStats {
     uint rainCandidateCount;     // census of rainable columns, rebuilt every dispatch
     uint rainCandidateEstimate;  // last dispatch's census -- the divisor that sets drop odds
     uint cloudChargeBits;        // float bits: eased 0..1 group-wide cloud opacity/greyness
+    uint blackHoleCount;         // live table entries; 0 lets every voxel skip the scan entirely
+    uint blackHoles[BLACK_HOLE_MAX]; // 0 = free slot, else BH_ACTIVE | linear voxel index
 };
 
 layout(std140, binding = 2) uniform TuningParams {
@@ -51,6 +59,12 @@ layout(std140, binding = 2) uniform TuningParams {
     float fireBurnGrassChance;
     float fireSpreadChance;
     float steamScatterChance;
+    uint blackHoleHorizon;
+    uint blackHoleRadius;
+    float blackHoleOrbitSpeed;
+    float blackHoleInfall;
+    float blackHoleDiskFlatten;
+    float blackHoleGlow;
 } tuning;
 
 const uint LAYER_SIZE = 128u * 128u; // 16384 — one layer
@@ -70,6 +84,7 @@ layout(push_constant) uniform Constants {
     int spawnSize;
     float fovDistance;
     float perspectiveBlend;
+    int spawnShape; // 0 = cube, 1 = sphere
 } pc;
 
 const int WIDTH = 128;
@@ -150,6 +165,77 @@ void decWater() { atomicAdd(waterVoxelCount, 0xFFFFFFFFu); }
 // Was a compile-time `const` before its input moved into the TuningParams UBO; GLSL const
 // initializers can't reference a uniform, so it's computed on demand here instead.
 uint getRainThreshold() { return tuning.rainStartLayers * LAYER_SIZE; }
+
+// =================================================================================================
+// BLACK HOLE TABLE
+//
+// A slot holds a black hole's voxel index with the top bit set, so 0 is unambiguously "free" even
+// though voxel index 0 is a real (if unreachable) address. 128^3 needs 21 bits, leaving bit 31
+// free for the flag.
+// =================================================================================================
+const uint BH_ACTIVE = 0x80000000u;
+const uint BH_INDEX_MASK = 0x7FFFFFFFu;
+
+// FUNCTION: bhDecode
+ivec3 bhDecode(uint code) {
+    uint i = code & BH_INDEX_MASK;
+    return ivec3(int(i % uint(WIDTH)), int((i / uint(WIDTH)) % uint(HEIGHT)), int(i / uint(WIDTH * HEIGHT)));
+}
+
+// FUNCTION: bhRegister
+// Claims a slot for a new hole, or reports failure when the table is full -- the caller must not
+// place the voxel unless this succeeds, or the grid would hold a black cube that pulls on nothing.
+bool bhRegister(ivec3 p) {
+    uint code = BH_ACTIVE | getIndex(p);
+    for (int i = 0; i < BLACK_HOLE_MAX; i++) {
+        if (atomicCompSwap(blackHoles[i], 0u, code) == 0u) return true;
+    }
+    return false;
+}
+
+// FUNCTION: bhRelease
+void bhRelease(ivec3 p) {
+    uint code = BH_ACTIVE | getIndex(p);
+    for (int i = 0; i < BLACK_HOLE_MAX; i++) {
+        atomicCompSwap(blackHoles[i], code, 0u);
+    }
+}
+
+// FUNCTION: bhSpinAxis
+// Every hole needs its own spin axis, because the tangential direction is defined relative to it
+// and a shared axis would make every disk in the cube lie in the same plane. Derived from the
+// hole's position so it is stable for the hole's whole lifetime without being stored anywhere.
+// Biased toward upright: a near-horizontal disk is the orientation that reads as a disk from a
+// camera that mostly looks down at the cube.
+vec3 bhSpinAxis(ivec3 center) {
+    float tilt = (hash(vec3(center) + vec3(13.0f, 71.0f, 5.0f)) - 0.5f) * 1.1f;
+    float az = hash(vec3(center) + vec3(101.0f, 7.0f, 53.0f)) * 6.28318f;
+    return normalize(vec3(sin(tilt) * cos(az), cos(tilt), sin(tilt) * sin(az)));
+}
+
+// FUNCTION: inBrush
+// The set of voxels the spawn brush writes. Cube bounds are tested first because they are cheap and
+// are exactly the region the box cursor draws; the sphere test then carves the round brush out of
+// that.
+//
+// The sphere test is done entirely in world coordinates -- voxel CENTRES against a centre derived
+// from the same bounds the renderer's outline uses -- because a voxel's integer position is its min
+// corner, and testing corners instead would place the sphere half a voxel off the one drawn.
+bool inBrush(ivec3 pos) {
+    int halfMin = pc.spawnSize / 2;
+    int halfMax = (pc.spawnSize - 1) / 2;
+
+    if (pos.x < pc.spawnX - halfMin || pos.x > pc.spawnX + halfMax) return false;
+    if (pos.y < pc.spawnY - halfMin || pos.y > pc.spawnY + halfMax) return false;
+    if (pos.z < pc.spawnZ - halfMin || pos.z > pc.spawnZ + halfMax) return false;
+
+    if (pc.spawnShape != 1) return true;
+
+    vec3 center = vec3(pc.spawnX, pc.spawnY, pc.spawnZ) + vec3(float(halfMax - halfMin + 1) * 0.5f);
+    vec3 d = (vec3(pos) + 0.5f) - center;
+    float radius = float(pc.spawnSize) * 0.5f;
+    return dot(d, d) <= radius * radius;
+}
 
 // =================================================================================================
 // CLOUD FIELD -- shared placement math. THIS BLOCK IS DUPLICATED VERBATIM IN raymarch.frag.
@@ -250,6 +336,135 @@ bool tryDisplace(uint currentIndex, uint currentValue, uint targetIndex, uint ta
     return false;
 }
 
+
+// FUNCTION: orbitStep
+// Moves a captured particle one cell along `stepDir`, into empty space only. Orbiting matter
+// deliberately does NOT get the displacement rules the falling materials have: two particles
+// arriving at the same cell should queue up behind each other, because that queueing is what makes
+// the disk look dense and banded instead of letting everything pass through everything else.
+bool orbitStep(ivec3 pos, uint currentIndex, uint rawValue, ivec3 stepDir) {
+    if (stepDir == ivec3(0)) return false;
+
+    ivec3 target = pos + stepDir;
+    if (target.x < 1 || target.x >= WIDTH - 1 ||
+        target.y < 1 || target.y >= HEIGHT - 1 ||
+        target.z < 1 || target.z >= DEPTH - 1) return false;
+
+    uint targetIndex = getIndex(target);
+    if (getType(grid[targetIndex]) != 0u) return false;
+
+    return tryMove(currentIndex, rawValue, targetIndex,
+                   pack(getType(rawValue), getDir(rawValue), 0u, getAge(rawValue)));
+}
+
+// FUNCTION: dominantAxis
+// Collapses a continuous direction onto the 26 lattice steps: the largest component always steps,
+// and the others join in when they are within 55% of it, which is what produces diagonal moves.
+ivec3 dominantAxis(vec3 dir, float relative) {
+    vec3 a = abs(dir);
+    float m = max(a.x, max(a.y, a.z));
+    if (m <= 0.0f) return ivec3(0);
+    return ivec3(greaterThanEqual(a, vec3(m * relative))) * ivec3(sign(dir));
+}
+
+// FUNCTION: updateOrbital
+// One tick of a particle held by a black hole. This replaces the particle's own material update
+// outright -- captured matter is on an orbit, not falling -- which is the whole reason the disk
+// stays up instead of raining down onto the hole.
+//
+// The direction field is tangential FIRST and inward only as a small bias, so a particle that
+// wanders into range is swung sideways rather than yanked at the centre; the shallow inward
+// component is what makes the orbit decay over many revolutions instead of in one. A third term
+// pulls toward the hole's equatorial plane, and that is specifically what turns the captured
+// population from a spherical swarm into a disk.
+//
+// Orbital speed can't be expressed as a magnitude when every move is exactly one voxel, so it is
+// expressed as how OFTEN a move happens: roughly speed/sqrt(distance), which reproduces the
+// Keplerian shear that makes the inner disk visibly outrun the outer one.
+void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, float dist, float randVal) {
+    uint type = getType(rawValue);
+    uint sleep = getSleep(rawValue);
+
+    if (dist <= float(tuning.blackHoleHorizon)) {
+        if (atomicCompSwap(grid[currentIndex], rawValue, 0u) == rawValue && type == 2u) {
+            decWater();
+            // A hole keeps what it swallows, so this water can never be rained back. The high mark
+            // has to come down with it, or the sky would open a storm it is unable to ever finish.
+            atomicAdd(waterHighMark, 0xFFFFFFFFu);
+        }
+        return;
+    }
+
+    // Held but not moving this tick. Sleep is still cleared: the particle skipped its material
+    // update, and a stale sleep counter would leave it frozen once it drifts back out of range.
+    if (randVal > clamp(tuning.blackHoleOrbitSpeed / sqrt(max(dist, 1.0f)), 0.0f, 1.0f)) {
+        if (sleep != 0u) {
+            atomicCompSwap(grid[currentIndex], rawValue, pack(type, getDir(rawValue), 0u, getAge(rawValue)));
+        }
+        return;
+    }
+
+    vec3 inward = normalize(vec3(center - pos));
+    vec3 axis = bhSpinAxis(center);
+
+    vec3 tangent = cross(axis, inward);
+    float tangentLen = length(tangent);
+    if (tangentLen < 0.05f) {
+        // Sitting on the spin axis there is no orbit plane to move in. Any perpendicular will do --
+        // it only has to get the particle off the pole, after which the normal field takes over.
+        tangent = normalize(cross(axis, vec3(0.577f, 0.577f, 0.577f)));
+    } else {
+        tangent /= tangentLen;
+    }
+
+    float axial = dot(vec3(pos - center), axis);
+    vec3 flatten = -axis * clamp(axial * 0.25f, -1.0f, 1.0f) * tuning.blackHoleDiskFlatten;
+
+    // Safe to normalize: tangent is a unit vector orthogonal to both other terms, so the sum can
+    // never cancel to zero however they are weighted.
+    vec3 dir = normalize(tangent + inward * tuning.blackHoleInfall + flatten);
+
+    if (orbitStep(pos, currentIndex, rawValue, dominantAxis(dir, 0.55f))) return;
+    if (orbitStep(pos, currentIndex, rawValue, dominantAxis(dir, 1.0f))) return;
+    // Blocked in the direction it wants, so slide along the ring instead. A jammed orbit is
+    // traffic that clears as the particles ahead move on -- never a reason to drop out of the disk.
+    if (orbitStep(pos, currentIndex, rawValue, dominantAxis(tangent, 1.0f))) return;
+
+    if (sleep != 0u) {
+        atomicCompSwap(grid[currentIndex], rawValue, pack(type, getDir(rawValue), 0u, getAge(rawValue)));
+    }
+}
+
+// FUNCTION: captureByBlackHole
+// Scans the table and hands the particle to the nearest hole whose influence it is inside.
+// Returns false for the overwhelmingly common case of a particle nowhere near one.
+bool captureByBlackHole(ivec3 pos, uint currentIndex, uint rawValue, float randVal) {
+    if (blackHoleCount == 0u) return false;
+
+    float radius = float(tuning.blackHoleRadius);
+    float bestDistSq = radius * radius;
+    ivec3 bestCenter = ivec3(0);
+    bool captured = false;
+
+    for (int i = 0; i < BLACK_HOLE_MAX; i++) {
+        uint code = blackHoles[i];
+        if (code == 0u) continue;
+
+        ivec3 center = bhDecode(code);
+        vec3 d = vec3(center - pos);
+        float distSq = dot(d, d);
+        if (distSq <= bestDistSq) {
+            bestDistSq = distSq;
+            bestCenter = center;
+            captured = true;
+        }
+    }
+
+    if (!captured) return false;
+
+    updateOrbital(pos, currentIndex, rawValue, bestCenter, sqrt(bestDistSq), randVal);
+    return true;
+}
 
 // FUNCTION: getRainDropChance
 // Rain's rate control, expressed as a per-column probability rather than a shared allowance.
@@ -862,14 +1077,32 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
 }
 
 
-// FUNCTION: updateRainPhase
+// FUNCTION: updateSimState
 // Drives the rain state machine: 0 = accumulating (white), 1 = darkening (waiting to rain),
-// 2 = raining (draining). Only invocation (0,0,0) performs transitions and eases the cloud
-// charge, keeping those single-writer rather than having every voxel in the grid contend on the
-// same atomics. Other invocations may observe a transition up to one dispatch late, which is
-// invisible at this timescale.
-void updateRainPhase() {
+// 2 = raining (draining), and sweeps the black hole table. Only invocation (0,0,0) performs
+// transitions and eases the cloud charge, keeping those single-writer rather than having every
+// voxel in the grid contend on the same atomics. Other invocations may observe a transition up to
+// one dispatch late, which is invisible at this timescale.
+void updateSimState() {
     if (gl_GlobalInvocationID.x != 0u || gl_GlobalInvocationID.y != 0u || gl_GlobalInvocationID.z != 0u) return;
+
+    // --- Black hole table sweep ------------------------------------------------------------------
+    // Slots are validated here, once, rather than by each captured particle. Every mobile voxel in
+    // the grid reads this table every dispatch, so a per-particle "is that voxel still a hole?"
+    // check would multiply one cheap confirmation into millions. Recomputing the count from scratch
+    // also means it can never drift: a hole erased by the void brush frees its slot immediately,
+    // and one erased any other way is reaped on the next dispatch.
+    uint live = 0u;
+    for (int i = 0; i < BLACK_HOLE_MAX; i++) {
+        uint code = blackHoles[i];
+        if (code == 0u) continue;
+        if (getType(grid[code & BH_INDEX_MASK]) != 7u) {
+            blackHoles[i] = 0u;
+            continue;
+        }
+        live++;
+    }
+    blackHoleCount = live;
 
     // The peak water level is the target a storm restores to. Only tracked while no storm is in
     // progress: a storm deliberately overshoots past the old peak, and letting the mark chase
@@ -1006,17 +1239,16 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
 void main() {
     ivec3 pos = ivec3(gl_GlobalInvocationID.xyz);
 
-    updateRainPhase();
+    updateSimState();
 
-    if (pc.spawnActive == 1) {
-        int halfDistMin = pc.spawnSize / 2;
-        int halfDistMax = (pc.spawnSize - 1) / 2;
-    
-        if (pos.x >= pc.spawnX - halfDistMin && pos.x <= pc.spawnX + halfDistMax && 
-            pos.y >= pc.spawnY - halfDistMin && pos.y <= pc.spawnY + halfDistMax && 
-            pos.z >= pc.spawnZ - halfDistMin && pos.z <= pc.spawnZ + halfDistMax) {
-            uint oldType = getType(grid[getIndex(pos)]);
-            uint newType = uint(pc.spawnType);
+    if (pc.spawnActive == 1 && inBrush(pos)) {
+        uint spawnIndex = getIndex(pos);
+        uint oldType = getType(grid[spawnIndex]);
+        uint newType = uint(pc.spawnType);
+
+        // Clicking an existing black hole is the one no-op: re-placing it would burn a second table
+        // slot on a voxel that already has one.
+        if (newType != 7u || oldType != 7u) {
             if (oldType != newType) {
                 if (oldType == 2u) {
                     decWater();
@@ -1024,9 +1256,23 @@ void main() {
                     // register as a deficit that the sky then spends a storm trying to refill.
                     atomicAdd(waterHighMark, 0xFFFFFFFFu);
                 }
+                if (oldType == 7u) bhRelease(pos);
                 if (newType == 2u) incWater();
             }
-            grid[getIndex(pos)] = pack(newType, 0u, 0u, 0u); 
+
+            grid[spawnIndex] = pack(newType, 0u, 0u, 0u);
+
+            if (newType == 7u) {
+                // The voxel is published BEFORE the slot is claimed, and the barrier is what makes
+                // that ordering real. This dispatch's table sweep may run at any point relative to
+                // this code, and it frees any slot whose voxel is not a hole -- so a slot becoming
+                // visible ahead of its voxel would get reaped instantly, leaving a black cube that
+                // pulls on nothing.
+                memoryBarrierBuffer();
+                if (!bhRegister(pos)) {
+                    grid[spawnIndex] = 0u; // table full: roll back rather than leave an inert hole
+                }
+            }
         }
     }
 
@@ -1084,12 +1330,20 @@ void main() {
         }
     }
     
-    if (currentType == 0u || currentType == 3u) return; 
-    
+    if (currentType == 0u) return;
+
+    float randVal = hash(vec3(pos) + vec3(pc.time));
+
+    // Checked ahead of the stone early-out on purpose: a black hole tears a stone wall apart the
+    // same as anything else, and a hole buried inside one should not be walled off from its own
+    // orbit field.
+    if (currentType != 7u && captureByBlackHole(pos, currentIndex, rawValue, randVal)) return;
+
+    if (currentType == 3u || currentType == 7u) return;
+
     uint currentDir = getDir(rawValue);
     uint currentSleep = getSleep(rawValue);
     uint currentAge = getAge(rawValue);
-    float randVal = hash(vec3(pos) + vec3(pc.time));
 
     switch (currentType) {
         case 1u:
