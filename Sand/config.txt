@@ -54,18 +54,34 @@ physics.fire_spread_chance=0.1
 physics.steam_scatter_chance=0.3
 
 # --- Black hole ---
-# A black hole is a single tracked voxel (max 8 at once), not a paintable material. Anything
+# A black hole is a single tracked object (max 8 at once), not a paintable material. Anything
 # within `radius` stops running its own physics and follows the hole's orbit field instead.
 #   infall       = how much straight-in pull is mixed into an otherwise fully tangential step.
 #                  Small values spiral slowly; raise it and matter dives at the centre instead.
-#   disk_flatten = pull toward the hole's equatorial plane. This is what turns a spherical swarm
-#                  into a disk; set 0 to keep captured matter in a shell.
-#   orbit_speed  = scales a per-tick step chance of speed/sqrt(distance), so the inner disk
-#                  shears past the outer one. Above ~3 the whole disk moves every tick.
-#   horizon      = distance at which matter is finally destroyed.
-blackhole.horizon=3
+#   orbit_speed  = scales a per-tick step chance of speed/sqrt(distance), so inner orbits shear
+#                  past outer ones. Above ~3 everything captured moves every tick.
+#   horizon      = how far PAST the body's surface matter is destroyed. Measured from the body, not
+#                  from the centre, so the region a hole clears always matches the size it looks.
+#
+# Orbits cover every inclination, not one disk. Each hole owns a fan of `orbit_planes` candidate
+# planes and a particle rides whichever most nearly contains it, giving a shell of great circles at
+# all angles; roughly half run retrograde.
+#   orbit_planes = how many distinct inclinations exist. Low values (3-6) give a few crisp,
+#                  obviously separate rings; high values approach a smooth spherical swarm.
+#   plane_grip   = how firmly a particle is held in its own plane. 0 smears the orbits into a
+#                  diffuse cloud; high values make each ring razor-thin.
+#
+# The body grows with what it eats: side length 2*level+1, so 1x1x1 -> 3x3x3 -> 5x5x5 -> ...
+#   growth_cost  = multiplier on how much it must swallow to reach the next size. At 1.0 a hole
+#                  ends up about as big as what it consumed (27 voxels to become 3x3x3). Raise it
+#                  to make growth slower and harder to trigger by accident.
+#   max_level    = size ceiling. 8 is a 17x17x17 body. Reach grows by one voxel per level.
+blackhole.horizon=1
 blackhole.radius=28
 blackhole.orbit_speed=2.2
 blackhole.infall=0.16
-blackhole.disk_flatten=0.4
+blackhole.plane_grip=0.5
 blackhole.glow=0.85
+blackhole.orbit_planes=16
+blackhole.growth_cost=1.0
+blackhole.max_level=8

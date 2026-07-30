@@ -57,17 +57,27 @@ struct TuningParams {
     // Anything inside blackHoleRadius stops running its own material update and follows the hole's
     // orbit field instead. That field is overwhelmingly tangential: blackHoleInfall is how much
     // straight-in pull is mixed on top, and keeping it small is what makes captured matter wind
-    // up into a spiral rather than dropping down the throat. blackHoleDiskFlatten pulls toward the
-    // hole's equatorial plane, which is what collapses a spherical swarm into a disk.
-    // blackHoleOrbitSpeed scales a per-tick step probability of ~speed/sqrt(radius), so the inner
-    // disk shears visibly past the outer one. Matter is only destroyed once it reaches
-    // blackHoleHorizon.
-    uint32_t blackHoleHorizon = 3;
+    // up into a spiral rather than dropping down the throat. blackHoleOrbitSpeed scales a per-tick
+    // step probability of ~speed/sqrt(radius), so inner orbits shear visibly past outer ones.
+    //
+    // Orbits are spread over every inclination rather than a single disk: each hole owns a fan of
+    // blackHoleOrbitPlanes candidate planes and a particle rides whichever one most nearly contains
+    // it, so the captured population is a shell of great circles at all angles. blackHolePlaneGrip
+    // is how firmly a particle is held in its own plane -- drop it to 0 and orbits smear into a
+    // diffuse cloud.
+    //
+    // A hole's body grows with what it eats: side length 2*level+1 (1x1x1, 3x3x3, 5x5x5, ...),
+    // advancing a level once it has swallowed blackHoleGrowthCost times that size's voxel count, so
+    // it ends up about as big as what it consumed. Its reach grows with it, by one voxel per level.
+    uint32_t blackHoleHorizon = 1; // measured past the body's face, not from its centre
     uint32_t blackHoleRadius = 28;
     float blackHoleOrbitSpeed = 2.2f;
     float blackHoleInfall = 0.16f;
-    float blackHoleDiskFlatten = 0.4f;
+    float blackHolePlaneGrip = 0.5f;
     float blackHoleGlow = 0.85f;
+    uint32_t blackHoleOrbitPlanes = 16; // hard-capped at 32 by the shaders
+    float blackHoleGrowthCost = 1.0f;
+    uint32_t blackHoleMaxLevel = 8;     // 8 -> a 17x17x17 body at full size
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

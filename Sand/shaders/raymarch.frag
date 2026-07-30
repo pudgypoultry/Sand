@@ -24,6 +24,7 @@ layout(std430, binding = 1) buffer SimStats {
     uint cloudChargeBits;
     uint blackHoleCount;
     uint blackHoles[BLACK_HOLE_MAX];
+    uint blackHoleMass[BLACK_HOLE_MAX];
 };
 
 layout(std140, binding = 2) uniform TuningParams {
@@ -60,8 +61,11 @@ layout(std140, binding = 2) uniform TuningParams {
     uint blackHoleRadius;
     float blackHoleOrbitSpeed;
     float blackHoleInfall;
-    float blackHoleDiskFlatten;
+    float blackHolePlaneGrip;
     float blackHoleGlow;
+    uint blackHoleOrbitPlanes;
+    float blackHoleGrowthCost;
+    uint blackHoleMaxLevel;
 } tuning;
 
 layout(push_constant) uniform Constants {
@@ -296,6 +300,27 @@ vec3 renderBlackHole(vec3 normal, vec3 rayDir) {
     return mix(vec3(0.01f, 0.01f, 0.02f), vec3(0.85f, 0.45f, 1.0f), glow * 0.7f);
 }
 
+// FUNCTION: bhDecode
+ivec3 bhDecode(uint code) {
+    uint i = code & BH_INDEX_MASK;
+    return ivec3(int(i % uint(WIDTH)), int((i / uint(WIDTH)) % uint(HEIGHT)), int(i / uint(WIDTH * HEIGHT)));
+}
+
+// FUNCTION: bhLevel
+// DUPLICATED VERBATIM FROM falling_sand.comp. Both stages read the same swallowed-voxel count from
+// the same buffer, so they derive the same body size with nothing to synchronise. If you change the
+// growth curve in one you MUST change it in the other, or the body that gets drawn will stop
+// matching the body that eats.
+uint bhLevel(uint mass) {
+    uint level = 0u;
+    for (uint l = 1u; l <= min(tuning.blackHoleMaxLevel, 16u); l++) {
+        uint side = 2u * l + 1u;
+        if (float(mass) < tuning.blackHoleGrowthCost * float(side * side * side)) break;
+        level = l;
+    }
+    return level;
+}
+
 // FUNCTION: accretionGlow
 // Tints whatever the ray hit by how deep inside a black hole's influence it sits. Purely cosmetic,
 // but it is what makes the disk legible: without it a captured stream of sand is the same yellow as
@@ -310,10 +335,7 @@ vec3 accretionGlow(vec3 color, ivec3 voxelPos) {
     for (int i = 0; i < BLACK_HOLE_MAX; i++) {
         uint code = blackHoles[i];
         if (code == 0u) continue;
-
-        uint idx = code & BH_INDEX_MASK;
-        ivec3 center = ivec3(int(idx % uint(WIDTH)), int((idx / uint(WIDTH)) % uint(HEIGHT)), int(idx / uint(WIDTH * HEIGHT)));
-        closest = min(closest, length(vec3(center - voxelPos)));
+        closest = min(closest, length(vec3(bhDecode(code) - voxelPos)));
     }
 
     if (closest >= radius) return color;
@@ -629,6 +651,45 @@ void main() {
     } else if (hitBackBox) {
         finalDist = aabbHit.y;
         finalColor = vec4(1.0f, 0.2f, 0.2f, 1.0f);
+    }
+
+    // --- BLACK HOLE BODIES: a grown hole occupies a 2*level+1 cube, but only its CENTRE voxel is
+    // stored in the grid -- the rest of the body is empty space that the physics keeps swept clear.
+    // So the body is intersected analytically here, the way the cloud layer is, instead of being
+    // marched. Testing 8 table slots at each of the DDA loop's 400 steps would cost thousands of
+    // reads per pixel to draw a shape that a single ray/box test resolves exactly. ---
+    if (blackHoleCount > 0u) {
+        for (int i = 0; i < BLACK_HOLE_MAX; i++) {
+            uint code = blackHoles[i];
+            if (code == 0u) continue;
+
+            float level = float(bhLevel(blackHoleMass[i]));
+            vec3 center = vec3(bhDecode(code));
+            vec2 bodyHit = intersectAABB(rayOrigin, rayDir, center - vec3(level), center + vec3(level + 1.0f));
+
+            if (bodyHit.x < bodyHit.y && bodyHit.y > 0.0f) {
+                float bodyDist = max(0.0f, bodyHit.x);
+                if (bodyDist < finalDist) {
+                    // Face normal from whichever slab the ray entered through, so the cube reads as
+                    // a cube rather than a flat silhouette.
+                    vec3 bodyMin = center - vec3(level);
+                    vec3 bodyMax = center + vec3(level + 1.0f);
+                    vec3 mid = (bodyMin + bodyMax) * 0.5f;
+                    vec3 local = (rayOrigin + rayDir * bodyDist - mid) / max((bodyMax - bodyMin) * 0.5f, vec3(0.0001f));
+                    vec3 a = abs(local);
+                    vec3 faceNormal = (a.x >= a.y && a.x >= a.z) ? vec3(sign(local.x), 0.0f, 0.0f)
+                                    : (a.y >= a.z)               ? vec3(0.0f, sign(local.y), 0.0f)
+                                                                 : vec3(0.0f, 0.0f, sign(local.z));
+
+                    vec3 bodyColor = renderBlackHole(faceNormal, rayDir);
+                    float MAX_VISIBILITY = max(300.0f, aabbHit.y * 1.5f);
+                    bodyColor *= mix(1.0f, 0.0f, clamp(bodyDist / MAX_VISIBILITY, 0.0f, 1.0f));
+
+                    finalColor = vec4(bodyColor, 1.0f);
+                    finalDist = bodyDist;
+                }
+            }
+        }
     }
 
     // --- CLOUD LAYER: a fixed population of clouds constantly drifting along +X and wrapping,

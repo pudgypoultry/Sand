@@ -26,7 +26,8 @@ layout(std430, binding = 1) buffer SimStats {
     uint rainCandidateEstimate;  // last dispatch's census -- the divisor that sets drop odds
     uint cloudChargeBits;        // float bits: eased 0..1 group-wide cloud opacity/greyness
     uint blackHoleCount;         // live table entries; 0 lets every voxel skip the scan entirely
-    uint blackHoles[BLACK_HOLE_MAX]; // 0 = free slot, else BH_ACTIVE | linear voxel index
+    uint blackHoles[BLACK_HOLE_MAX];    // 0 = free slot, else BH_ACTIVE | linear voxel index
+    uint blackHoleMass[BLACK_HOLE_MAX]; // voxels swallowed; the hole's body size is derived from it
 };
 
 layout(std140, binding = 2) uniform TuningParams {
@@ -63,8 +64,11 @@ layout(std140, binding = 2) uniform TuningParams {
     uint blackHoleRadius;
     float blackHoleOrbitSpeed;
     float blackHoleInfall;
-    float blackHoleDiskFlatten;
+    float blackHolePlaneGrip;
     float blackHoleGlow;
+    uint blackHoleOrbitPlanes;
+    float blackHoleGrowthCost;
+    uint blackHoleMaxLevel;
 } tuning;
 
 const uint LAYER_SIZE = 128u * 128u; // 16384 — one layer
@@ -188,7 +192,10 @@ ivec3 bhDecode(uint code) {
 bool bhRegister(ivec3 p) {
     uint code = BH_ACTIVE | getIndex(p);
     for (int i = 0; i < BLACK_HOLE_MAX; i++) {
-        if (atomicCompSwap(blackHoles[i], 0u, code) == 0u) return true;
+        if (atomicCompSwap(blackHoles[i], 0u, code) == 0u) {
+            blackHoleMass[i] = 0u; // a fresh hole starts at level 0, whatever the last tenant ate
+            return true;
+        }
     }
     return false;
 }
@@ -201,16 +208,79 @@ void bhRelease(ivec3 p) {
     }
 }
 
-// FUNCTION: bhSpinAxis
-// Every hole needs its own spin axis, because the tangential direction is defined relative to it
-// and a shared axis would make every disk in the cube lie in the same plane. Derived from the
-// hole's position so it is stable for the hole's whole lifetime without being stored anywhere.
-// Biased toward upright: a near-horizontal disk is the orientation that reads as a disk from a
-// camera that mostly looks down at the cube.
-vec3 bhSpinAxis(ivec3 center) {
-    float tilt = (hash(vec3(center) + vec3(13.0f, 71.0f, 5.0f)) - 0.5f) * 1.1f;
-    float az = hash(vec3(center) + vec3(101.0f, 7.0f, 53.0f)) * 6.28318f;
-    return normalize(vec3(sin(tilt) * cos(az), cos(tilt), sin(tilt) * sin(az)));
+// FUNCTION: bhLevel
+// Half-extent of the hole's body, so its side length is 2*level+1: 1x1x1, 3x3x3, 5x5x5, ... A hole
+// advances a level once it has swallowed as many voxels as the next size would occupy, so its body
+// ends up about as big as what it ate.
+//
+// Derived from the swallowed count rather than stored alongside it. There is deliberately no
+// separate "current size" field to keep in step: the drawn body and the eaten total cannot disagree
+// if only one of them exists, and the growth threshold can be retuned in the config without
+// stranding holes at a size they could no longer justify.
+//
+// DUPLICATED IN raymarch.frag -- the renderer sizes the body from the same count, so if you change
+// the curve here you MUST change it there or the drawn body will stop matching the one that eats.
+uint bhLevel(uint mass) {
+    uint level = 0u;
+    for (uint l = 1u; l <= min(tuning.blackHoleMaxLevel, 16u); l++) {
+        uint side = 2u * l + 1u;
+        if (float(mass) < tuning.blackHoleGrowthCost * float(side * side * side)) break;
+        level = l;
+    }
+    return level;
+}
+
+// FUNCTION: bhPlaneNormal
+// One candidate orbital plane out of the hole's fan, as its normal.
+//
+// Spread over a HEMISPHERE, not a full sphere: n and -n describe the same plane, so sampling the
+// whole sphere would produce pairs of near-identical candidates for a particle to flip between.
+// z is uniform in (0,1), which is uniform by area on a hemisphere, and the golden angle keeps
+// successive normals from clumping into a stripe. `seed` rotates the whole fan per hole so two
+// holes side by side don't share inclinations.
+vec3 bhPlaneNormal(int k, int planeCount, float seed) {
+    float z = (float(k) + 0.5f) / float(planeCount);
+    float r = sqrt(max(0.0f, 1.0f - z * z));
+    float a = 2.399963f * float(k) + seed; // golden angle
+    return vec3(r * cos(a), z, r * sin(a));
+}
+
+// FUNCTION: bhOrbitAxis
+// The axis of the orbit this particle is on -- the signed normal of its own plane.
+//
+// A great circle through the centre lies in a plane that CONTAINS the particle's position, and that
+// is what makes a purely geometric choice self-sustaining: the particle takes whichever candidate
+// most nearly contains it right now, and because its orbit then keeps it inside that plane, the same
+// candidate keeps winning on every later tick. Each plane's "winning region" is the band around its
+// own great circle, so an orbit never wanders out of the region that selected it.
+//
+// Hashing a plane per particle instead cannot work here. Nothing identifies a particle across ticks
+// -- there is no id to hash, only a position, and a position-seeded plane would re-roll the instant
+// the particle moved, producing a random walk rather than an orbit.
+//
+// The circulation sense is hashed per plane index, which is stable because the index is, so roughly
+// half the fan runs retrograde and the shell doesn't read as all-one-way swirl.
+vec3 bhOrbitAxis(ivec3 center, ivec3 pos) {
+    vec3 radial = normalize(vec3(pos - center));
+    int planeCount = int(clamp(tuning.blackHoleOrbitPlanes, 1u, 32u));
+    float seed = hash(vec3(center) + vec3(29.0f, 3.0f, 71.0f)) * 6.28318f;
+
+    vec3 best = vec3(0.0f, 1.0f, 0.0f);
+    float bestAlign = 2.0f;
+    int bestK = 0;
+
+    for (int k = 0; k < planeCount; k++) {
+        vec3 n = bhPlaneNormal(k, planeCount, seed);
+        float align = abs(dot(n, radial)); // 0 when the plane contains the particle exactly
+        if (align < bestAlign) {
+            bestAlign = align;
+            best = n;
+            bestK = k;
+        }
+    }
+
+    float sense = (hash(vec3(center) + vec3(float(bestK) * 13.0f, 101.0f, 47.0f)) < 0.5f) ? -1.0f : 1.0f;
+    return best * sense;
 }
 
 // FUNCTION: inBrush
@@ -375,22 +445,38 @@ ivec3 dominantAxis(vec3 dir, float relative) {
 // The direction field is tangential FIRST and inward only as a small bias, so a particle that
 // wanders into range is swung sideways rather than yanked at the centre; the shallow inward
 // component is what makes the orbit decay over many revolutions instead of in one. A third term
-// pulls toward the hole's equatorial plane, and that is specifically what turns the captured
-// population from a spherical swarm into a disk.
+// holds the particle in its OWN orbital plane (see bhOrbitAxis), which is what keeps each great
+// circle crisp while the fan of planes covers every inclination.
 //
 // Orbital speed can't be expressed as a magnitude when every move is exactly one voxel, so it is
 // expressed as how OFTEN a move happens: roughly speed/sqrt(distance), which reproduces the
-// Keplerian shear that makes the inner disk visibly outrun the outer one.
-void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, float dist, float randVal) {
+// Keplerian shear that makes inner orbits visibly outrun outer ones.
+void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, int slot, uint level, float dist, float randVal) {
     uint type = getType(rawValue);
     uint sleep = getSleep(rawValue);
 
-    if (dist <= float(tuning.blackHoleHorizon)) {
-        if (atomicCompSwap(grid[currentIndex], rawValue, 0u) == rawValue && type == 2u) {
-            decWater();
-            // A hole keeps what it swallows, so this water can never be rained back. The high mark
-            // has to come down with it, or the sky would open a storm it is unable to ever finish.
-            atomicAdd(waterHighMark, 0xFFFFFFFFu);
+    // Two ways to be swallowed: be inside the hole's body, or reach the horizon just outside it.
+    //
+    // The body test is Chebyshev because the body is a cube -- a spherical test would leave matter
+    // sitting in the corners, hidden inside something drawn as solid black. The horizon is measured
+    // as an offset PAST the body rather than as an absolute distance, so the region the hole clears
+    // stays tied to the size it is drawn at; an absolute horizon left a level-0 hole scouring a
+    // bubble several times wider than the single voxel it appeared to be.
+    ivec3 delta = abs(pos - center);
+    int chebyshev = max(delta.x, max(delta.y, delta.z));
+
+    if (chebyshev <= int(level) || dist <= float(level) + float(tuning.blackHoleHorizon)) {
+        if (atomicCompSwap(grid[currentIndex], rawValue, 0u) == rawValue) {
+            // Credited only on a successful swap, so two invocations racing the same voxel can
+            // never both bill it -- the hole's size is a running total and would drift permanently.
+            atomicAdd(blackHoleMass[slot], 1u);
+
+            if (type == 2u) {
+                decWater();
+                // A hole keeps what it swallows, so this water can never be rained back. The high
+                // mark has to come down with it, or the sky would open a storm it can never finish.
+                atomicAdd(waterHighMark, 0xFFFFFFFFu);
+            }
         }
         return;
     }
@@ -405,24 +491,27 @@ void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, fl
     }
 
     vec3 inward = normalize(vec3(center - pos));
-    vec3 axis = bhSpinAxis(center);
+    vec3 axis = bhOrbitAxis(center, pos);
 
     vec3 tangent = cross(axis, inward);
     float tangentLen = length(tangent);
     if (tangentLen < 0.05f) {
-        // Sitting on the spin axis there is no orbit plane to move in. Any perpendicular will do --
-        // it only has to get the particle off the pole, after which the normal field takes over.
+        // The chosen plane nearly contains the particle, so this is rare -- but a particle sitting
+        // on its own axis has no direction to travel. Any perpendicular gets it moving, after which
+        // the field takes over.
         tangent = normalize(cross(axis, vec3(0.577f, 0.577f, 0.577f)));
     } else {
         tangent /= tangentLen;
     }
 
+    // Cancel whatever drift has accumulated along the plane's normal. Without this the orbit is
+    // free to wander off its plane and the whole shell degenerates into a formless cloud.
     float axial = dot(vec3(pos - center), axis);
-    vec3 flatten = -axis * clamp(axial * 0.25f, -1.0f, 1.0f) * tuning.blackHoleDiskFlatten;
+    vec3 grip = -axis * clamp(axial * 0.5f, -1.0f, 1.0f) * tuning.blackHolePlaneGrip;
 
     // Safe to normalize: tangent is a unit vector orthogonal to both other terms, so the sum can
     // never cancel to zero however they are weighted.
-    vec3 dir = normalize(tangent + inward * tuning.blackHoleInfall + flatten);
+    vec3 dir = normalize(tangent + inward * tuning.blackHoleInfall + grip);
 
     if (orbitStep(pos, currentIndex, rawValue, dominantAxis(dir, 0.55f))) return;
     if (orbitStep(pos, currentIndex, rawValue, dominantAxis(dir, 1.0f))) return;
@@ -441,10 +530,17 @@ void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, fl
 bool captureByBlackHole(ivec3 pos, uint currentIndex, uint rawValue, float randVal) {
     if (blackHoleCount == 0u) return false;
 
-    float radius = float(tuning.blackHoleRadius);
-    float bestDistSq = radius * radius;
+    float bestDistSq = 3.0e9f;
     ivec3 bestCenter = ivec3(0);
-    bool captured = false;
+    int bestSlot = -1;
+    uint bestLevel = 0u;
+
+    // Widest reach any hole could possibly have. Every solid voxel in the grid runs this loop every
+    // dispatch, so the distance test has to come BEFORE bhLevel -- deriving a level per slot per
+    // voxel would put a growth-threshold search on the hot path for the whole grid, to answer a
+    // question that only matters for voxels already near a hole.
+    float maxRadius = float(tuning.blackHoleRadius + min(tuning.blackHoleMaxLevel, 16u));
+    float maxRadiusSq = maxRadius * maxRadius;
 
     for (int i = 0; i < BLACK_HOLE_MAX; i++) {
         uint code = blackHoles[i];
@@ -453,16 +549,24 @@ bool captureByBlackHole(ivec3 pos, uint currentIndex, uint rawValue, float randV
         ivec3 center = bhDecode(code);
         vec3 d = vec3(center - pos);
         float distSq = dot(d, d);
-        if (distSq <= bestDistSq) {
+        if (distSq > maxRadiusSq || distSq >= bestDistSq) continue;
+
+        // Reach grows with the body, one voxel per level, so a hole that has eaten a dune pulls on
+        // a wider field than the pinprick it started as.
+        uint level = bhLevel(blackHoleMass[i]);
+        float radius = float(tuning.blackHoleRadius + level);
+
+        if (distSq <= radius * radius) {
             bestDistSq = distSq;
             bestCenter = center;
-            captured = true;
+            bestSlot = i;
+            bestLevel = level;
         }
     }
 
-    if (!captured) return false;
+    if (bestSlot < 0) return false;
 
-    updateOrbital(pos, currentIndex, rawValue, bestCenter, sqrt(bestDistSq), randVal);
+    updateOrbital(pos, currentIndex, rawValue, bestCenter, bestSlot, bestLevel, sqrt(bestDistSq), randVal);
     return true;
 }
 

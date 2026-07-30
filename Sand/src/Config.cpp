@@ -102,8 +102,11 @@ Config loadConfig(const std::string& path) {
     config.tuning.blackHoleRadius = getUint(values, "blackhole.radius", config.tuning.blackHoleRadius);
     config.tuning.blackHoleOrbitSpeed = getFloat(values, "blackhole.orbit_speed", config.tuning.blackHoleOrbitSpeed);
     config.tuning.blackHoleInfall = getFloat(values, "blackhole.infall", config.tuning.blackHoleInfall);
-    config.tuning.blackHoleDiskFlatten = getFloat(values, "blackhole.disk_flatten", config.tuning.blackHoleDiskFlatten);
+    config.tuning.blackHolePlaneGrip = getFloat(values, "blackhole.plane_grip", config.tuning.blackHolePlaneGrip);
     config.tuning.blackHoleGlow = getFloat(values, "blackhole.glow", config.tuning.blackHoleGlow);
+    config.tuning.blackHoleOrbitPlanes = getUint(values, "blackhole.orbit_planes", config.tuning.blackHoleOrbitPlanes);
+    config.tuning.blackHoleGrowthCost = getFloat(values, "blackhole.growth_cost", config.tuning.blackHoleGrowthCost);
+    config.tuning.blackHoleMaxLevel = getUint(values, "blackhole.max_level", config.tuning.blackHoleMaxLevel);
 
     return config;
 }
