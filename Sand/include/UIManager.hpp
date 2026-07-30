@@ -49,7 +49,13 @@ public:
     {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
-        ImGuiIO& io = ImGui::GetIO(); (void)io;
+        ImGuiIO& io = ImGui::GetIO();
+
+        // Tab belongs to the cursor-shape toggle, so ImGui must not also read it as "focus the next
+        // widget". With keyboard nav on, tabbing lands on a slider and activates it, which is how
+        // pressing Tab turned controls into editable text fields you could type a bad value into.
+        io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+        io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
 
         ImGui::StyleColorsDark();
         setupCustomTheme();
@@ -87,6 +93,20 @@ public:
 
         handleShortcuts();
 
+        // Startup layout: controls pinned to the top-left corner, profiler to the top-right.
+        //
+        // Forced with Always on the first frame rather than set with FirstUseEver, because a saved
+        // imgui.ini takes precedence over FirstUseEver and the windows would simply reappear wherever
+        // they were last dragged. Applying it for one frame only means the layout is deterministic at
+        // launch while the windows stay freely movable for the rest of the session.
+        if (m_firstFrame) {
+            ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always, ImVec2(0.0f, 0.0f));
+            // A zero component means auto-fit that axis. The stored imgui.ini size predates rows
+            // added to this window since, so honouring it would open the panel already clipped;
+            // fitting once at launch keeps the startup state correct as controls come and go.
+            ImGui::SetNextWindowSize(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+        }
+
         ImGui::Begin("Simulation Controls");
 
         const char* items[] = { "Void", "Sand", "Water", "Stone", "Dirt", "Fire", "Steam", "Black Hole" };
@@ -105,10 +125,13 @@ public:
             ImGui::TextDisabled("Black holes place one voxel (max 8).");
         }
 
-        ImGui::SliderInt("Brush Size", &m_brushSize, 1, 32);
-        ImGui::SliderInt("Simulation Speed", &m_simulationSpeed, 1, 10);
-        ImGui::SliderFloat("FOV / Zoom", &m_fovDistance, 0.3f, 5.0f, "%.2f");
-        ImGui::SliderFloat("Ortho <-> Perspective", &m_perspectiveBlend, 0.0f, 1.0f, "%.2f");
+        // NoInput on every slider: belt and braces alongside disabling keyboard nav. It stops a
+        // slider becoming an editable text field by any route at all -- ctrl+click included -- so
+        // there is no way to end up typing an out-of-range value into one by accident.
+        ImGui::SliderInt("Brush Size", &m_brushSize, 1, 32, "%d", ImGuiSliderFlags_NoInput);
+        ImGui::SliderInt("Simulation Speed", &m_simulationSpeed, 1, 10, "%d", ImGuiSliderFlags_NoInput);
+        ImGui::SliderFloat("FOV / Zoom", &m_fovDistance, 0.3f, 5.0f, "%.2f", ImGuiSliderFlags_NoInput);
+        ImGui::SliderFloat("Ortho <-> Perspective", &m_perspectiveBlend, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_NoInput);
 
         if (ImGui::Button("Reset Camera")) {
             m_cameraResetRequested = true;
@@ -127,6 +150,12 @@ public:
             m_frameTimeHistory[m_frameTimeHistoryIdx] = currentFrameTime;
             m_frameTimeHistoryIdx = (m_frameTimeHistoryIdx + 1) % 3600;
 
+            if (m_firstFrame) {
+                // Pivot (1,0) anchors the window's own top-RIGHT corner to the point given, so it
+                // sits flush against the screen edge without needing to know its own width first.
+                ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x, 0.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+            }
+
             ImGui::Begin("Profiler & Performance", &m_showProfiler);
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", currentFrameTime, ImGui::GetIO().Framerate);
             ImGui::Separator();
@@ -143,6 +172,8 @@ public:
             );
             ImGui::End();
         }
+
+        m_firstFrame = false;
 
         ImGui::Render();
     }
@@ -190,14 +221,15 @@ public:
 
 private:
     int m_brushSize = 5;
-    CursorShape m_cursorShape = CursorShape::Cube;
+    CursorShape m_cursorShape = CursorShape::Sphere;
     int m_simulationSpeed = 1;
     MaterialType m_currentMaterial = MaterialType::Sand;
     bool m_resetRequested = false;
     bool m_cameraResetRequested = false;
     float m_fovDistance = 1.2f; // matches the original hardcoded raymarch FOV distance
     float m_perspectiveBlend = 1.0f; // 1.0 = perspective (original behavior), 0.0 = orthographic
-    bool m_showProfiler = false;
+    bool m_showProfiler = true;
+    bool m_firstFrame = true; // drives the one-shot startup window placement in buildUI
     float m_frameTimeHistory[3600] = { 0.0f };
     int m_frameTimeHistoryIdx = 0;
 
