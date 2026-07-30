@@ -70,6 +70,9 @@ layout(std140, binding = 2) uniform TuningParams {
     uint blackHoleStarveGrace;
     uint blackHoleDecayRate;
     float waterShadowTransmit;
+    float waterWaveStrength;
+    float waterWaveScale;
+    float waterWaveSpeed;
 } tuning;
 
 layout(push_constant) uniform Constants {
@@ -280,6 +283,76 @@ vec3 renderSand(uint rawVoxel, vec3 baseLighting) {
     vec3 baseColor = mix(dryColor, wetColor, wetness);
     
     return baseColor * baseLighting;
+}
+
+// FUNCTION: waterWaveGradient
+// Slope of a small sum of scrolling sine ridges, evaluated analytically.
+//
+// Purely decorative. It used to be load-bearing -- a moving highlight to bury the surface's popping
+// under -- but the pop is fixed at source now (see calculateShadow and getWaterNormal), so this is
+// free to be tuned for looks alone, and is deliberately quiet: at the default the tilt peaks around
+// 12 degrees, just inside the specular lobe's half-angle, so crests MODULATE the highlight rather
+// than switching it on and off. That ceiling is what keeps it reading as calm water.
+//
+// Analytic rather than sampled, and sine rather than hash noise, because the surface has to stay
+// smooth: a finite-difference or per-voxel-hash normal would put high-frequency discontinuity back
+// into a surface that just had it taken out.
+vec2 waterWaveGradient(vec2 p, float t) {
+    float scale = max(tuning.waterWaveScale, 0.001f);
+
+    // Domain warp: displace the sample position by a large, slow wave before the detail octaves are
+    // evaluated. This is what stops the result reading as a few straight sine directions -- crests
+    // bend and braid along the warp instead of running parallel across the whole pool.
+    //
+    // The warp's own contribution to the derivative is deliberately dropped. What is needed here is
+    // a smooth vector field to tilt a normal with, not a mathematically exact gradient, and carrying
+    // the Jacobian through five octaves costs more than the difference is worth on screen.
+    float wt = t * tuning.waterWaveSpeed * 0.35f;
+    vec2 q = p + vec2(sin(p.y * 0.043f + wt), sin(p.x * 0.037f - wt * 0.8f)) * 6.0f;
+
+    const vec2 dirs[5] = vec2[5](vec2(0.860f, 0.510f), vec2(-0.421f, 0.907f), vec2(0.707f, -0.707f),
+                                 vec2(-0.966f, -0.259f), vec2(0.259f, 0.966f));
+    const float freq[5] = float[5](0.11f, 0.19f, 0.31f, 0.53f, 0.87f);
+    const float amp[5]  = float[5](1.00f, 0.62f, 0.38f, 0.24f, 0.15f);
+    const float spd[5]  = float[5](1.00f, 1.37f, 0.83f, 1.71f, 0.61f);
+
+    vec2 grad = vec2(0.0f);
+    for (int i = 0; i < 5; i++) {
+        float f = freq[i] * scale;
+        float phase = dot(dirs[i], q) * f + t * spd[i] * tuning.waterWaveSpeed;
+        // d/dp of amp*sin(dot(dir,p)*f + ...) is amp*f*dir*cos(...)
+        grad += dirs[i] * (amp[i] * f * cos(phase));
+    }
+
+    // Low-frequency envelope, evaluated on the UNWARPED position so it drifts independently of the
+    // crests. Without it every part of the surface is equally agitated at every moment, which is the
+    // single biggest reason a sum of sines reads as machine-made rather than as water. It matters
+    // more at low amplitudes, not less: a quiet surface with uniform ripple reads as a texture.
+    float envelope = 0.45f + 0.55f * sin(p.x * 0.021f + p.y * 0.017f + t * 0.11f);
+    return grad * envelope;
+}
+
+// FUNCTION: applyWaterWaves
+// Tilts the shading normal by the wave slope. Geometry is untouched -- the voxel silhouette is
+// exactly as blocky as before; only what the surface reflects changes.
+//
+// Weighted by how upward-facing the surface already is, because a height field only describes a
+// roughly horizontal surface. Applying it to the vertical face of a waterfall or a pool wall would
+// tilt normals in a direction the wave says nothing about, and those faces would shimmer for no
+// reason -- the opposite of the point.
+vec3 applyWaterWaves(vec3 normal, ivec3 voxelPos) {
+    if (tuning.waterWaveStrength <= 0.0f) return normal;
+
+    float upness = clamp(normal.y, 0.0f, 1.0f);
+    if (upness <= 0.0f) return normal;
+
+    // World XZ, so the pattern is anchored to the world and slides across it. Anchoring per voxel
+    // instead would make the wave jump with the voxel it is drawn on.
+    vec2 grad = waterWaveGradient(vec2(voxelPos.xz) + vec2(0.5f), pc.time);
+
+    // For a height field h, the surface normal is normalize(-dh/dx, 1, -dh/dz); adding the negated
+    // gradient to an up-facing normal is that same tilt, expressed so it composes with any base.
+    return normalize(normal + vec3(-grad.x, 0.0f, -grad.y) * tuning.waterWaveStrength * upness);
 }
 
 // FUNCTION: renderWater
@@ -675,7 +748,7 @@ void main() {
         // Water gets the wider density-gradient normal; everything else keeps the cheap binary one,
         // which is fine for materials that are not in constant motion at their surface.
         if (hitType == 2u) {
-            normal = getWaterNormal(voxelPos);
+            normal = applyWaterWaves(getWaterNormal(voxelPos), voxelPos);
         } else {
             normal = getSmoothNormal(voxelPos, hitType);
         }

@@ -73,6 +73,9 @@ layout(std140, binding = 2) uniform TuningParams {
     uint blackHoleStarveGrace;
     uint blackHoleDecayRate;
     float waterShadowTransmit;
+    float waterWaveStrength; // render-only; declared here to keep the shared UBO layouts identical
+    float waterWaveScale;
+    float waterWaveSpeed;
 } tuning;
 
 const uint LAYER_SIZE = 128u * 128u; // 16384 — one layer

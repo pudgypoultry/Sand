@@ -109,6 +109,19 @@ struct TuningParams {
     // beneath it. 0.9 puts the jitter near the floor and still leaves ~0.35 transmittance through ten
     // voxels of water. 1.0 removes water's shadow entirely.
     float waterShadowTransmit = 0.9f;
+    // --- Water surface waves ---
+    // A scrolling wave pattern perturbs the water's shading normal. Cosmetic only -- no geometry
+    // moves, the voxel silhouette is unchanged, and it no longer has any job in hiding jitter now
+    // that calculateShadow and getWaterNormal deal with that at source.
+    //
+    // Tuned to stay understated. At these values the tilt is a median of 1.8 degrees, 7.4 at the
+    // 95th percentile, and peaks near 12 -- just inside the ~14 degree half-angle of the specular
+    // lobe, so even a crest only MODULATES the highlight rather than switching it on and off. That
+    // ceiling is what keeps it reading as calm water rather than as chop. The low scale gives long
+    // broad swells instead of small ripples; raise it for a choppier surface.
+    float waterWaveStrength = 0.9f;
+    float waterWaveScale = 0.6f;
+    float waterWaveSpeed = 0.4f;
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

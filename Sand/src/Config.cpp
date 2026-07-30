@@ -110,6 +110,9 @@ Config loadConfig(const std::string& path) {
     config.tuning.blackHoleStarveGrace = getUint(values, "blackhole.starve_grace", config.tuning.blackHoleStarveGrace);
     config.tuning.blackHoleDecayRate = getUint(values, "blackhole.decay_rate", config.tuning.blackHoleDecayRate);
     config.tuning.waterShadowTransmit = getFloat(values, "water.shadow_transmit", config.tuning.waterShadowTransmit);
+    config.tuning.waterWaveStrength = getFloat(values, "water.wave_strength", config.tuning.waterWaveStrength);
+    config.tuning.waterWaveScale = getFloat(values, "water.wave_scale", config.tuning.waterWaveScale);
+    config.tuning.waterWaveSpeed = getFloat(values, "water.wave_speed", config.tuning.waterWaveSpeed);
 
     return config;
 }
