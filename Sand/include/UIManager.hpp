@@ -101,13 +101,18 @@ public:
         // launch while the windows stay freely movable for the rest of the session.
         if (m_firstFrame) {
             ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always, ImVec2(0.0f, 0.0f));
-            // A zero component means auto-fit that axis. The stored imgui.ini size predates rows
-            // added to this window since, so honouring it would open the panel already clipped;
-            // fitting once at launch keeps the startup state correct as controls come and go.
-            ImGui::SetNextWindowSize(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
         }
 
-        ImGui::Begin("Simulation Controls");
+        // AlwaysAutoResize rather than a stored size: the window is sized by its contents every
+        // frame, so the whole panel is visible at launch regardless of what imgui.ini remembers, and
+        // it cannot be dragged to a size that clips or stretches anything. It stays movable.
+        ImGui::Begin("Simulation Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+
+        // Fixed control width. Left to itself ImGui stretches widgets to fill the content region, so
+        // the sliders resized with the window; pinning the width is what makes the bars static and
+        // what gives the auto-resize above a fixed target to size the window around. Expressed in
+        // font sizes so it holds up if the font or DPI scale changes.
+        ImGui::PushItemWidth(ImGui::GetFontSize() * 10.0f);
 
         const char* items[] = { "Void", "Sand", "Water", "Stone", "Dirt", "Fire", "Steam", "Black Hole" };
         int currentMat = static_cast<int>(m_currentMaterial);
@@ -121,8 +126,15 @@ public:
             m_cursorShape = static_cast<CursorShape>(currentShape);
         }
 
+        // The row is emitted either way, and the text is kept short enough that a slider row is
+        // always the widest thing in the panel. Both matter now that the window sizes itself to its
+        // contents: a hint that appeared and vanished would change the height on every material
+        // change, and one wider than the sliders would change the width -- which is exactly the
+        // resizing this layout exists to stop.
         if (m_currentMaterial == MaterialType::BlackHole) {
-            ImGui::TextDisabled("Black holes place one voxel (max 8).");
+            ImGui::TextDisabled("One voxel per hole (max 8).");
+        } else {
+            ImGui::TextDisabled(" ");
         }
 
         // NoInput on every slider: belt and braces alongside disabling keyboard nav. It stops a
@@ -140,6 +152,8 @@ public:
         if (ImGui::Button("Clear Grid")) {
             m_resetRequested = true;
         }
+
+        ImGui::PopItemWidth();
 
         ImGui::Separator();
         ImGui::Checkbox("Show Profiler", &m_showProfiler);
