@@ -513,15 +513,47 @@ void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, in
     float axial = dot(vec3(pos - center), axis);
     vec3 grip = -axis * clamp(axial * 0.5f, -1.0f, 1.0f) * tuning.blackHolePlaneGrip;
 
-    // Safe to normalize: tangent is a unit vector orthogonal to both other terms, so the sum can
-    // never cancel to zero however they are weighted.
-    vec3 dir = normalize(tangent + inward * tuning.blackHoleInfall + grip);
+    // Direction to travel along the orbit. Safe to normalize: tangent is a unit vector orthogonal
+    // to grip, so the sum can never cancel to zero however grip is weighted. Infall is deliberately
+    // NOT blended in here -- see the roll below.
+    vec3 along = normalize(tangent + grip);
 
-    if (orbitStep(pos, currentIndex, rawValue, dominantAxis(dir, 0.55f))) return;
-    if (orbitStep(pos, currentIndex, rawValue, dominantAxis(dir, 1.0f))) return;
+    // Infall has to be a PROBABILITY rather than a component of the direction, and the reason is not
+    // obvious: blending it into the direction looks like it works and then quietly stops.
+    //
+    // A one-voxel move quantises direction to the 26 lattice neighbours. A small inward term does
+    // bend some of those steps inward, so the orbit really does decay at first -- but only down to a
+    // radius fixed by the infall weight, where the orbit locks into a closed lattice loop whose
+    // rounding error exactly cancels the inward bias. That loop is a stable attractor, not a
+    // coincidence: at the 0.16 default a particle released anywhere between r=10 and r=28 settles
+    // onto the SAME r~6.7 cycle, 36 steps around, and orbits it forever without ever reaching the
+    // horizon. Matter parked in mid-air near a hole is this.
+    //
+    // Rolling for infall removes the attractor, because there is no longer a fixed direction field
+    // to lock into: decay becomes reliable at every radius, and a particle from r=28 reaches the
+    // horizon in ~460 steps. It also mirrors how orbital SPEED is handled a few lines up, for the
+    // same underlying reason -- a one-voxel step has no room to carry a magnitude.
+    bool pullIn = fract(randVal * 61.0f) < clamp(tuning.blackHoleInfall, 0.0f, 1.0f);
+
+    // Still mostly sideways when it does fall, so infall reads as the spiral tightening rather than
+    // the particle abruptly dropping out of its orbit.
+    vec3 spiral = normalize(inward + tangent * 0.6f);
+
+    if (pullIn && orbitStep(pos, currentIndex, rawValue, dominantAxis(spiral, 0.55f))) return;
+
+    if (orbitStep(pos, currentIndex, rawValue, dominantAxis(along, 0.55f))) return;
+    if (orbitStep(pos, currentIndex, rawValue, dominantAxis(along, 1.0f))) return;
     // Blocked in the direction it wants, so slide along the ring instead. A jammed orbit is
-    // traffic that clears as the particles ahead move on -- never a reason to drop out of the disk.
+    // traffic that clears as the particles ahead move on -- never a reason to drop out of the orbit.
     if (orbitStep(pos, currentIndex, rawValue, dominantAxis(tangent, 1.0f))) return;
+
+    // Last resort: inward. Captured matter packs tight enough to gridlock -- every particle wanting
+    // a tangential cell that another captured particle already occupies -- and with no inward option
+    // that jam never breaks, which is the second way matter ends up hanging in space. Dropping
+    // inward when the ring is blocked lets a clump drain from its inner edge, where the horizon is
+    // already eating it.
+    if (orbitStep(pos, currentIndex, rawValue, dominantAxis(inward, 0.55f))) return;
+    if (orbitStep(pos, currentIndex, rawValue, dominantAxis(inward, 1.0f))) return;
 
     if (sleep != 0u) {
         atomicCompSwap(grid[currentIndex], rawValue, pack(type, getDir(rawValue), 0u, getAge(rawValue)));

@@ -55,10 +55,13 @@ struct TuningParams {
     float steamScatterChance = 0.3f;
     // --- Black hole ---
     // Anything inside blackHoleRadius stops running its own material update and follows the hole's
-    // orbit field instead. That field is overwhelmingly tangential: blackHoleInfall is how much
-    // straight-in pull is mixed on top, and keeping it small is what makes captured matter wind
-    // up into a spiral rather than dropping down the throat. blackHoleOrbitSpeed scales a per-tick
-    // step probability of ~speed/sqrt(radius), so inner orbits shear visibly past outer ones.
+    // orbit field instead. That field is overwhelmingly tangential; blackHoleInfall is the chance
+    // per move that a particle takes a spiralling-inward step instead, which is what makes the orbit
+    // decay over many revolutions rather than dropping straight down the throat. Note it is a
+    // probability, not a weight: a one-voxel move cannot carry a magnitude, and blending infall into
+    // the direction instead locks orbits onto a fixed radius forever (see updateOrbital).
+    // blackHoleOrbitSpeed scales a per-tick step probability of ~speed/sqrt(radius) for the same
+    // reason, so inner orbits shear visibly past outer ones.
     //
     // Orbits are spread over every inclination rather than a single disk: each hole owns a fan of
     // blackHoleOrbitPlanes candidate planes and a particle rides whichever one most nearly contains

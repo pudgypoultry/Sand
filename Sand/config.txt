@@ -56,8 +56,9 @@ physics.steam_scatter_chance=0.3
 # --- Black hole ---
 # A black hole is a single tracked object (max 8 at once), not a paintable material. Anything
 # within `radius` stops running its own physics and follows the hole's orbit field instead.
-#   infall       = how much straight-in pull is mixed into an otherwise fully tangential step.
+#   infall       = chance per move that a particle spirals inward instead of continuing around.
 #                  Small values spiral slowly; raise it and matter dives at the centre instead.
+#                  Below ~0.05 decay gets unreliable and matter can orbit for a very long time.
 #   orbit_speed  = scales a per-tick step chance of speed/sqrt(distance), so inner orbits shear
 #                  past outer ones. Above ~3 everything captured moves every tick.
 #   horizon      = how far PAST the body's surface matter is voided, as a cubic shell (Chebyshev).
