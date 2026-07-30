@@ -92,6 +92,28 @@ physics.steam_scatter_chance=0.3
 #                  eats into its total, and is removed once it reaches zero.
 blackhole.starve_grace=300
 blackhole.decay_rate=1
+
+# --- Water surface ---
+# A scrolling wave pattern perturbs the water's shading normal. Cosmetic only -- no geometry moves,
+# the voxel silhouette is unchanged.
+#
+# It exists because a settled pool still reads as jittery. Surface voxels constantly shuffle by one
+# cell looking for a resting place (which is correct, and cheap -- ~90% of a pool is asleep), but the
+# shading normal is built from binary neighbour occupancy, so one cell moving swings it roughly 15-20
+# degrees. That is about the width of the exponent-32 specular lobe, so a single voxel hop switches a
+# bright highlight fully on or off. Putting a larger, smoothly travelling perturbation on top keeps
+# the highlight in motion anyway, so an individual voxel flipping is no longer what your eye tracks.
+#   wave_strength = how far the normal tilts. 0 disables it entirely -- set that to compare against
+#                   the raw surface. This is tuned against the artifact, not for looks: the jitter
+#                   swings the normal 15-20 degrees, so the wave's TYPICAL tilt has to clear that or
+#                   the pops stay the most salient thing on the surface. 1.5 medians 16 degrees (26
+#                   at the 95th percentile); 1.0 medians only 11 and is too weak; 2.0 medians 21 and
+#                   starts to look choppy rather than calm.
+#   wave_scale    = spatial frequency. Higher is tighter and choppier; lower is long ocean swell.
+#   wave_speed    = how fast crests travel across the surface.
+water.wave_strength=1.5
+water.wave_scale=1.0
+water.wave_speed=0.6
 blackhole.horizon=1
 blackhole.radius=28
 blackhole.orbit_speed=2.2

@@ -96,6 +96,21 @@ struct TuningParams {
     uint32_t blackHoleMaxLevel = 8;     // 8 -> a 17-voxel-wide body at full size
     uint32_t blackHoleStarveGrace = 300; // dispatches with nothing captured before decay starts
     uint32_t blackHoleDecayRate = 1;     // mass shed per dispatch once starving
+    // --- Water surface ---
+    // A scrolling wave pattern perturbs the water's shading normal. It is cosmetic and changes no
+    // geometry, but it is what makes a settled pool stop reading as jittery: surface voxels are
+    // constantly shuffling by one cell, and because the normal is built from binary occupancy, one
+    // cell moving swings it far enough to switch the exponent-32 highlight fully on or off. Putting
+    // a larger, smoothly-moving perturbation on top means the highlight is already in motion, so an
+    // individual voxel flipping stops being the thing your eye tracks.
+    // Set waterWaveStrength to 0 to disable and see the raw surface.
+    // 1.5 tilts the normal by a median of 16 degrees, 26 at the 95th percentile. That is chosen
+    // against the artifact rather than for looks: the jitter being masked swings the normal 15-20
+    // degrees, so a perturbation whose TYPICAL value sits below that would leave the pops as the
+    // most salient thing on the surface. 1.0 medians only 11 degrees and is not enough.
+    float waterWaveStrength = 1.5f;
+    float waterWaveScale = 1.0f; // spatial frequency; higher = tighter, choppier ripples
+    float waterWaveSpeed = 0.6f; // how fast crests travel
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

@@ -69,6 +69,9 @@ layout(std140, binding = 2) uniform TuningParams {
     uint blackHoleMaxLevel;
     uint blackHoleStarveGrace;
     uint blackHoleDecayRate;
+    float waterWaveStrength;
+    float waterWaveScale;
+    float waterWaveSpeed;
 } tuning;
 
 layout(push_constant) uniform Constants {
@@ -219,6 +222,56 @@ vec3 renderSand(uint rawVoxel, vec3 baseLighting) {
     vec3 baseColor = mix(dryColor, wetColor, wetness);
     
     return baseColor * baseLighting;
+}
+
+// FUNCTION: waterWaveGradient
+// Slope of a small sum of scrolling sine ridges, evaluated analytically.
+//
+// Analytic rather than sampled, and sine rather than hash noise, because smoothness IS the feature:
+// this exists to bury high-frequency popping, and a finite-difference or per-voxel-hash normal would
+// reintroduce exactly the kind of discontinuity it is meant to hide.
+//
+// The three directions are neither axis-aligned nor mutually parallel, and the speeds are mutually
+// irrational-ish, so the crests interfere into a pattern that travels and never visibly repeats.
+// Three equal, aligned waves would read as fixed corrugation -- a texture stuck to the surface
+// rather than water moving across it.
+vec2 waterWaveGradient(vec2 p, float t) {
+    const vec2 dirs[3] = vec2[3](vec2(0.860f, 0.510f), vec2(-0.421f, 0.907f), vec2(0.707f, -0.707f));
+    const float freq[3] = float[3](0.19f, 0.31f, 0.53f);
+    const float amp[3]  = float[3](1.00f, 0.55f, 0.28f);
+    const float spd[3]  = float[3](1.00f, 1.37f, 0.83f);
+
+    vec2 grad = vec2(0.0f);
+    for (int i = 0; i < 3; i++) {
+        float f = freq[i] * max(tuning.waterWaveScale, 0.001f);
+        float phase = dot(dirs[i], p) * f + t * spd[i] * tuning.waterWaveSpeed;
+        // d/dp of amp*sin(dot(dir,p)*f + ...) is amp*f*dir*cos(...)
+        grad += dirs[i] * (amp[i] * f * cos(phase));
+    }
+    return grad;
+}
+
+// FUNCTION: applyWaterWaves
+// Tilts the shading normal by the wave slope. Geometry is untouched -- the voxel silhouette is
+// exactly as blocky as before; only what the surface reflects changes.
+//
+// Weighted by how upward-facing the surface already is, because a height field only describes a
+// roughly horizontal surface. Applying it to the vertical face of a waterfall or a pool wall would
+// tilt normals in a direction the wave says nothing about, and those faces would shimmer for no
+// reason -- the opposite of the point.
+vec3 applyWaterWaves(vec3 normal, ivec3 voxelPos) {
+    if (tuning.waterWaveStrength <= 0.0f) return normal;
+
+    float upness = clamp(normal.y, 0.0f, 1.0f);
+    if (upness <= 0.0f) return normal;
+
+    // World XZ, so the pattern is anchored to the world and slides across it. Anchoring per voxel
+    // instead would make the wave jump with the voxel it is drawn on, which is the artifact itself.
+    vec2 grad = waterWaveGradient(vec2(voxelPos.xz) + vec2(0.5f), pc.time);
+
+    // For a height field h, the surface normal is normalize(-dh/dx, 1, -dh/dz); adding the negated
+    // gradient to an up-facing normal is that same tilt, expressed so it composes with any base.
+    return normalize(normal + vec3(-grad.x, 0.0f, -grad.y) * tuning.waterWaveStrength * upness);
 }
 
 // FUNCTION: renderWater
@@ -609,9 +662,17 @@ void main() {
     if (hit) {
         if (length(normal) < 0.1f) normal = -rayDir;
         
-        vec3 ddaNormal = normal; 
+        vec3 ddaNormal = normal;
         normal = getSmoothNormal(voxelPos, hitType);
-        
+
+        // Applied here rather than inside renderWater so the waves drive the diffuse term too, not
+        // just the highlight. Perturbing further down would light the surface flat and then gloss a
+        // wave pattern over it, which reads as a moving texture instead of moving water.
+        // ddaNormal is deliberately left alone -- it is the face the ray actually entered, and
+        // calculateShadow steps from it, so bending it would make the shadow ray start off-surface.
+        if (hitType == 2u) normal = applyWaterWaves(normal, voxelPos);
+
+
         vec3 sunDir = normalize(vec3(0.8f, 1.0f, 0.5f)); 
         vec3 sunColor = vec3(1.0f, 0.95f, 0.85f); 
         vec3 ambientColor = vec3(0.15f, 0.2f, 0.3f); 
