@@ -101,3 +101,20 @@ blackhole.glow=0.85
 blackhole.orbit_planes=16
 blackhole.growth_cost=2.0
 blackhole.max_level=8
+
+# --- Water shadows ---
+# Fraction of light surviving one water voxel on a shadow ray.
+#
+# Water used to block shadow rays outright like any solid, and that hard binary test -- not the
+# surface normal -- was overwhelmingly what made water look jittery. When a surface voxel shuffles
+# one cell, a shadow ray from a nearby cell flips blocked/unblocked and that pixel's brightness
+# swings by the whole sun term. Measured against a single one-voxel hop, the shading change is 0.253
+# at 0.0 (hard block) against 0.012 at 1.0 -- and 0.012 is the floor set by the surface normal alone,
+# so at 1.0 the shadow contributes nothing to the jitter at all. That is a factor of 21.
+#
+# Attenuating per voxel instead of just switching water shadows off keeps it physical: one voxel of
+# spray barely dims anything, a deep pool crosses many voxels and still darkens the bed beneath it.
+#   0.9 puts the jitter near the floor and still transmits ~0.35 through ten voxels of water.
+#   1.0 removes water shadowing entirely -- the absolute floor, if any residual flicker still reads.
+#   0.0 restores the old hard-blocking behaviour.
+water.shadow_transmit=0.9

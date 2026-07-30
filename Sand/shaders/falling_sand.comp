@@ -72,6 +72,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint blackHoleMaxLevel;
     uint blackHoleStarveGrace;
     uint blackHoleDecayRate;
+    float waterShadowTransmit;
 } tuning;
 
 const uint LAYER_SIZE = 128u * 128u; // 16384 — one layer

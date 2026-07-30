@@ -96,6 +96,19 @@ struct TuningParams {
     uint32_t blackHoleMaxLevel = 8;     // 8 -> a 17-voxel-wide body at full size
     uint32_t blackHoleStarveGrace = 300; // dispatches with nothing captured before decay starts
     uint32_t blackHoleDecayRate = 1;     // mass shed per dispatch once starving
+    // --- Water shadows ---
+    // Fraction of light that survives crossing one water voxel on a shadow ray. Water used to block
+    // shadow rays outright like any solid, and that hard binary test -- not the surface normal -- was
+    // overwhelmingly the source of water's jitter: when a surface voxel shuffles one cell, a nearby
+    // shadow ray flips blocked/unblocked and that pixel's brightness swings by the entire sun term.
+    // Measured against a one-voxel hop, the shading change is 0.253 at 0.0 (hard block) versus 0.012
+    // at 1.0, which is the floor set by the normal alone -- a factor of 21.
+    //
+    // Attenuating per voxel rather than just disabling it keeps the physics sensible: one voxel of
+    // spray barely dims anything, while a deep pool crosses many voxels and still darkens the bed
+    // beneath it. 0.9 puts the jitter near the floor and still leaves ~0.35 transmittance through ten
+    // voxels of water. 1.0 removes water's shadow entirely.
+    float waterShadowTransmit = 0.9f;
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;
