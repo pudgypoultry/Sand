@@ -1385,12 +1385,26 @@ void updateLava(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
 }
 
 // FUNCTION: updateDarkStone
-// Cooled lava. Inert like stone; the only thing it does is shed the water it trapped, very slowly.
+// Cooled lava. It falls straight down and, once landed, does nothing but shed the water it trapped,
+// very slowly.
+//
+// Falling is strictly vertical -- no diagonal slide, no spreading. That is what separates it from
+// sand: a solidified flow should drop out from under itself if you dig beneath it and otherwise hold
+// its shape exactly, including overhangs and ledges, rather than slumping into a pile.
 //
 // It deliberately cannot re-melt itself. Drying only lowers the bar for adjacent lava to reclaim it
 // (see the DARK_STONE branch of lavaInteract). Were the melt test here instead, an isolated slab
 // would dry past the threshold on its own and turn back into lava with nothing having melted it.
-void updateDarkStone(uint currentIndex, uint rawValue, uint currentAge, float randVal) {
+void updateDarkStone(ivec3 pos, uint currentIndex, uint rawValue, uint currentAge, float randVal) {
+    if (pos.y > 1) {
+        ivec3 belowPos = pos + ivec3(0, -1, 0);
+        if (getType(grid[getIndex(belowPos)]) == 0u) {
+            // Age carries the trapped water across the move -- a falling slab must not forget how
+            // close it is to being reclaimed just because the ground moved out from under it.
+            if (tryMove(currentIndex, rawValue, getIndex(belowPos), pack(DARK_STONE, 0u, 0u, currentAge))) return;
+        }
+    }
+
     if (currentAge > 0u && fract(randVal * 23.0f) < tuning.darkStoneDryChance) {
         atomicCompSwap(grid[currentIndex], rawValue, pack(DARK_STONE, 0u, 0u, currentAge - 1u));
     }
@@ -1797,7 +1811,7 @@ void main() {
             updateLava(pos, currentIndex, rawValue, currentDir, currentSleep, currentAge, randVal);
             break;
         case 12u:
-            updateDarkStone(currentIndex, rawValue, currentAge, randVal);
+            updateDarkStone(pos, currentIndex, rawValue, currentAge, randVal);
             break;
         default:
             break;

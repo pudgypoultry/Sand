@@ -134,7 +134,7 @@ struct TuningParams {
     // gradient runs. Stone is hotter-in-reverse -- it holds a high coolness, so contact drains it,
     // and dark stone re-melts once contact drags it back under the solidify point.
     uint32_t lavaStageSize = 48;       // coolness per stage; 4x this is the solidify threshold
-    float lavaViscosity = 0.25f;       // chance per tick to attempt a move at all
+    float lavaViscosity = 0.125f;      // chance per tick to attempt a move at all
     uint32_t lavaSpreadRadius = 6;     // how far it will look sideways for somewhere to fall
     uint32_t lavaWaterCool = 40;       // coolness gained per water voxel flashed to steam
     uint32_t lavaMoistureCool = 2;     // coolness gained per unit of soil moisture boiled off

@@ -271,8 +271,8 @@ private:
         if (ImGui::IsKeyPressed(ImGuiKey_8)) m_currentMaterial = MaterialType::BlackHole;
         // Only the hottest stage gets a key. The cooler ones exist to be inspected, not poured --
         // placing a half-cooled flow by hand is a debugging affordance, not a building material.
+        // Dark stone is dropdown-only for the same reason; key 0 is deliberately left free.
         if (ImGui::IsKeyPressed(ImGuiKey_9)) m_currentMaterial = MaterialType::LavaHottest;
-        if (ImGui::IsKeyPressed(ImGuiKey_0)) m_currentMaterial = MaterialType::DarkStone;
 
         if (ImGui::IsKeyPressed(ImGuiKey_Tab)) {
             m_cursorShape = (m_cursorShape == CursorShape::Cube) ? CursorShape::Sphere : CursorShape::Cube;
