@@ -10,6 +10,7 @@
 #include "Config.hpp"
 #include <vector>
 #include <memory>
+#include <chrono>
 
 class VulkanRenderer {
 public:
@@ -28,6 +29,8 @@ private:
     void createDescriptorSet();
     void createCommandPoolAndBuffer();
     void createSyncObjects();
+    void createTimestampPool();
+    void readGpuTimestamps();
 
     void drawFrame();
 
@@ -52,6 +55,23 @@ private:
     VkSemaphore imageAvailableSemaphore;
     VkSemaphore renderFinishedSemaphore;
     VkFence inFlightFence;
+
+    // --- Frame breakdown timing -------------------------------------------------------------------
+    // Three timestamps bracket the two GPU phases: start of the command buffer, end of the compute
+    // dispatch loop, end of the raymarch draw. The UI's ImGui commands are recorded after the last
+    // one, deliberately, so drawing the profiler does not show up as raymarch cost.
+    static constexpr uint32_t kTimestampCount = 3;
+    VkQueryPool timestampPool = VK_NULL_HANDLE;
+    bool timestampsSupported = false;  // false if the queue family cannot write timestamps at all
+    bool timestampsPending = false;    // a frame's queries are in flight and not yet read back
+    float timestampPeriodNs = 1.0f;    // nanoseconds per tick, from VkPhysicalDeviceLimits
+
+    // Wall time drawFrame spent parked on the GPU or the presenter rather than doing CPU work.
+    // Subtracted from the frame's wall time so the CPU figure means "work" and not "waiting" --
+    // without this, vsync would make the CPU line track the refresh rate and measure nothing.
+    double gpuBlockedMs = 0.0;
+    float lastComputeMs = 0.0f;
+    float lastRaymarchMs = 0.0f;
 
     UIManager uiManager;
 

@@ -60,10 +60,9 @@ void VulkanRenderer::initVulkan() {
 
     // Shared simulation stats: 9 cloud/water scalars (waterVoxelCount, waterHighMark,
     // cloudWaterCount, rainPhase, rainPhaseTimeBits, rainTargetLevel, rainCandidateCount,
-    // rainCandidateEstimate, cloudChargeBits) followed by the black hole table (blackHoleCount plus
-    // BLACK_HOLE_MAX slots). The per-slot cloud arrays are gone -- layout is a function of
-    // (index, time) computed identically in both shaders, so there is nothing per-cloud left to
-    // store. Must stay in sync with the SimStats block in falling_sand.comp and raymarch.frag.
+    // rainCandidateEstimate, cloudChargeBits), then maxOccupiedY and the black hole table
+    // (blackHoleCount plus BLACK_HOLE_MAX slots), then the per-cloud placement cache. Must stay in
+    // sync with the SimStats block in falling_sand.comp and raymarch.frag.
     // Bound at binding 1, shared by compute and fragment.
     steamCounterBuffer = std::make_unique<VulkanBuffer>(
         context.get(),
@@ -100,6 +99,7 @@ void VulkanRenderer::initVulkan() {
     createDescriptorSet();
     createCommandPoolAndBuffer();
     createSyncObjects();
+    createTimestampPool();
 
     VkDescriptorPoolSize pool_sizes[] = {
         { VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
@@ -143,6 +143,11 @@ void VulkanRenderer::initVulkan() {
 // mainLoop: Continues rendering frames until the window is closed
 void VulkanRenderer::mainLoop() {
     while (!window->shouldClose()) {
+        // Everything between here and the end of drawFrame is one frame's CPU work: event polling,
+        // building the UI, the mouse raycast, and recording the command buffer. drawFrame reports
+        // back how much of that span it spent blocked on the GPU, which is subtracted below.
+        const auto frameStart = std::chrono::high_resolution_clock::now();
+
         window->pollEvents();
 
         uiManager.buildUI();
@@ -153,6 +158,16 @@ void VulkanRenderer::mainLoop() {
         window->processInput(captureMouse, captureKeyboard);
 
         drawFrame();
+
+        const double wallMs = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - frameStart).count();
+
+        // buildUI runs at the TOP of the loop, so the figures it draws are the previous frame's.
+        // That is one frame of lag on a graph of the last minute, and the alternative -- reordering
+        // the loop so the UI is built after the work it describes -- would push the UI's own vertex
+        // upload a frame out of step with the command buffer that draws it.
+        uiManager.setFrameTimings(float(std::max(0.0, wallMs - gpuBlockedMs)),
+                                  lastComputeMs, lastRaymarchMs, timestampsSupported);
     }
     vkDeviceWaitIdle(context->getDevice());
 }
@@ -175,6 +190,8 @@ void VulkanRenderer::cleanup() {
     // Explicitly destroy the wrapped objects before the context is destroyed automatically
     pipeline.reset();
     swapchain.reset();
+
+    if (timestampPool != VK_NULL_HANDLE) vkDestroyQueryPool(context->getDevice(), timestampPool, nullptr);
 
     vkDestroyCommandPool(context->getDevice(), commandPool, nullptr);
     vkDestroyDescriptorPool(context->getDevice(), descriptorPool, nullptr);
@@ -400,9 +417,79 @@ void VulkanRenderer::createSyncObjects() {
     }
 }
 
+// createTimestampPool: Allocates the query pool the frame breakdown is measured with.
+//
+// Timestamps are an optional capability twice over: the device reports how many bits of a timestamp
+// are meaningful, and it reports that PER QUEUE FAMILY. A family with 0 valid bits accepts the write
+// commands and returns garbage, so the check has to happen here rather than being assumed -- if it
+// fails, the GPU rows are simply not reported and the CPU row still works.
+void VulkanRenderer::createTimestampPool() {
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(context->getPhysicalDevice(), &props);
+    timestampPeriodNs = props.limits.timestampPeriod;
+
+    uint32_t familyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(context->getPhysicalDevice(), &familyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> families(familyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(context->getPhysicalDevice(), &familyCount, families.data());
+
+    const uint32_t family = context->getComputeQueueFamily();
+    const bool familyCanTimestamp = family < familyCount && families[family].timestampValidBits > 0;
+
+    if (timestampPeriodNs <= 0.0f || !familyCanTimestamp) {
+        std::cout << "GPU timestamps unavailable on this queue; the profiler will show CPU time only.\n";
+        return;
+    }
+
+    VkQueryPoolCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    info.queryCount = kTimestampCount;
+
+    if (vkCreateQueryPool(context->getDevice(), &info, nullptr, &timestampPool) != VK_SUCCESS) {
+        std::cout << "Failed to create the timestamp query pool; the profiler will show CPU time only.\n";
+        return;
+    }
+
+    timestampsSupported = true;
+}
+
+// readGpuTimestamps: Turns the previous frame's three ticks into two millisecond figures.
+//
+// Called straight after the fence wait, which is the point at which the queries are guaranteed
+// complete -- so this never blocks and never needs WITH_AVAILABILITY polling. WAIT_BIT is still
+// passed as a correctness backstop rather than as the mechanism.
+void VulkanRenderer::readGpuTimestamps() {
+    if (!timestampsSupported || !timestampsPending) return;
+    timestampsPending = false;
+
+    uint64_t ticks[kTimestampCount] = {};
+    VkResult result = vkGetQueryPoolResults(
+        context->getDevice(), timestampPool, 0, kTimestampCount,
+        sizeof(ticks), ticks, sizeof(uint64_t),
+        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+
+    if (result != VK_SUCCESS) return;
+
+    // Guarded rather than assumed: a timestamp counter can wrap, and an unsigned wrap would turn a
+    // sub-millisecond phase into a several-thousand-year one and wreck the graph's scale.
+    const float toMs = timestampPeriodNs * 1e-6f;
+    if (ticks[1] >= ticks[0]) lastComputeMs = float(ticks[1] - ticks[0]) * toMs;
+    if (ticks[2] >= ticks[1]) lastRaymarchMs = float(ticks[2] - ticks[1]) * toMs;
+}
+
 // drawFrame: Synchronizes execution, records the command buffer, triggers physics compute, and renders
 void VulkanRenderer::drawFrame() {
+    // The fence wait and the image acquire are the two places the CPU parks waiting on something
+    // else. Both are timed and subtracted from the frame's wall clock below, so what is left is the
+    // CPU's own work.
+    const auto waitStart = std::chrono::high_resolution_clock::now();
     vkWaitForFences(context->getDevice(), 1, &inFlightFence, VK_TRUE, UINT64_MAX);
+    gpuBlockedMs = std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - waitStart).count();
+
+    readGpuTimestamps();
+
     vkResetFences(context->getDevice(), 1, &inFlightFence);
 
     // Intercept a UI reset command. Since the Fence confirms the GPU is done reading the SSBO,
@@ -416,13 +503,25 @@ void VulkanRenderer::drawFrame() {
     }
 
     uint32_t imageIndex;
+    const auto acquireStart = std::chrono::high_resolution_clock::now();
     vkAcquireNextImageKHR(context->getDevice(), swapchain->getSwapchain(), UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+    gpuBlockedMs += std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - acquireStart).count();
 
     vkResetCommandBuffer(commandBuffer, 0);
 
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+    // Queries must be reset outside a render pass, and one of the three is written inside one, so
+    // the reset goes here at the top of the buffer rather than next to its writes.
+    if (timestampsSupported) {
+        vkCmdResetQueryPool(commandBuffer, timestampPool, 0, kTimestampCount);
+        // BOTTOM_OF_PIPE throughout: the tick is recorded once everything submitted ahead of it has
+        // finished, which is what makes a pair of them an elapsed time rather than a queue position.
+        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool, 0);
+    }
 
     // Bind pipeline and descriptor sets once for the compute loop
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->getComputePipeline());
@@ -585,6 +684,12 @@ void VulkanRenderer::drawFrame() {
         pc.spawnActive = 0;
     }
 
+    // Closes the compute phase. Sits after the whole simulation-speed loop, so the figure is what
+    // the simulation actually costs this frame at the current speed rather than the cost of one tick.
+    if (timestampsSupported) {
+        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool, 1);
+    }
+
     // Phase 3: Graphics Raymarching
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -602,12 +707,21 @@ void VulkanRenderer::drawFrame() {
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getGraphicsPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
     vkCmdDraw(commandBuffer, 6, 1, 0, 0);
 
+    // Closes the raymarch phase, BEFORE the UI is recorded. The profiler is a few hundred triangles
+    // of its own, and a profiler that counted itself as scene cost would be reporting on the wrong
+    // thing -- worse, its cost would rise with the very graph it was drawing.
+    if (timestampsSupported) {
+        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool, 2);
+    }
+
     // Inject the compiled UI mesh directly into the command buffer after rendering the primary world geometry
     uiManager.recordDrawCommands(commandBuffer);
 
     vkCmdEndRenderPass(commandBuffer);
 
     vkEndCommandBuffer(commandBuffer);
+
+    timestampsPending = timestampsSupported;
 
     // Phase 4: Submit and Present
     VkSubmitInfo submitInfo{};

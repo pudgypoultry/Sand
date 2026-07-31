@@ -170,11 +170,14 @@ public:
         ImGui::Checkbox("Show Profiler", &m_showProfiler);
         ImGui::End();
 
-        if (m_showProfiler) {
-            float currentFrameTime = 1000.0f / ImGui::GetIO().Framerate;
-            m_frameTimeHistory[m_frameTimeHistoryIdx] = currentFrameTime;
-            m_frameTimeHistoryIdx = (m_frameTimeHistoryIdx + 1) % 3600;
+        // Advanced whether or not the panel is open. The cursor is shared with the breakdown series
+        // the renderer writes into, so freezing it while the profiler is hidden would leave those
+        // three piling into one slot and the graph would show a minute of nothing on reopening.
+        const float currentFrameTime = 1000.0f / ImGui::GetIO().Framerate;
+        m_frameTimeHistory[m_historyIdx] = currentFrameTime;
+        m_historyIdx = (m_historyIdx + 1) % kHistoryLength;
 
+        if (m_showProfiler) {
             if (m_firstFrame) {
                 // Pivot (1,0) anchors the window's own top-RIGHT corner to the point given, so it
                 // sits flush against the screen edge without needing to know its own width first.
@@ -189,12 +192,15 @@ public:
             ImGui::PlotLines(
                 "##FrameTimes",
                 m_frameTimeHistory,
-                3600,
-                m_frameTimeHistoryIdx,
+                kHistoryLength,
+                m_historyIdx,
                 "ms / frame",
                 0.0f, FLT_MAX,
                 ImVec2(ImGui::GetContentRegionAvail().x, 80.0f)
             );
+
+            ImGui::Separator();
+            buildFrameBreakdown();
             ImGui::End();
         }
 
@@ -244,6 +250,28 @@ public:
     void setCurrentMaterial(MaterialType type) { m_currentMaterial = type; }
     void setCursorShape(CursorShape shape) { m_cursorShape = shape; }
 
+    // FUNCTION: setFrameTimings
+    // One frame's breakdown, pushed in by the renderer at the end of its loop. Written into the same
+    // ring the frame-time graph uses and sharing its cursor, so the four series line up on one time
+    // axis and one sample column means one frame in all of them.
+    //
+    // The two GPU figures trail the CPU one by a single frame, and there is no way around that: a
+    // frame's timestamps cannot be read until that frame's GPU work has finished, which is after the
+    // point where they would have to be recorded. On a graph where one pixel column already covers a
+    // dozen frames it is far below anything visible, and the averages are unaffected entirely.
+    //
+    // gpuValid is false when the device cannot write timestamps on this queue, in which case the two
+    // GPU series are left flat and the panel says so rather than drawing a pair of convincing zeroes.
+    void setFrameTimings(float cpuMs, float computeMs, float raymarchMs, bool gpuValid) {
+        // The renderer's index is one behind: buildUI advanced the cursor before this frame's work
+        // was measured, so these belong to the slot it just wrote.
+        const int slot = (m_historyIdx + kHistoryLength - 1) % kHistoryLength;
+        m_cpuHistory[slot] = cpuMs;
+        m_computeHistory[slot] = gpuValid ? computeMs : 0.0f;
+        m_raymarchHistory[slot] = gpuValid ? raymarchMs : 0.0f;
+        m_gpuTimingValid = gpuValid;
+    }
+
 private:
     int m_brushSize = 5;
     CursorShape m_cursorShape = CursorShape::Sphere;
@@ -255,8 +283,134 @@ private:
     float m_perspectiveBlend = 1.0f; // 1.0 = perspective (original behavior), 0.0 = orthographic
     bool m_showProfiler = true;
     bool m_firstFrame = true; // drives the one-shot startup window placement in buildUI
-    float m_frameTimeHistory[3600] = { 0.0f };
-    int m_frameTimeHistoryIdx = 0;
+
+    // One minute of history at 60fps. All four series share m_historyIdx so a given index refers to
+    // the same frame in each -- which is what lets them be drawn on one set of axes.
+    static constexpr int kHistoryLength = 3600;
+    float m_frameTimeHistory[kHistoryLength] = { 0.0f };
+    float m_cpuHistory[kHistoryLength] = { 0.0f };
+    float m_computeHistory[kHistoryLength] = { 0.0f };
+    float m_raymarchHistory[kHistoryLength] = { 0.0f };
+    int m_historyIdx = 0;
+    bool m_gpuTimingValid = false;
+
+    // Red CPU, green compute, blue raymarch. Lifted off pure primaries because a pure blue line on
+    // ImGui's dark frame background is genuinely hard to follow -- the hues are still unmistakably
+    // red/green/blue, just raised to where all three read at one pixel wide.
+    static ImU32 cpuColor()      { return IM_COL32(240,  80,  80, 255); }
+    static ImU32 computeColor()  { return IM_COL32( 90, 215,  95, 255); }
+    static ImU32 raymarchColor() { return IM_COL32( 95, 160, 255, 255); }
+
+    // FUNCTION: seriesAverage
+    // Mean over the whole ring. Averaged rather than sampled because the per-frame figures are noisy
+    // enough that a live readout of the latest value is unreadable -- it flickers through a range
+    // wider than the differences the panel exists to show.
+    static float seriesAverage(const float* series) {
+        float sum = 0.0f;
+        for (int i = 0; i < kHistoryLength; i++) sum += series[i];
+        return sum / float(kHistoryLength);
+    }
+
+    // FUNCTION: plotSeries
+    // Draws one series into an already-reserved rect, downsampled to one point per pixel column.
+    //
+    // The reducer is max, not mean: this is a profiler, and a stall that lasts three frames out of
+    // sixty is exactly what someone reads this graph to find. Averaging into the bucket would smooth
+    // that spike into the noise floor and hide the thing worth seeing.
+    void plotSeries(ImDrawList* drawList, const float* series, ImU32 color,
+                    ImVec2 topLeft, ImVec2 size, float scaleMax) const {
+        const int columns = std::max(1, std::min(int(size.x), kHistoryLength));
+        std::vector<ImVec2> points;
+        points.reserve(columns);
+
+        for (int c = 0; c < columns; c++) {
+            const int from = (c * kHistoryLength) / columns;
+            const int to = std::max(from + 1, ((c + 1) * kHistoryLength) / columns);
+
+            float peak = 0.0f;
+            for (int i = from; i < to; i++) {
+                // Oldest sample sits at the write cursor, so the ring unrolls from there.
+                peak = std::max(peak, series[(m_historyIdx + i) % kHistoryLength]);
+            }
+
+            const float x = topLeft.x + (size.x * float(c)) / float(columns - 1 > 0 ? columns - 1 : 1);
+            const float y = topLeft.y + size.y * (1.0f - std::clamp(peak / scaleMax, 0.0f, 1.0f));
+            points.push_back(ImVec2(x, y));
+        }
+
+        drawList->AddPolyline(points.data(), int(points.size()), color, 0, 1.5f);
+    }
+
+    // FUNCTION: buildFrameBreakdown
+    // The three-line graph: where a frame's work actually goes.
+    //
+    // Drawn by hand rather than with PlotLines because PlotLines takes one series per widget and
+    // stacks them vertically -- three separate graphs with three independent vertical scales, which
+    // is precisely the comparison this is meant to make possible. One shared scale is the point.
+    //
+    // The three do NOT sum to the frame time, and the panel says so. CPU work overlaps the GPU work
+    // of the previous frame, and under vsync the rest of the frame is spent waiting on the presenter;
+    // treating these as slices of a pie would be wrong. They are three measured durations.
+    void buildFrameBreakdown() {
+        ImGui::Text("Frame Breakdown:");
+
+        const float cpuAvg = seriesAverage(m_cpuHistory);
+        const float computeAvg = seriesAverage(m_computeHistory);
+        const float raymarchAvg = seriesAverage(m_raymarchHistory);
+
+        ImGui::TextColored(ImColor(cpuColor()), "CPU              %6.3f ms", cpuAvg);
+        if (m_gpuTimingValid) {
+            ImGui::TextColored(ImColor(computeColor()),  "Compute shader   %6.3f ms", computeAvg);
+            ImGui::TextColored(ImColor(raymarchColor()), "Fragment shader  %6.3f ms", raymarchAvg);
+        } else {
+            ImGui::TextDisabled("Compute shader      n/a");
+            ImGui::TextDisabled("Fragment shader     n/a");
+            ImGui::TextDisabled("(GPU timestamps unsupported on this queue)");
+        }
+
+        // Scale to the tallest peak anywhere in the window so all three share one axis. The 0.1 ms
+        // floor stops an idle frame from magnifying rounding noise into a full-height sawtooth.
+        float scaleMax = 0.1f;
+        for (int i = 0; i < kHistoryLength; i++) {
+            scaleMax = std::max(scaleMax, m_cpuHistory[i]);
+            scaleMax = std::max(scaleMax, m_computeHistory[i]);
+            scaleMax = std::max(scaleMax, m_raymarchHistory[i]);
+        }
+
+        const ImVec2 size(ImGui::GetContentRegionAvail().x, 80.0f);
+        const ImVec2 topLeft = ImGui::GetCursorScreenPos();
+        // Reserves the rect and consumes the input over it, so the graph occupies real layout space
+        // and the window's auto-sizing accounts for it.
+        ImGui::InvisibleButton("##breakdown", size);
+        const ImVec2 bottomRight(topLeft.x + size.x, topLeft.y + size.y);
+
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        drawList->AddRectFilled(topLeft, bottomRight, ImGui::GetColorU32(ImGuiCol_FrameBg));
+        drawList->PushClipRect(topLeft, bottomRight, true);
+
+        plotSeries(drawList, m_cpuHistory, cpuColor(), topLeft, size, scaleMax);
+        if (m_gpuTimingValid) {
+            plotSeries(drawList, m_computeHistory, computeColor(), topLeft, size, scaleMax);
+            plotSeries(drawList, m_raymarchHistory, raymarchColor(), topLeft, size, scaleMax);
+        }
+
+        drawList->PopClipRect();
+
+        ImGui::Text("scale 0 - %.2f ms", scaleMax);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "Three measured durations, not a division of the frame.\n\n"
+                "CPU excludes time parked waiting on the GPU or the presenter,\n"
+                "so it means work done rather than time elapsed. The two GPU\n"
+                "figures come from timestamps around the dispatch loop and the\n"
+                "raymarch draw; the UI itself is recorded after the last one and\n"
+                "is not counted. They do not sum to the frame time -- CPU work\n"
+                "overlaps the previous frame's GPU work, and under vsync the\n"
+                "remainder is spent waiting on the display.");
+        }
+    }
 
     void handleShortcuts() {
         if (ImGui::GetIO().WantTextInput) return;
