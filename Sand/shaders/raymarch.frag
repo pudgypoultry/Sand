@@ -10,7 +10,8 @@ layout(std430, binding = 0) readonly buffer VoxelGrid {
 // Must stay byte-identical to the SimStats block in falling_sand.comp, and BH_INDEX_MASK must match
 // the slot encoding used there.
 const int BLACK_HOLE_MAX = 8;
-const uint BH_INDEX_MASK = 0x7FFFFFFFu;
+const uint BH_INDEX_MASK = 0x001FFFFFu;
+const uint BH_PURGE = 0x40000000u;
 
 layout(std430, binding = 1) buffer SimStats {
     uint waterVoxelCount;
@@ -70,6 +71,12 @@ layout(std140, binding = 2) uniform TuningParams {
     uint blackHoleMaxLevel;
     uint blackHoleStarveGrace;
     uint blackHoleDecayRate;
+    uint purgeLevel;
+    uint purgeMass;
+    uint purgeStarveGrace;
+    uint purgeDecayRate;
+    float purgeOrbitSpeed;
+    float purgeInfall;
     float waterShadowTransmit;
     float waterWaveStrength;
     float waterWaveScale;
@@ -906,7 +913,12 @@ void main() {
             uint code = blackHoles[i];
             if (code == 0u) continue;
 
-            float bodyRadius = bhBodyRadius(bhLevel(blackHoleMass[i]));
+            // Purge holes size straight off their remaining mass rather than the growth curve, so
+            // they shrink as a smooth ramp. Must match bhLevelFor in falling_sand.comp.
+            uint bodyLevel = ((code & BH_PURGE) != 0u)
+                ? uint(float(tuning.purgeLevel) * clamp(float(blackHoleMass[i]) / float(max(tuning.purgeMass, 1u)), 0.0f, 1.0f))
+                : bhLevel(blackHoleMass[i]);
+            float bodyRadius = bhBodyRadius(bodyLevel);
             // +0.5 puts the centre at the middle of its voxel rather than its min corner, so the
             // ball is concentric with the region the physics clears.
             vec3 center = vec3(bhDecode(code)) + vec3(0.5f);

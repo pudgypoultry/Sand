@@ -22,6 +22,7 @@ private:
     void cleanup();
 
     void seedParticles();
+    void beginPurge();
     void createFramebuffers();
     void createDescriptorSet();
     void createCommandPoolAndBuffer();

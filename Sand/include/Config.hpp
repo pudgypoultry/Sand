@@ -109,6 +109,31 @@ struct TuningParams {
     uint32_t blackHoleMaxLevel = 8;     // 8 -> a 17-voxel-wide body at full size
     uint32_t blackHoleStarveGrace = 300; // dispatches with nothing captured before decay starts
     uint32_t blackHoleDecayRate = 1;     // mass shed per dispatch once starving
+    // --- Purge (the Clear Grid button) ---
+    // Clear Grid does not wipe the grid. It resets the sky, then drops one enormous black hole at the
+    // centre with unlimited reach, and lets it eat the world. It is an ordinary hole flagged in the
+    // table rather than a new material: everything that makes it different is a property of the HOLE
+    // -- its reach, its size, how fast it gives up -- not of the voxel, so a separate block type
+    // would have meant duplicating the orbit and void machinery to change three numbers.
+    //
+    // Its ending is free. A hole that captures nothing already starves, shrinks and removes itself,
+    // which is exactly "once nothing remains, shrink and disappear" -- so the purge only needs a much
+    // shorter fuse and a much faster burn than a normal hole, not new logic.
+    //
+    // Size is taken straight from mass/purgeMass rather than from the growth curve, so the shrink is
+    // a smooth ramp to nothing and neither shader has to re-derive the volume formula.
+    uint32_t purgeLevel = 10;        // body radius at full mass -- 10 is 21 voxels across
+    uint32_t purgeMass = 10000;      // starting mass, and the divisor the size ramp is measured against
+    uint32_t purgeStarveGrace = 30;  // dispatches with nothing left to catch before it starts shrinking
+    uint32_t purgeDecayRate = 200;   // mass shed per dispatch while shrinking; 10000/200 = ~0.8s
+    // The purge hole cannot use the normal orbit tuning. Those numbers are chosen so a captured
+    // stream takes many revolutions to come in, which is right for a hole you placed on purpose and
+    // badly wrong for a button that is supposed to clear the grid: at speed 2.2 / infall 0.16 a voxel
+    // in the far corner needs about 2100 ticks, i.e. 35 seconds. These bring that to ~3.5 seconds
+    // while still spending half of every move going sideways, so it visibly swirls in rather than
+    // collapsing straight to the centre.
+    float purgeOrbitSpeed = 8.0f;
+    float purgeInfall = 0.5f;
     // --- Water shadows ---
     // Fraction of light that survives crossing one water voxel on a shadow ray. Water used to block
     // shadow rays outright like any solid, and that hard binary test -- not the surface normal -- was

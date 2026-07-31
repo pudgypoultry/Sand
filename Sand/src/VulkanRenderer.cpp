@@ -10,7 +10,17 @@
 // blackHoleCount, then three BLACK_HOLE_MAX-sized arrays (table slots, swallowed-voxel counts,
 // starvation clocks). Must match the SimStats block declared in falling_sand.comp and raymarch.frag.
 static constexpr uint32_t BLACK_HOLE_MAX = 8;
-static constexpr uint32_t SIM_STATS_FIELDS = 9 + 1 + 3 * BLACK_HOLE_MAX;
+static constexpr uint32_t SIM_STATS_CLOUD_FIELDS = 9;               // waterVoxelCount .. cloudChargeBits
+static constexpr uint32_t SIM_STATS_COUNT = SIM_STATS_CLOUD_FIELDS; // blackHoleCount
+static constexpr uint32_t SIM_STATS_HOLES = SIM_STATS_COUNT + 1;    // blackHoles[]
+static constexpr uint32_t SIM_STATS_MASS = SIM_STATS_HOLES + BLACK_HOLE_MAX;
+static constexpr uint32_t SIM_STATS_STARVE = SIM_STATS_MASS + BLACK_HOLE_MAX;
+static constexpr uint32_t SIM_STATS_FIELDS = SIM_STATS_STARVE + BLACK_HOLE_MAX;
+
+// Black hole table slot encoding. Must match the constants in falling_sand.comp.
+static constexpr uint32_t BH_ACTIVE = 0x80000000u;
+static constexpr uint32_t BH_PURGE = 0x40000000u;
+static constexpr uint32_t BH_INDEX_MASK = 0x001FFFFFu;
 
 // Constructor: Initializes the managed architecture instances
 VulkanRenderer::VulkanRenderer() {
@@ -184,6 +194,49 @@ void VulkanRenderer::seedParticles() {
     std::cout << "Seeded initial empty grid to GPU!\n";
 }
 
+// beginPurge: What "Clear Grid" does now. Resets the sky immediately, then drops one enormous black
+// hole at the centre of the grid and lets it eat everything.
+//
+// Safe to touch the buffers directly from here: the caller has already waited on the frame fence, so
+// the GPU is idle, which is the same guarantee seedParticles relies on.
+//
+// Nothing here schedules the ending. The hole is flagged BH_PURGE and the simulation's existing
+// starvation path does the rest -- a hole that catches nothing shrinks and deletes itself, which is
+// already exactly the behaviour wanted, just with a shorter fuse and a faster burn.
+void VulkanRenderer::beginPurge() {
+    uint32_t* stats = static_cast<uint32_t*>(steamCounterBuffer->mapMemory());
+    uint32_t* grid = static_cast<uint32_t*>(ssboBuffer->mapMemory());
+
+    // Any hole already in the table is removed first, voxel as well as slot. Black holes are the one
+    // thing the purge hole cannot eat -- capture skips type 7 so they would otherwise sit untouched
+    // through a Clear Grid and be the only survivors.
+    for (uint32_t i = 0; i < BLACK_HOLE_MAX; i++) {
+        uint32_t code = stats[SIM_STATS_HOLES + i];
+        if (code != 0u) grid[code & BH_INDEX_MASK] = 0u;
+        stats[SIM_STATS_HOLES + i] = 0u;
+        stats[SIM_STATS_MASS + i] = 0u;
+        stats[SIM_STATS_STARVE + i] = 0u;
+    }
+
+    // Sky back to base. Zeroing waterHighMark here matters beyond tidiness: the purge is about to
+    // destroy every water voxel in the world, and a high mark left standing would read as an
+    // enormous permanent deficit afterwards and open a storm over an empty grid.
+    for (uint32_t i = 0; i < SIM_STATS_CLOUD_FIELDS; i++) stats[i] = 0u;
+
+    const uint32_t centre = (GRID_SIZE / 2) + (GRID_SIZE / 2) * GRID_SIZE + (GRID_SIZE / 2) * GRID_SIZE * GRID_SIZE;
+    grid[centre] = 7u; // pack(BlackHole, 0, 0, 0)
+
+    stats[SIM_STATS_HOLES] = BH_ACTIVE | BH_PURGE | centre;
+    stats[SIM_STATS_MASS] = config.tuning.purgeMass;
+    stats[SIM_STATS_STARVE] = 0u;
+    stats[SIM_STATS_COUNT] = 1u;
+
+    ssboBuffer->unmapMemory();
+    steamCounterBuffer->unmapMemory();
+
+    std::cout << "Purge started: one black hole at the centre, eating the world.\n";
+}
+
 // createFramebuffers: Connects swapchain image views to the render pass format
 void VulkanRenderer::createFramebuffers() {
     const auto& imageViews = swapchain->getImageViews();
@@ -324,7 +377,7 @@ void VulkanRenderer::drawFrame() {
     // Intercept a UI reset command. Since the Fence confirms the GPU is done reading the SSBO,
     // we can safely execute a memory wipe from the CPU before passing the SSBO back to the compute shader.
     if (uiManager.consumeResetRequest()) {
-        seedParticles();
+        beginPurge();
     }
 
     if (uiManager.consumeCameraResetRequest()) {

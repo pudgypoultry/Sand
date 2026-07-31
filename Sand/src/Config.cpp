@@ -110,6 +110,12 @@ Config loadConfig(const std::string& path) {
     config.tuning.blackHoleMaxLevel = getUint(values, "blackhole.max_level", config.tuning.blackHoleMaxLevel);
     config.tuning.blackHoleStarveGrace = getUint(values, "blackhole.starve_grace", config.tuning.blackHoleStarveGrace);
     config.tuning.blackHoleDecayRate = getUint(values, "blackhole.decay_rate", config.tuning.blackHoleDecayRate);
+    config.tuning.purgeLevel = getUint(values, "purge.level", config.tuning.purgeLevel);
+    config.tuning.purgeMass = getUint(values, "purge.mass", config.tuning.purgeMass);
+    config.tuning.purgeStarveGrace = getUint(values, "purge.starve_grace", config.tuning.purgeStarveGrace);
+    config.tuning.purgeDecayRate = getUint(values, "purge.decay_rate", config.tuning.purgeDecayRate);
+    config.tuning.purgeOrbitSpeed = getFloat(values, "purge.orbit_speed", config.tuning.purgeOrbitSpeed);
+    config.tuning.purgeInfall = getFloat(values, "purge.infall", config.tuning.purgeInfall);
     config.tuning.waterShadowTransmit = getFloat(values, "water.shadow_transmit", config.tuning.waterShadowTransmit);
     config.tuning.waterWaveStrength = getFloat(values, "water.wave_strength", config.tuning.waterWaveStrength);
     config.tuning.waterWaveScale = getFloat(values, "water.wave_scale", config.tuning.waterWaveScale);

@@ -186,3 +186,34 @@ lava.rest_cool_chance=0.01
 lava.consume_chance=0.05
 lava.ignite_chance=0.2
 lava.dark_stone_dry_chance=0.002
+
+# --- Purge (the Clear Grid button) ---
+# Clear Grid does not wipe the grid. It resets the sky to its base state, then drops one enormous
+# black hole at the centre with unlimited reach and lets it eat the world.
+#
+# It is an ordinary black hole with a flag set in the table, not a new material. Everything that
+# makes it different belongs to the HOLE -- reach, size, how fast it gives up -- rather than to the
+# voxel, so a separate block type would have meant duplicating the orbit and void machinery in order
+# to change three numbers. Its ending comes for free too: a hole that catches nothing already
+# starves, shrinks and deletes itself, which is exactly the requested behaviour, so the purge needs
+# only a shorter fuse and a faster burn.
+#   level        = body radius at full mass. 10 is a ball 21 voxels across.
+#   mass         = starting mass, and the divisor the shrink ramp is measured against. Size is
+#                  mass/purge.mass of level, so it melts away smoothly rather than stepping down
+#                  through the normal growth stages.
+#   starve_grace = dispatches with nothing left to catch before it begins shrinking. Short, because
+#                  by then the world is already gone and the pause is dead time.
+#   decay_rate   = mass shed per dispatch while shrinking. mass/decay_rate dispatches to vanish, so
+#                  10000/200 is about 0.8 seconds at sim speed 1.
+purge.level=10
+purge.mass=10000
+purge.starve_grace=30
+purge.decay_rate=200
+#   orbit_speed / infall = the purge hole's own pull, because the normal values are wrong for it.
+#                  Those are tuned so a captured stream takes many revolutions to come in, which is
+#                  right for a hole you placed deliberately and badly wrong for a Clear Grid button:
+#                  at 2.2 / 0.16 a voxel in the far corner needs ~2100 ticks, about 35 seconds. At
+#                  8.0 / 0.5 it is ~3.5 seconds, and half of every move is still sideways so the
+#                  world visibly swirls in instead of collapsing straight to the middle.
+purge.orbit_speed=8.0
+purge.infall=0.5

@@ -73,6 +73,12 @@ layout(std140, binding = 2) uniform TuningParams {
     uint blackHoleMaxLevel;
     uint blackHoleStarveGrace;
     uint blackHoleDecayRate;
+    uint purgeLevel;
+    uint purgeMass;
+    uint purgeStarveGrace;
+    uint purgeDecayRate;
+    float purgeOrbitSpeed;
+    float purgeInfall;
     float waterShadowTransmit;
     float waterWaveStrength; // render-only; declared here to keep the shared UBO layouts identical
     float waterWaveScale;
@@ -222,6 +228,18 @@ uint lavaSpawnCoolness(uint type) {
 void incWater() { atomicAdd(waterVoxelCount, 1u); }
 void decWater() { atomicAdd(waterVoxelCount, 0xFFFFFFFFu); }
 
+// FUNCTION: decWaterHighMark
+// Saturating decrement of the rain target, used whenever water leaves the world for good.
+//
+// It has to saturate. atomicAdd has no signed form so the idiom is to add -1 under modular
+// arithmetic, and that silently turns 0 into four billion -- a high mark the level can never reach,
+// read as a permanent enormous deficit that the sky would then chase forever. Undoing the borrow
+// when it happens is cheaper than a CAS loop and is itself race-safe, since every invocation that
+// observes the underflow applies the same correction.
+void decWaterHighMark() {
+    if (atomicAdd(waterHighMark, 0xFFFFFFFFu) == 0u) atomicAdd(waterHighMark, 1u);
+}
+
 // FUNCTION: getRainThreshold
 // Was a compile-time `const` before its input moved into the TuningParams UBO; GLSL const
 // initializers can't reference a uniform, so it's computed on demand here instead.
@@ -235,13 +253,21 @@ uint getRainThreshold() { return tuning.rainStartLayers * LAYER_SIZE; }
 // free for the flag.
 // =================================================================================================
 const uint BH_ACTIVE = 0x80000000u;
-const uint BH_INDEX_MASK = 0x7FFFFFFFu;
+// 128^3 needs 21 bits, so the index mask is narrowed to exactly that and the freed high bits carry
+// per-hole flags. BH_PURGE marks the one enormous hole the Clear Grid button drops: same voxel, same
+// orbit and void code, but unlimited reach, a size taken straight from its mass, and a much shorter
+// fuse before it gives up and shrinks away.
+const uint BH_INDEX_MASK = 0x001FFFFFu;
+const uint BH_PURGE = 0x40000000u;
 
 // FUNCTION: bhDecode
 ivec3 bhDecode(uint code) {
     uint i = code & BH_INDEX_MASK;
     return ivec3(int(i % uint(WIDTH)), int((i / uint(WIDTH)) % uint(HEIGHT)), int(i / uint(WIDTH * HEIGHT)));
 }
+
+// FUNCTION: bhIsPurge
+bool bhIsPurge(uint code) { return (code & BH_PURGE) != 0u; }
 
 // FUNCTION: bhRegister
 // Claims a slot for a new hole, or reports failure when the table is full -- the caller must not
@@ -290,6 +316,18 @@ uint bhLevel(uint mass) {
         level = l;
     }
     return level;
+}
+
+// FUNCTION: bhLevelFor
+// Body size for a table slot. Normal holes derive it from the growth curve; the purge hole ramps
+// linearly from its starting mass instead, so it melts away smoothly rather than stepping down
+// through the growth stages backwards -- and neither shader has to re-derive a volume formula to
+// know how big it should be drawn.
+uint bhLevelFor(uint code, uint mass) {
+    if (bhIsPurge(code)) {
+        return uint(float(tuning.purgeLevel) * clamp(float(mass) / float(max(tuning.purgeMass, 1u)), 0.0f, 1.0f));
+    }
+    return bhLevel(mass);
 }
 
 // FUNCTION: bhPlaneNormal
@@ -518,7 +556,7 @@ ivec3 dominantAxis(vec3 dir, float relative) {
 // Both are probabilities for the same reason: a move is exactly one voxel, so a step has no room to
 // carry a magnitude. Encoding either as a vector weight instead fails in a way that looks like it
 // works -- see the note on the infall roll below.
-void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, int slot, uint level, float dist, float randVal) {
+void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, int slot, uint level, bool purge, float dist, float randVal) {
     uint type = getType(rawValue);
     uint sleep = getSleep(rawValue);
 
@@ -537,13 +575,17 @@ void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, in
         if (atomicCompSwap(grid[currentIndex], rawValue, 0u) == rawValue) {
             // Credited only on a successful swap, so two invocations racing the same voxel can
             // never both bill it -- the hole's size is a running total and would drift permanently.
-            atomicAdd(blackHoleMass[slot], 1u);
+            //
+            // The purge hole is not credited at all. Its size is a fixed ramp off its starting mass,
+            // and letting it grow on a whole world's worth of matter would leave it enormous with a
+            // correspondingly long shrink, turning a quick flourish into a wait.
+            if (!bhIsPurge(blackHoles[slot])) atomicAdd(blackHoleMass[slot], 1u);
 
             if (type == 2u) {
                 decWater();
                 // A hole keeps what it swallows, so this water can never be rained back. The high
                 // mark has to come down with it, or the sky would open a storm it can never finish.
-                atomicAdd(waterHighMark, 0xFFFFFFFFu);
+                decWaterHighMark();
             }
         }
         return;
@@ -551,7 +593,12 @@ void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, in
 
     // Held but not moving this tick. Sleep is still cleared: the particle skipped its material
     // update, and a stale sleep counter would leave it frozen once it drifts back out of range.
-    if (randVal > clamp(tuning.blackHoleOrbitSpeed / sqrt(max(dist, 1.0f)), 0.0f, 1.0f)) {
+    // The purge hole pulls on its own terms -- see the note in Config.hpp; the normal figures would
+    // make clearing the grid a 35 second wait.
+    float orbitSpeed = purge ? tuning.purgeOrbitSpeed : tuning.blackHoleOrbitSpeed;
+    float infallChance = purge ? tuning.purgeInfall : tuning.blackHoleInfall;
+
+    if (randVal > clamp(orbitSpeed / sqrt(max(dist, 1.0f)), 0.0f, 1.0f)) {
         if (sleep != 0u) {
             atomicCompSwap(grid[currentIndex], rawValue, pack(type, getDir(rawValue), 0u, getAge(rawValue)));
         }
@@ -597,7 +644,7 @@ void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, in
     // to lock into: decay becomes reliable at every radius, and a particle from r=28 reaches the
     // horizon in ~460 steps. It also mirrors how orbital SPEED is handled a few lines up, for the
     // same underlying reason -- a one-voxel step has no room to carry a magnitude.
-    bool pullIn = fract(randVal * 61.0f) < clamp(tuning.blackHoleInfall, 0.0f, 1.0f);
+    bool pullIn = fract(randVal * 61.0f) < clamp(infallChance, 0.0f, 1.0f);
 
     // Still mostly sideways when it does fall, so infall reads as the spiral tightening rather than
     // the particle abruptly dropping out of its orbit.
@@ -634,6 +681,7 @@ bool captureByBlackHole(ivec3 pos, uint currentIndex, uint rawValue, float randV
     ivec3 bestCenter = ivec3(0);
     int bestSlot = -1;
     uint bestLevel = 0u;
+    bool bestPurge = false;
 
     // Widest reach any hole could possibly have. Every solid voxel in the grid runs this loop every
     // dispatch, so the distance test has to come BEFORE bhLevel -- deriving a level per slot per
@@ -649,24 +697,30 @@ bool captureByBlackHole(ivec3 pos, uint currentIndex, uint rawValue, float randV
         ivec3 center = bhDecode(code);
         vec3 d = vec3(center - pos);
         float distSq = dot(d, d);
-        if (distSq > maxRadiusSq || distSq >= bestDistSq) continue;
+
+        // The purge hole is exempt from the cheap pre-reject: its whole job is to reach every voxel
+        // in the grid at once, so there is no radius to reject against.
+        bool purge = bhIsPurge(code);
+        if (!purge && (distSq > maxRadiusSq)) continue;
+        if (distSq >= bestDistSq) continue;
 
         // Reach grows with the body, one voxel per level, so a hole that has eaten a dune pulls on
         // a wider field than the pinprick it started as.
-        uint level = bhLevel(blackHoleMass[i]);
-        float radius = float(tuning.blackHoleRadius + level);
+        uint level = bhLevelFor(code, blackHoleMass[i]);
+        float radius = purge ? 1.0e9f : float(tuning.blackHoleRadius + level);
 
         if (distSq <= radius * radius) {
             bestDistSq = distSq;
             bestCenter = center;
             bestSlot = i;
             bestLevel = level;
+            bestPurge = purge;
         }
     }
 
     if (bestSlot < 0) return false;
 
-    updateOrbital(pos, currentIndex, rawValue, bestCenter, bestSlot, bestLevel, sqrt(bestDistSq), randVal);
+    updateOrbital(pos, currentIndex, rawValue, bestCenter, bestSlot, bestLevel, bestPurge, sqrt(bestDistSq), randVal);
     return true;
 }
 
@@ -1533,7 +1587,14 @@ void updateSimState() {
         uint starve = blackHoleStarve[i] + 1u;
         blackHoleStarve[i] = starve;
 
-        if (starve > tuning.blackHoleStarveGrace) {
+        // The purge hole runs the identical starve-shrink-vanish path, just far faster. That path is
+        // already exactly "once there is nothing left to catch, shrink and disappear", so the purge
+        // needed no ending of its own -- only a shorter fuse and a bigger burn.
+        bool purge = bhIsPurge(code);
+        uint grace = purge ? tuning.purgeStarveGrace : tuning.blackHoleStarveGrace;
+        uint decay = purge ? tuning.purgeDecayRate : tuning.blackHoleDecayRate;
+
+        if (starve > grace) {
             uint mass = blackHoleMass[i];
             if (mass == 0u) {
                 // Nothing left to shed and nothing coming in: the hole evaporates. Clearing the
@@ -1543,7 +1604,7 @@ void updateSimState() {
                 blackHoles[i] = 0u;
                 continue;
             }
-            blackHoleMass[i] = mass - min(mass, tuning.blackHoleDecayRate);
+            blackHoleMass[i] = mass - min(mass, decay);
         }
 
         live++;
@@ -1700,7 +1761,7 @@ void main() {
                     decWater();
                     // Lower the target too: erasing water by hand is intentional, so it must not
                     // register as a deficit that the sky then spends a storm trying to refill.
-                    atomicAdd(waterHighMark, 0xFFFFFFFFu);
+                    decWaterHighMark();
                 }
                 if (oldType == 7u) bhRelease(pos);
                 if (newType == 2u) incWater();
