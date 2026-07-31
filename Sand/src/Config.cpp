@@ -113,6 +113,15 @@ Config loadConfig(const std::string& path) {
     config.tuning.waterWaveStrength = getFloat(values, "water.wave_strength", config.tuning.waterWaveStrength);
     config.tuning.waterWaveScale = getFloat(values, "water.wave_scale", config.tuning.waterWaveScale);
     config.tuning.waterWaveSpeed = getFloat(values, "water.wave_speed", config.tuning.waterWaveSpeed);
+    config.tuning.lavaStageSize = getUint(values, "lava.stage_size", config.tuning.lavaStageSize);
+    config.tuning.lavaViscosity = getFloat(values, "lava.viscosity", config.tuning.lavaViscosity);
+    config.tuning.lavaSpreadRadius = getUint(values, "lava.spread_radius", config.tuning.lavaSpreadRadius);
+    config.tuning.lavaWaterCool = getUint(values, "lava.water_cool", config.tuning.lavaWaterCool);
+    config.tuning.lavaMoistureCool = getUint(values, "lava.moisture_cool", config.tuning.lavaMoistureCool);
+    config.tuning.lavaRestCoolChance = getFloat(values, "lava.rest_cool_chance", config.tuning.lavaRestCoolChance);
+    config.tuning.lavaConsumeChance = getFloat(values, "lava.consume_chance", config.tuning.lavaConsumeChance);
+    config.tuning.lavaIgniteChance = getFloat(values, "lava.ignite_chance", config.tuning.lavaIgniteChance);
+    config.tuning.darkStoneDryChance = getFloat(values, "lava.dark_stone_dry_chance", config.tuning.darkStoneDryChance);
 
     return config;
 }

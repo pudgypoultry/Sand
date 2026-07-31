@@ -73,6 +73,15 @@ layout(std140, binding = 2) uniform TuningParams {
     float waterWaveStrength;
     float waterWaveScale;
     float waterWaveSpeed;
+    uint lavaStageSize;
+    float lavaViscosity;
+    uint lavaSpreadRadius;
+    uint lavaWaterCool;
+    uint lavaMoistureCool;
+    float lavaRestCoolChance;
+    float lavaConsumeChance;
+    float lavaIgniteChance;
+    float darkStoneDryChance;
 } tuning;
 
 layout(push_constant) uniform Constants {
@@ -416,6 +425,39 @@ vec3 renderFire(uint rawVoxel, ivec3 voxelPos) {
     
     vec3 fireColor = mix(coreColor, edgeColor, life + noise * 0.3f);
     return fireColor * 1.5f; 
+}
+
+// FUNCTION: renderLava
+// Emissive, like fire and unlike every lit material: molten rock is a light source, and running it
+// through baseLighting would leave the shaded side of a lava flow looking like wet clay.
+//
+// Colour and brightness both come off the same coolness byte the simulation uses, so the four stage
+// types never have to agree with a separate palette -- a voxel's look and its remaining life are
+// literally the same number. Brightness falls much faster than hue, which is what sells cooling:
+// the crust goes dull well before it stops being red.
+vec3 renderLava(uint rawVoxel, ivec3 voxelPos) {
+    float solidify = max(float(tuning.lavaStageSize) * 4.0f, 1.0f);
+    float t = clamp(float((rawVoxel >> 24) & 0xFFu) / solidify, 0.0f, 1.0f);
+
+    vec3 hot  = vec3(1.00f, 0.86f, 0.42f);
+    vec3 mid  = vec3(1.00f, 0.36f, 0.06f);
+    vec3 cold = vec3(0.32f, 0.08f, 0.05f);
+    vec3 baseColor = (t < 0.5f) ? mix(hot, mid, t * 2.0f) : mix(mid, cold, (t - 0.5f) * 2.0f);
+
+    // A slow crust flicker, seeded per voxel so neighbours are not in lockstep. Scaled down as it
+    // cools, so nearly-solid lava stops shimmering rather than twinkling until the instant it turns.
+    float flicker = hash(vec3(voxelPos) + vec3(floor(pc.time * 3.0f))) * 0.16f * (1.0f - t);
+    return baseColor * (mix(2.0f, 0.5f, t) + flicker);
+}
+
+// FUNCTION: renderDarkStone
+// Cooled lava. Lit like ordinary stone but much darker and faintly warm-tinted, so a solidified flow
+// still reads as having come from somewhere rather than looking like ordinary rock that was always
+// there.
+vec3 renderDarkStone(ivec3 voxelPos, vec3 baseLighting) {
+    float noise = hash(vec3(voxelPos));
+    float val = 0.10f + noise * 0.06f;
+    return vec3(val * 1.08f, val * 0.94f, val * 0.92f) * baseLighting;
 }
 
 // FUNCTION: renderSteam
@@ -789,6 +831,15 @@ void main() {
             case 6u:
                 finalVoxelColor = renderSteam(voxelPos, baseLighting);
                 break;
+            case 8u:
+            case 9u:
+            case 10u:
+            case 11u:
+                finalVoxelColor = renderLava(hitRawVoxel, voxelPos);
+                break;
+            case 12u:
+                finalVoxelColor = renderDarkStone(voxelPos, baseLighting);
+                break;
             // No case for type 7: the march above never reports a black hole voxel as a hit, because
             // the body is drawn as a ball further down rather than as the voxel it is anchored to.
             default:
@@ -953,6 +1004,12 @@ void main() {
             cursorColor = vec3(0.9f, 0.9f, 0.9f);
         } else if (pc.spawnType == 7) {
             cursorColor = vec3(0.8f, 0.4f, 1.0f);
+        } else if (pc.spawnType >= 8 && pc.spawnType <= 11) {
+            // Walks the same hot-to-cold ramp the blocks themselves use, so the cursor previews
+            // which stage is about to be placed rather than just saying "lava".
+            cursorColor = mix(vec3(1.0f, 0.7f, 0.2f), vec3(0.45f, 0.14f, 0.08f), float(pc.spawnType - 8) / 3.0f);
+        } else if (pc.spawnType == 12) {
+            cursorColor = vec3(0.22f, 0.19f, 0.18f);
         } else {
             cursorColor = vec3(1.0f, 0.9f, 0.2f);
         }

@@ -139,3 +139,42 @@ water.shadow_transmit=0.9
 water.wave_strength=0.9
 water.wave_scale=0.6
 water.wave_speed=0.4
+
+# --- Lava ---
+# Lava carries one number, "coolness", and its whole life is a function of it. Absorbing water raises
+# it, boiling moisture out of soil raises it, and sitting still raises it slowly -- so "cooled because
+# it drank" and "cooled because it sat there" are the same quantity instead of two counters that
+# could disagree. The visual stage (hottest to coldest) is derived from it, and at 4 x stage_size the
+# voxel turns to dark stone.
+#
+# That one number is also what makes the sharing rules work. Lava touching lava and lava touching
+# dark stone are the same one-unit diffusion step, run in whichever direction the gradient points.
+# Dark stone holds a HIGH coolness, so contact drains it toward the lava, and it re-melts the moment
+# contact drags it back under the solidify threshold.
+#   stage_size    = coolness per visual stage. 4x this is where lava becomes dark stone, so raising
+#                   it makes lava live longer at every stage.
+#   viscosity     = chance per tick that lava attempts to move at all. This is what makes it creep
+#                   rather than flow; a one-voxel step cannot carry a speed, so the speed lives in
+#                   how often the step is taken. 1.0 makes it move as freely as water.
+#   spread_radius = how far it looks sideways for somewhere to fall. Water searches up to 128, which
+#                   is what lets water teleport across a basin to level instantly; keeping this small
+#                   is most of what makes lava read as thick.
+#   water_cool    = coolness gained per water voxel flashed to steam. High, because a bucket of
+#                   water should visibly set lava back several stages.
+#   moisture_cool = coolness gained per unit of moisture boiled out of sand or dirt.
+#   rest_cool_chance = chance per tick to cool while settled. This is the clock that turns a still
+#                   lava pool into stone on its own, with no water involved at all.
+#   consume_chance   = chance per tick to eat a neighbour it has already dried out completely.
+#   ignite_chance    = chance per tick to set adjacent grass alight.
+#   dark_stone_dry_chance = chance per tick for dark stone to shed a unit of water. Very low. Drying
+#                   never re-melts stone on its own -- it only makes it easier for lava to reclaim,
+#                   so a lone slab stays stone forever instead of spontaneously turning back.
+lava.stage_size=48
+lava.viscosity=0.25
+lava.spread_radius=6
+lava.water_cool=40
+lava.moisture_cool=2
+lava.rest_cool_chance=0.01
+lava.consume_chance=0.05
+lava.ignite_chance=0.2
+lava.dark_stone_dry_chance=0.002

@@ -122,6 +122,26 @@ struct TuningParams {
     float waterWaveStrength = 0.9f;
     float waterWaveScale = 0.6f;
     float waterWaveSpeed = 0.4f;
+    // --- Lava ---
+    // Lava carries one 8-bit number, "coolness", and everything about its life is a function of it.
+    // Absorbing water raises it, boiling moisture out of soil raises it, and simply sitting still
+    // raises it slowly -- so "cooled because it drank" and "cooled because it sat there" are the same
+    // quantity rather than two counters that could disagree. The visual stage (types 8..11, hottest
+    // to coldest) is derived from it, and at 4 * lavaStageSize the voxel becomes dark stone.
+    //
+    // That single number is also what makes the sharing rules work: lava/lava contact and
+    // lava/dark-stone contact are the same one-unit diffusion step, just in whichever direction the
+    // gradient runs. Stone is hotter-in-reverse -- it holds a high coolness, so contact drains it,
+    // and dark stone re-melts once contact drags it back under the solidify point.
+    uint32_t lavaStageSize = 48;       // coolness per stage; 4x this is the solidify threshold
+    float lavaViscosity = 0.25f;       // chance per tick to attempt a move at all
+    uint32_t lavaSpreadRadius = 6;     // how far it will look sideways for somewhere to fall
+    uint32_t lavaWaterCool = 40;       // coolness gained per water voxel flashed to steam
+    uint32_t lavaMoistureCool = 2;     // coolness gained per unit of soil moisture boiled off
+    float lavaRestCoolChance = 0.01f;  // chance per tick to cool while settled (rule 7's clock)
+    float lavaConsumeChance = 0.05f;   // chance per tick to eat a neighbour it has already dried out
+    float lavaIgniteChance = 0.2f;     // chance per tick to set adjacent grass alight
+    float darkStoneDryChance = 0.002f; // chance per tick for dark stone to shed one unit of water
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

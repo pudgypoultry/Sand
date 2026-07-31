@@ -76,6 +76,15 @@ layout(std140, binding = 2) uniform TuningParams {
     float waterWaveStrength; // render-only; declared here to keep the shared UBO layouts identical
     float waterWaveScale;
     float waterWaveSpeed;
+    uint lavaStageSize;
+    float lavaViscosity;
+    uint lavaSpreadRadius;
+    uint lavaWaterCool;
+    uint lavaMoistureCool;
+    float lavaRestCoolChance;
+    float lavaConsumeChance;
+    float lavaIgniteChance;
+    float darkStoneDryChance;
 } tuning;
 
 const uint LAYER_SIZE = 128u * 128u; // 16384 — one layer
@@ -157,6 +166,46 @@ uint getAge(uint val) {
 // FUNCTION: hash
 float hash(vec3 p) {
     return fract(sin(dot(p, vec3(12.9898f, 78.233f, 45.164f))) * 43758.5453f);
+}
+
+// =================================================================================================
+// LAVA
+//
+// Four voxel types, hottest to coldest, plus dark stone. The stage is NOT independent state: lava
+// stores a single 8-bit "coolness" in its age byte and the type is a denormalised view of it, so
+// the two can never contradict each other. Everything that should cool lava feeds that one number --
+// water flashed to steam, moisture boiled out of soil, and time spent sitting still -- which is what
+// lets "cooled because it drank" and "cooled because it settled" be the same rule rather than two
+// clocks that could disagree.
+//
+// Dark stone keeps the same number, high. That is the whole trick behind the sharing rules: lava
+// meeting lava and lava meeting dark stone are one diffusion step in whichever direction the
+// gradient runs, and stone re-melts exactly when contact drags it back under the solidify point.
+// =================================================================================================
+const uint LAVA_HOTTEST = 8u;
+const uint LAVA_COLDEST = 11u;
+const uint DARK_STONE = 12u;
+
+// FUNCTION: isLava
+bool isLava(uint type) { return type >= LAVA_HOTTEST && type <= LAVA_COLDEST; }
+
+// FUNCTION: lavaSolidifyCoolness
+// Coolness at which lava becomes dark stone: one stage past the coldest, so the four stages divide
+// the run-up evenly and the last one is not a dead band.
+uint lavaSolidifyCoolness() { return min(max(tuning.lavaStageSize, 1u) * 4u, 255u); }
+
+// FUNCTION: lavaTypeFor
+uint lavaTypeFor(uint coolness) {
+    return LAVA_HOTTEST + min(coolness / max(tuning.lavaStageSize, 1u), 3u);
+}
+
+// FUNCTION: lavaSpawnCoolness
+// Seed value for a stage placed straight from the material dropdown. Without it a hand-placed
+// stage-3 voxel would carry coolness 0 and be retyped back to stage 0 on its very first update.
+uint lavaSpawnCoolness(uint type) {
+    if (type == DARK_STONE) return lavaSolidifyCoolness();
+    if (isLava(type)) return (type - LAVA_HOTTEST) * max(tuning.lavaStageSize, 1u);
+    return 0u;
 }
 
 // FUNCTION: incWater / decWater
@@ -1148,6 +1197,205 @@ void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
     atomicCompSwap(grid[currentIndex], rawValue, sleepValue);
 }
 
+// FUNCTION: lavaInteract
+// One pass over the six orthogonal neighbours, acting on the first thing worth acting on and then
+// stopping. Bounded at six reads, and the start direction is randomised so every neighbour gets its
+// turn across a handful of ticks -- the same trick updateSand uses for moisture transfer.
+void lavaInteract(ivec3 pos, inout uint coolness, float randVal) {
+    int startDir = int(fract(randVal * 17.0f) * 6.0f);
+
+    for (int i = 0; i < 6; i++) {
+        int d = (startDir + i) % 6;
+        ivec3 nPos = pos + getOrthoDir(d);
+        if (nPos.x <= 0 || nPos.x >= WIDTH - 1 ||
+            nPos.y <= 0 || nPos.y >= HEIGHT - 1 ||
+            nPos.z <= 0 || nPos.z >= DEPTH - 1) continue;
+
+        uint nIndex = getIndex(nPos);
+        uint nVal = grid[nIndex];
+        uint nType = getType(nVal);
+
+        if (nType == 2u) {
+            // Water flashes straight to steam, and what it cost to boil lands on the lava.
+            if (atomicCompSwap(grid[nIndex], nVal, pack(6u, 0u, 0u, 0u)) == nVal) {
+                decWater();
+                coolness = min(coolness + tuning.lavaWaterCool, 255u);
+                return;
+            }
+        } else if (nType == 1u || nType == 4u) {
+            uint moisture = getAge(nVal);
+            uint flora = getDir(nVal);
+
+            // Grass goes before the soil does. Fire is placed in the air above it rather than the
+            // grass being burned directly, so the existing fire rules carry it from there and lava
+            // does not need its own copy of how burning works.
+            if (nType == 4u && flora > 10u && flora <= 100u) {
+                ivec3 abovePos = nPos + ivec3(0, 1, 0);
+                if (abovePos.y < HEIGHT - 1 && getType(grid[getIndex(abovePos)]) == 0u &&
+                    fract(randVal * 41.0f) < tuning.lavaIgniteChance) {
+                    if (atomicCompSwap(grid[getIndex(abovePos)], 0u, pack(5u, 0u, 0u, 0u)) == 0u) return;
+                }
+            } else if (moisture > 0u) {
+                // Boil it dry before eating it, so waterlogged ground visibly resists for a while.
+                if (atomicCompSwap(grid[nIndex], nVal, pack(nType, flora, 0u, moisture - 1u)) == nVal) {
+                    coolness = min(coolness + tuning.lavaMoistureCool, 255u);
+                    return;
+                }
+            } else if (fract(randVal * 53.0f) < tuning.lavaConsumeChance) {
+                // Dry now, so it goes. Cleared rather than converted: turning it to lava would let
+                // a single voxel eat a dune and multiply itself doing it.
+                if (atomicCompSwap(grid[nIndex], nVal, 0u) == nVal) return;
+            }
+        } else if (isLava(nType)) {
+            // Equalise by moving ONE unit down the gradient rather than assigning both sides the
+            // mean. Both voxels run this independently, and a mean written from two invocations at
+            // once double-counts; a one-way step is monotone, so a race costs a tick rather than
+            // correctness, and repeated steps converge on the mean anyway.
+            uint nCool = getAge(nVal);
+            if (coolness > nCool + 1u) {
+                uint raised = nCool + 1u;
+                uint raisedType = (raised >= lavaSolidifyCoolness()) ? DARK_STONE : lavaTypeFor(raised);
+                if (atomicCompSwap(grid[nIndex], nVal, pack(raisedType, getDir(nVal), 0u, raised)) == nVal) {
+                    coolness -= 1u;
+                    return;
+                }
+            }
+        } else if (nType == DARK_STONE) {
+            // Stone holds a HIGH coolness, so the identical diffusion step simply runs the other way
+            // and lava draws water out of it. The re-melt test lives here, on contact, and not in
+            // the stone's own update: drying alone must never bring a slab back, or an isolated one
+            // would eventually cross the threshold and turn itself into lava unprompted.
+            uint nCool = getAge(nVal);
+            bool draws = (nCool > coolness + 1u);
+            uint lowered = draws ? nCool - 1u : nCool;
+            bool melts = (lowered < lavaSolidifyCoolness());
+
+            if (draws || melts) {
+                uint newType = melts ? lavaTypeFor(lowered) : DARK_STONE;
+                if (atomicCompSwap(grid[nIndex], nVal, pack(newType, 0u, 0u, lowered)) == nVal) {
+                    if (draws) coolness = min(coolness + 1u, 255u);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// FUNCTION: updateLava
+// Water's shape of movement, throttled, wrapped around a cooling life cycle.
+//
+// Unlike water this never sleeps out of its own update. A settled pool still has to keep crusting
+// over, and neighbours still have to keep equalising, so a lava voxel runs every tick until it
+// solidifies. That is self-limiting rather than open-ended: what it is counting down to is becoming
+// dark stone, whose update is almost free.
+void updateLava(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentSleep, uint currentAge, float randVal) {
+    uint coolness = currentAge;
+
+    lavaInteract(pos, coolness, randVal);
+
+    // Time at rest cools it as well, read off the settle counter the movement code already keeps, so
+    // "has stopped moving" and "has begun to crust over" are one fact instead of two clocks.
+    if (currentSleep > tuning.wakeSleepThreshold && fract(randVal * 71.0f) < tuning.lavaRestCoolChance) {
+        coolness = min(coolness + 1u, 255u);
+    }
+
+    if (coolness >= lavaSolidifyCoolness()) {
+        atomicCompSwap(grid[currentIndex], rawValue, pack(DARK_STONE, 0u, 0u, coolness));
+        return;
+    }
+
+    uint newType = lavaTypeFor(coolness);
+
+    // Viscosity is a chance to attempt a move at all, not a shorter move: a step is exactly one
+    // voxel and has no room to carry a rate, so the rate has to live in how often it is taken. Same
+    // reasoning as orbital speed in updateOrbital.
+    if (fract(randVal * 89.0f) < tuning.lavaViscosity) {
+        if (pos.y > 1) {
+            ivec3 belowPos = pos + ivec3(0, -1, 0);
+            if (getType(grid[getIndex(belowPos)]) == 0u) {
+                if (tryMove(currentIndex, rawValue, getIndex(belowPos), pack(newType, currentDir, 0u, coolness))) return;
+            }
+        }
+
+        if (pos.y > 1) {
+            int slideDir = (fract(randVal * 10.0f) > 0.5f) ? 1 : -1;
+            ivec3 slide[2];
+            if (fract(randVal * 100.0f) > 0.5f) {
+                slide[0] = pos + ivec3(slideDir, -1, 0); slide[1] = pos + ivec3(0, -1, slideDir);
+            } else {
+                slide[0] = pos + ivec3(0, -1, slideDir); slide[1] = pos + ivec3(slideDir, -1, 0);
+            }
+            for (int s = 0; s < 2; s++) {
+                ivec3 sPos = slide[s];
+                if (sPos.x > 0 && sPos.x < WIDTH - 1 && sPos.z > 0 && sPos.z < DEPTH - 1) {
+                    if (getType(grid[getIndex(sPos)]) == 0u) {
+                        if (tryMove(currentIndex, rawValue, getIndex(sPos), pack(newType, currentDir, 0u, coolness))) return;
+                    }
+                }
+            }
+        }
+
+        if (currentSleep <= tuning.wakeSleepThreshold) {
+            // Look sideways for somewhere to fall, but only a few cells out. Water searches up to
+            // 128, which is exactly what lets it cross a basin in a single tick; capping the reach
+            // is most of what makes lava read as thick rather than merely slow.
+            uint blockedMask = 0u;
+            int searchStart = int(fract(randVal * 8.0f) * 8.0f);
+            int reach = int(max(tuning.lavaSpreadRadius, 1u));
+
+            for (int r = 1; r <= reach; r++) {
+                if (blockedMask == 255u) break;
+                for (int i = 0; i < 8; i++) {
+                    int d = (searchStart + i) % 8;
+                    if ((blockedMask & (1u << d)) != 0u) continue;
+
+                    ivec3 c = pos + getHDir(d) * r;
+                    if (c.x <= 0 || c.x >= WIDTH - 1 || c.z <= 0 || c.z >= DEPTH - 1 ||
+                        getType(grid[getIndex(c)]) != 0u) {
+                        blockedMask |= (1u << d);
+                    } else if (c.y > 1 && getType(grid[getIndex(c + ivec3(0, -1, 0))]) == 0u) {
+                        if (tryMove(currentIndex, rawValue, getIndex(c), pack(newType, 0u, 0u, coolness))) return;
+                        blockedMask |= (1u << d);
+                    }
+                }
+            }
+
+            // Nowhere to fall, so level out under pressure -- the same condition water settles by,
+            // which is what lets a lava pool find a flat top before it freezes in place.
+            bool hasPressure = (pos.y < HEIGHT - 2) ? (getType(grid[getIndex(pos + ivec3(0, 1, 0))]) != 0u) : false;
+            bool stackedOnLava = (pos.y > 1) ? isLava(getType(grid[getIndex(pos + ivec3(0, -1, 0))])) : false;
+
+            if (hasPressure || stackedOnLava) {
+                int spreadStart = int(fract(randVal * 8.0f) * 8.0f);
+                for (int i = 0; i < 8; i++) {
+                    int d = (spreadStart + i) % 8;
+                    ivec3 targetPos = pos + getHDir(d);
+                    if (targetPos.x > 0 && targetPos.x < WIDTH - 1 && targetPos.z > 0 && targetPos.z < DEPTH - 1) {
+                        if (getType(grid[getIndex(targetPos)]) == 0u) {
+                            if (tryMove(currentIndex, rawValue, getIndex(targetPos), pack(newType, uint(d + 1), 0u, coolness))) return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    uint newSleep = min(currentSleep + 1u, 255u);
+    atomicCompSwap(grid[currentIndex], rawValue, pack(newType, currentDir, newSleep, coolness));
+}
+
+// FUNCTION: updateDarkStone
+// Cooled lava. Inert like stone; the only thing it does is shed the water it trapped, very slowly.
+//
+// It deliberately cannot re-melt itself. Drying only lowers the bar for adjacent lava to reclaim it
+// (see the DARK_STONE branch of lavaInteract). Were the melt test here instead, an isolated slab
+// would dry past the threshold on its own and turn back into lava with nothing having melted it.
+void updateDarkStone(uint currentIndex, uint rawValue, uint currentAge, float randVal) {
+    if (currentAge > 0u && fract(randVal * 23.0f) < tuning.darkStoneDryChance) {
+        atomicCompSwap(grid[currentIndex], rawValue, pack(DARK_STONE, 0u, 0u, currentAge - 1u));
+    }
+}
+
 // FUNCTION: updateFire
 void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentSleep, uint currentAge, float randVal) {
     uint newAge = currentAge + 1u;
@@ -1438,7 +1686,10 @@ void main() {
                 if (newType == 2u) incWater();
             }
 
-            grid[spawnIndex] = pack(newType, 0u, 0u, 0u);
+            // Lava stages and dark stone are views of a coolness value, so a hand-placed voxel has
+            // to be seeded with one. Without it a stage-3 lava dropped from the dropdown would carry
+            // coolness 0 and be retyped straight back to stage 0 on its first update.
+            grid[spawnIndex] = pack(newType, 0u, 0u, lavaSpawnCoolness(newType));
 
             if (newType == 7u) {
                 // The voxel is published BEFORE the slot is claimed, and the barrier is what makes
@@ -1538,6 +1789,15 @@ void main() {
             break;
         case 6u:
             updateSteam(pos, currentIndex, rawValue, currentSleep, currentAge, randVal);
+            break;
+        case 8u:
+        case 9u:
+        case 10u:
+        case 11u:
+            updateLava(pos, currentIndex, rawValue, currentDir, currentSleep, currentAge, randVal);
+            break;
+        case 12u:
+            updateDarkStone(currentIndex, rawValue, currentAge, randVal);
             break;
         default:
             break;

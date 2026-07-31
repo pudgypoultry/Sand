@@ -20,7 +20,15 @@ enum class MaterialType {
     Dirt = 4,
     Fire = 5,
     Steam = 6,
-    BlackHole = 7
+    BlackHole = 7,
+    // Four views of one coolness value rather than four independent materials -- see the LAVA block
+    // in falling_sand.comp. Only LavaHottest is meant to be placed in normal play; the cooler stages
+    // are exposed in the dropdown for testing a flow partway through its life.
+    LavaHottest = 8,
+    LavaHot = 9,
+    LavaWarm = 10,
+    LavaCooling = 11,
+    DarkStone = 12
 };
 
 enum class CursorShape {
@@ -114,7 +122,10 @@ public:
         // font sizes so it holds up if the font or DPI scale changes.
         ImGui::PushItemWidth(ImGui::GetFontSize() * 10.0f);
 
-        const char* items[] = { "Void", "Sand", "Water", "Stone", "Dirt", "Fire", "Steam", "Black Hole" };
+        // Index must line up with MaterialType -- these are parallel lists with nothing tying them
+        // together at compile time, so a gap here silently places the wrong block.
+        const char* items[] = { "Void", "Sand", "Water", "Stone", "Dirt", "Fire", "Steam", "Black Hole",
+                                "Lava", "Lava (Hot)", "Lava (Warm)", "Lava (Cooling)", "Dark Stone" };
         int currentMat = static_cast<int>(m_currentMaterial);
         if (ImGui::Combo("Material", &currentMat, items, IM_ARRAYSIZE(items))) {
             m_currentMaterial = static_cast<MaterialType>(currentMat);
@@ -258,6 +269,10 @@ private:
         if (ImGui::IsKeyPressed(ImGuiKey_6)) m_currentMaterial = MaterialType::Fire;
         if (ImGui::IsKeyPressed(ImGuiKey_7)) m_currentMaterial = MaterialType::Steam;
         if (ImGui::IsKeyPressed(ImGuiKey_8)) m_currentMaterial = MaterialType::BlackHole;
+        // Only the hottest stage gets a key. The cooler ones exist to be inspected, not poured --
+        // placing a half-cooled flow by hand is a debugging affordance, not a building material.
+        if (ImGui::IsKeyPressed(ImGuiKey_9)) m_currentMaterial = MaterialType::LavaHottest;
+        if (ImGui::IsKeyPressed(ImGuiKey_0)) m_currentMaterial = MaterialType::DarkStone;
 
         if (ImGui::IsKeyPressed(ImGuiKey_Tab)) {
             m_cursorShape = (m_cursorShape == CursorShape::Cube) ? CursorShape::Sphere : CursorShape::Cube;
