@@ -46,6 +46,19 @@ struct TuningParams {
     uint32_t dirtClumpThreshold = 5;
     uint32_t wakeSleepThreshold = 5;
     uint32_t emptyBelowWakeCount = 6;
+    // How far water looks sideways for somewhere to fall. This is the single most expensive thing in
+    // the simulation: 8 directions x this radius of grid reads, per awake water voxel, per dispatch,
+    // and at 128 that is 1024 reads against lava's 48. It is also the only cost that scales with the
+    // Simulation Speed slider in practice -- every other material either sleeps or is inert.
+    //
+    // Defaulted to 128 to preserve existing behaviour exactly; lower it to trade long-range levelling
+    // speed for frame time. Water that cannot find a distant drop falls back to spreading one cell at
+    // a time, so a basin still levels, just incrementally rather than by teleporting across it.
+    //
+    // Do NOT be tempted to sample this range coarsely to cheapen it. The walk doubles as a
+    // line-of-sight test -- it marks a direction blocked on the first solid cell -- so skipping cells
+    // would let water step over a wall it never checked.
+    uint32_t waterSpreadRadius = 128;
     uint32_t fireLifetime = 30;
     uint32_t fireDryRate = 5;
     float grassGrowChance = 0.001f;

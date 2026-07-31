@@ -54,6 +54,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint dirtClumpThreshold;
     uint wakeSleepThreshold;
     uint emptyBelowWakeCount;
+    uint waterSpreadRadius;
     uint fireLifetime;
     uint fireDryRate;
     float grassGrowChance;
@@ -1138,7 +1139,12 @@ void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
     uint blockedMask = 0u;
     int startDir = int(fract(randVal * 8.0f) * 8.0f);
 
-    for (int r = 1; r <= 128; r++) {
+    // The most expensive loop in the simulation: 8 directions x waterSpreadRadius reads per awake
+    // water voxel per dispatch. Measured against the Simulation Speed slider, this is effectively the
+    // only compute cost that scales -- every other material sleeps or is inert.
+    int waterReach = int(clamp(tuning.waterSpreadRadius, 1u, 128u));
+
+    for (int r = 1; r <= waterReach; r++) {
         if (blockedMask == 255u) break;
 
         for (int i = 0; i < 8; i++) {

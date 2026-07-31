@@ -51,6 +51,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint dirtClumpThreshold;
     uint wakeSleepThreshold;
     uint emptyBelowWakeCount;
+    uint waterSpreadRadius;
     uint fireLifetime;
     uint fireDryRate;
     float grassGrowChance;

@@ -91,6 +91,7 @@ Config loadConfig(const std::string& path) {
     config.tuning.dirtClumpThreshold = getUint(values, "physics.dirt_clump_threshold", config.tuning.dirtClumpThreshold);
     config.tuning.wakeSleepThreshold = getUint(values, "physics.wake_sleep_threshold", config.tuning.wakeSleepThreshold);
     config.tuning.emptyBelowWakeCount = getUint(values, "physics.empty_below_wake_count", config.tuning.emptyBelowWakeCount);
+    config.tuning.waterSpreadRadius = getUint(values, "physics.water_spread_radius", config.tuning.waterSpreadRadius);
     config.tuning.fireLifetime = getUint(values, "physics.fire_lifetime", config.tuning.fireLifetime);
     config.tuning.fireDryRate = getUint(values, "physics.fire_dry_rate", config.tuning.fireDryRate);
     config.tuning.grassGrowChance = getFloat(values, "physics.grass_grow_chance", config.tuning.grassGrowChance);

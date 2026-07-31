@@ -45,6 +45,13 @@ physics.sand_clump_threshold=9
 physics.dirt_clump_threshold=5
 physics.wake_sleep_threshold=5
 physics.empty_below_wake_count=6
+# How far water looks sideways for somewhere to fall, and the most expensive thing in the whole
+# simulation: 8 directions x this radius of reads, per awake water voxel, per dispatch. At 128 that
+# is 1024 reads against lava's 48, and it is the only cost that visibly scales with Simulation Speed.
+# 128 preserves the original behaviour. Lower it to trade long-range levelling speed for frame time --
+# water that cannot reach a distant drop falls back to spreading one cell at a time, so a basin still
+# levels, just incrementally instead of teleporting across itself. Try 32 and watch the profiler.
+physics.water_spread_radius=128
 physics.fire_lifetime=30
 physics.fire_dry_rate=5
 physics.grass_grow_chance=0.001
