@@ -27,12 +27,13 @@ layout(std430, binding = 1) buffer SimStats {
     uint rainCandidateEstimate;  // last dispatch's census -- the divisor that sets drop odds
     uint cloudChargeBits;        // float bits: eased 0..1 group-wide cloud opacity/greyness
     uint blackHoleCount;         // live table entries; 0 lets every voxel skip the scan entirely
+    uint maxOccupiedY;           // ceiling on where matter can be; lets the renderer skip empty sky
     uint blackHoles[BLACK_HOLE_MAX];      // 0 = free slot, else BH_ACTIVE | linear voxel index
     uint blackHoleMass[BLACK_HOLE_MAX];   // voxels swallowed; the hole's body size is derived from it
     uint blackHoleStarve[BLACK_HOLE_MAX]; // dispatches since it last had anything captured
-    // Cloud placement, computed once per dispatch instead of re-derived by every reader. Five floats
-    // per cloud: centre x, centre z, radius x, radius y, radius z.
-    float cloudCache[CLOUD_MAX * 5];
+    // Cloud placement, computed once per dispatch instead of re-derived by every reader. Seven floats
+    // per cloud: centre xyz, radius xyz, edge fade.
+    float cloudCache[CLOUD_MAX * 7];
 };
 
 layout(std140, binding = 2) uniform TuningParams {
@@ -460,14 +461,35 @@ vec2 cloudCenterXZSource(int i, float t) {
     return vec2(x, z);
 }
 
-// FUNCTION: cloudCenterXZ / cloudRadii
+// FUNCTION: cloudEdgeFade
+// 1 over the middle of the cube, falling to 0 at each border. The fade has to happen INSIDE the
+// footprint because the renderer already hard-clips clouds to the cube's XZ column -- fading
+// outside it would be invisible and clouds would still pop at the boundary. This is what makes a
+// cloud dissolve as it reaches the border and re-emerge on the opposite side.
+//
+// Only updateCloudCache calls this; every consumer reads the cached result. It depends on nothing
+// but the cloud's own centre, so like the placement maths it has exactly one answer per frame.
+float cloudEdgeFade(vec2 c) {
+    float d = max(tuning.cloudEdgeFadeDist, 0.001f);
+    float fx = smoothstep(0.0f, d, c.x) * smoothstep(0.0f, d, float(WIDTH) - c.x);
+    float fz = smoothstep(0.0f, d, c.y) * smoothstep(0.0f, d, float(DEPTH) - c.y);
+    return fx * fz;
+}
+
+// FUNCTION: cloudCenter / cloudRadii / cloudFade
 // Cache readers. Every consumer goes through these; only updateCloudCache touches the maths.
-vec2 cloudCenterXZ(int i) { return vec2(cloudCache[i * 5 + 0], cloudCache[i * 5 + 1]); }
-vec3 cloudRadii(int i)    { return vec3(cloudCache[i * 5 + 2], cloudCache[i * 5 + 3], cloudCache[i * 5 + 4]); }
+vec3  cloudCenter(int i) { return vec3(cloudCache[i * 7 + 0], cloudCache[i * 7 + 1], cloudCache[i * 7 + 2]); }
+vec3  cloudRadii(int i)  { return vec3(cloudCache[i * 7 + 3], cloudCache[i * 7 + 4], cloudCache[i * 7 + 5]); }
+float cloudFade(int i)   { return cloudCache[i * 7 + 6]; }
 
 // FUNCTION: updateCloudCache
 // One invocation per cloud, taken from the first row of the dispatch. Those voxels sit in the border
 // the simulation walls off and return early anyway, so the work is close to free.
+//
+// Everything a consumer could want about a cloud is derived here, including the vertical centre and
+// the edge fade. Both used to be re-derived per pixel by the renderer -- the vertical centre carried
+// a hash() of its own, which is a sine per cloud per pixel, and the fade is four smoothsteps. Neither
+// depends on anything but the cloud index and the frame time.
 //
 // Readers may see the previous dispatch's values, which is deliberate and matches how the rain
 // census already rotates: clouds drift a fraction of a voxel per tick, so a one-dispatch-old position
@@ -479,23 +501,18 @@ void updateCloudCache() {
 
     vec2 c = cloudCenterXZSource(int(i), pc.time);
     vec3 r = cloudRadiiSource(int(i));
-    cloudCache[i * 5u + 0u] = c.x;
-    cloudCache[i * 5u + 1u] = c.y;
-    cloudCache[i * 5u + 2u] = r.x;
-    cloudCache[i * 5u + 3u] = r.y;
-    cloudCache[i * 5u + 4u] = r.z;
-}
 
-// FUNCTION: cloudEdgeFade
-// 1 over the middle of the cube, falling to 0 at each border. The fade has to happen INSIDE the
-// footprint because the renderer already hard-clips clouds to the cube's XZ column -- fading
-// outside it would be invisible and clouds would still pop at the boundary. This is what makes a
-// cloud dissolve as it reaches the border and re-emerge on the opposite side.
-float cloudEdgeFade(vec2 c) {
-    float d = max(tuning.cloudEdgeFadeDist, 0.001f);
-    float fx = smoothstep(0.0f, d, c.x) * smoothstep(0.0f, d, float(WIDTH) - c.x);
-    float fz = smoothstep(0.0f, d, c.y) * smoothstep(0.0f, d, float(DEPTH) - c.y);
-    return fx * fz;
+    // Bottom edge sits at the world's top, with 0-4 units of gap.
+    float h3 = hash(vec3(float(i), 133.0f, 7.0f));
+    float cy = float(HEIGHT) + r.y + h3 * 4.0f;
+
+    cloudCache[i * 7u + 0u] = c.x;
+    cloudCache[i * 7u + 1u] = cy;
+    cloudCache[i * 7u + 2u] = c.y;
+    cloudCache[i * 7u + 3u] = r.x;
+    cloudCache[i * 7u + 4u] = r.y;
+    cloudCache[i * 7u + 5u] = r.z;
+    cloudCache[i * 7u + 6u] = cloudEdgeFade(c);
 }
 
 // FUNCTION: getWaterDeficit
@@ -1695,6 +1712,21 @@ void updateSimState() {
 
     uint deficit = getWaterDeficit();
 
+    // --- Occupied-height ceiling ---------------------------------------------------------------
+    // maxOccupiedY is a running high-water mark for "how high does matter reach", and the renderer
+    // uses it to avoid marching the empty sky above the world's contents. It has to be cheap and it
+    // has to never under-report, and those two pull against each other: a per-dispatch reset would
+    // let the value be rebuilt from scratch, but nothing can order a clear ahead of the atomicMaxes
+    // in the same dispatch, so a racing voxel's contribution would be lost and its matter would
+    // vanish from the screen for a frame.
+    //
+    // So it decays instead of resetting: one unit per dispatch from here, re-asserted by any voxel
+    // that sits above it (see main). atomicAdd composes with those atomicMaxes in either order, so
+    // the published value is never more than 1 below the truth -- which is why the renderer's clip
+    // adds 2 rather than trusting it exactly. When the world empties, the mark walks down at one
+    // voxel per dispatch and costs only a little extra marching on the way.
+    if (maxOccupiedY > 0u) atomicAdd(maxOccupiedY, 0xFFFFFFFFu); // -1, without risking wrap at 0
+
     // Rotate the rainable-column census: last dispatch's tally becomes this dispatch's divisor,
     // and a fresh tally starts. Columns racing this swap land in one bucket or the other, which
     // only jitters the estimate slightly -- it is a denominator for probability, not a hard
@@ -1892,10 +1924,10 @@ void main() {
         bool underCloud = false;
         int cloudN = int(min(tuning.cloudCount, uint(CLOUD_MAX)));
         for (int ci = 0; ci < cloudN; ci++) {
-            vec2 c = cloudCenterXZ(ci);
-            if (cloudEdgeFade(c) <= 0.01f) continue;
+            if (cloudFade(ci) <= 0.01f) continue;
+            vec3 c = cloudCenter(ci);
             vec3 r = cloudRadii(ci);
-            vec2 d = (vec2(float(pos.x), float(pos.z)) - c) / vec2(r.x, r.z);
+            vec2 d = (vec2(float(pos.x), float(pos.z)) - c.xz) / vec2(r.x, r.z);
             if (dot(d, d) <= 1.0f) { underCloud = true; break; }
         }
 
@@ -1916,6 +1948,10 @@ void main() {
                 if (rainRandVal < dropChance) {
                     if (atomicCompSwap(grid[currentIndex], rawValue, pack(2u, 0u, 0u, 0u)) == rawValue) {
                         incWater();
+                        // This path returns before main's occupied-height report, and a fresh drop
+                        // is by definition the highest thing in the world, so it has to publish its
+                        // own height or it would be clipped away for the dispatch it spawns on.
+                        if (uint(pos.y) > maxOccupiedY) atomicMax(maxOccupiedY, uint(pos.y));
                         return;
                     }
                 }
@@ -1924,6 +1960,14 @@ void main() {
     }
     
     if (currentType == 0u) return;
+
+    // Raise the occupied-height ceiling if this voxel sits above it. The read-then-atomic shape is
+    // what keeps this affordable: the plain read is uniform across the dispatch and costs a cached
+    // load, and the atomic only fires for the thin layer of voxels above the current mark -- so in a
+    // settled world it fires only on the dispatches where the decay above dropped the mark by one.
+    // Reached after the brush write (rawValue is re-read below it), so hand-placed matter publishes
+    // its own height on the dispatch it appears.
+    if (uint(pos.y) > maxOccupiedY) atomicMax(maxOccupiedY, uint(pos.y));
 
     float randVal = hash(vec3(pos) + vec3(pc.time));
 

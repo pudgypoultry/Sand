@@ -7,19 +7,22 @@
 #include <cfloat>
 
 // Size of the SimStats SSBO at binding 1, in uint32_t fields: 9 cloud/water scalars, then
-// blackHoleCount, then three BLACK_HOLE_MAX-sized arrays (table slots, swallowed-voxel counts,
-// starvation clocks). Must match the SimStats block declared in falling_sand.comp and raymarch.frag.
+// blackHoleCount and maxOccupiedY, then three BLACK_HOLE_MAX-sized arrays (table slots,
+// swallowed-voxel counts, starvation clocks). Must match the SimStats block declared in
+// falling_sand.comp and raymarch.frag.
 static constexpr uint32_t BLACK_HOLE_MAX = 8;
 static constexpr uint32_t SIM_STATS_CLOUD_FIELDS = 9;               // waterVoxelCount .. cloudChargeBits
 static constexpr uint32_t SIM_STATS_COUNT = SIM_STATS_CLOUD_FIELDS; // blackHoleCount
-static constexpr uint32_t SIM_STATS_HOLES = SIM_STATS_COUNT + 1;    // blackHoles[]
+static constexpr uint32_t SIM_STATS_MAX_Y = SIM_STATS_COUNT + 1;    // maxOccupiedY
+static constexpr uint32_t SIM_STATS_HOLES = SIM_STATS_MAX_Y + 1;    // blackHoles[]
 static constexpr uint32_t SIM_STATS_MASS = SIM_STATS_HOLES + BLACK_HOLE_MAX;
 static constexpr uint32_t SIM_STATS_STARVE = SIM_STATS_MASS + BLACK_HOLE_MAX;
 static constexpr uint32_t SIM_STATS_STARVE_END = SIM_STATS_STARVE + BLACK_HOLE_MAX;
 // Cloud placement, cached once per dispatch instead of re-derived by every voxel and every pixel.
-// Five floats per cloud; must match the cloudCache array in both shaders.
+// Seven floats per cloud (centre xyz, radius xyz, edge fade); must match the cloudCache array in
+// both shaders.
 static constexpr uint32_t CLOUD_MAX = 64;
-static constexpr uint32_t SIM_STATS_FIELDS = SIM_STATS_STARVE_END + CLOUD_MAX * 5;
+static constexpr uint32_t SIM_STATS_FIELDS = SIM_STATS_STARVE_END + CLOUD_MAX * 7;
 
 // Black hole table slot encoding. Must match the constants in falling_sand.comp.
 static constexpr uint32_t BH_ACTIVE = 0x80000000u;
@@ -195,6 +198,14 @@ void VulkanRenderer::seedParticles() {
     // Zero is also the "free slot" marker for the black hole table, so clearing the grid correctly
     // forgets every hole that was in it.
     std::vector<uint32_t> statsInit(SIM_STATS_FIELDS, 0u);
+
+    // maxOccupiedY is the exception: it starts at the roof rather than at zero. Over-reporting it is
+    // always safe (the renderer just marches sky that turns out to be empty) while under-reporting
+    // hides matter, and the compute shader only walks it down one voxel per dispatch. Starting high
+    // means the very first frame is drawn unclipped instead of being cropped to the floor until the
+    // first dispatch has had a chance to publish.
+    statsInit[SIM_STATS_MAX_Y] = config.tuning.gridHeight;
+
     void* counterData = steamCounterBuffer->mapMemory();
     memcpy(counterData, statsInit.data(), sizeof(uint32_t) * statsInit.size());
     steamCounterBuffer->unmapMemory();
@@ -245,6 +256,11 @@ void VulkanRenderer::beginPurge() {
     stats[SIM_STATS_MASS] = config.tuning.purgeMass;
     stats[SIM_STATS_STARVE] = 0u;
     stats[SIM_STATS_COUNT] = 1u;
+
+    // The purge hole is written straight into the grid from here, so it never passes through the
+    // dispatch that would normally publish its height. Raising the ceiling to match means its body
+    // is not clipped away on the frame it appears.
+    stats[SIM_STATS_MAX_Y] = std::max(stats[SIM_STATS_MAX_Y], h / 2);
 
     ssboBuffer->unmapMemory();
     steamCounterBuffer->unmapMemory();

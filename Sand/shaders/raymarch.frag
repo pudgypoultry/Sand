@@ -25,10 +25,11 @@ layout(std430, binding = 1) buffer SimStats {
     uint rainCandidateEstimate;
     uint cloudChargeBits;
     uint blackHoleCount;
+    uint maxOccupiedY;
     uint blackHoles[BLACK_HOLE_MAX];
     uint blackHoleMass[BLACK_HOLE_MAX];
     uint blackHoleStarve[BLACK_HOLE_MAX];
-    float cloudCache[CLOUD_MAX * 5];
+    float cloudCache[CLOUD_MAX * 7];
 };
 
 layout(std140, binding = 2) uniform TuningParams {
@@ -125,6 +126,26 @@ layout(push_constant) uniform Constants {
 // FUNCTION: worldExtent
 vec3 worldExtent() { return vec3(float(WIDTH), float(HEIGHT), float(DEPTH)); }
 
+// FUNCTION: marchCeiling
+// The lowest Y that is guaranteed to have nothing at or above it, so both the primary march and the
+// shadow march can stop there instead of walking to the roof of the world.
+//
+// This is the single biggest saving in this stage, and it is a saving on the common case rather than
+// a corner: a world is mostly empty sky, and a DDA has no way to know that -- it reads every cell it
+// crosses whether or not anything is there. At 256^3 with terrain filling the bottom quarter and the
+// default camera, the primary march averages 37 grid reads per pixel and the shadow march 11; clipped
+// to the occupied height those become 5 and 4. The rays that never touch the terrain are the ones
+// that benefit most, and they are most of the screen.
+//
+// The +2 is not slack, it is the exact margin the publisher needs. maxOccupiedY can sit one below the
+// truth (the decay in updateSimState may land after a voxel's atomicMax), and a voxel may rise one
+// cell in the dispatch that published it. Adding 2 therefore leaves at least one guaranteed-empty
+// cell above the highest matter -- which is also what keeps the DDA's face normal correct, since a
+// ray entering the clipped box always takes a step before it can hit anything.
+int marchCeiling() {
+    return min(HEIGHT, int(maxOccupiedY) + 2);
+}
+
 // FUNCTION: getVoxel
 uint getVoxel(ivec3 pos) {
     if (pos.x < 0 || pos.x >= WIDTH || pos.y < 0 || pos.y >= HEIGHT || pos.z < 0 || pos.z >= DEPTH) return 0u; 
@@ -191,7 +212,7 @@ bool isEdge(vec3 p) {
 // Attenuating per voxel rather than simply skipping water keeps it physical, and for free: a single
 // voxel of spray dims almost nothing, while a deep pool puts many voxels in the path and still
 // darkens its own bed. Beer-Lambert falls out of the DDA without a second pass.
-float calculateShadow(ivec3 hitVoxelPos, vec3 hitNormal, vec3 lightDir) {
+float calculateShadow(ivec3 hitVoxelPos, vec3 hitNormal, vec3 lightDir, int ceilingY) {
     ivec3 voxelPos = hitVoxelPos + ivec3(round(hitNormal));
     ivec3 stepDir = ivec3(sign(lightDir));
 
@@ -205,8 +226,12 @@ float calculateShadow(ivec3 hitVoxelPos, vec3 hitNormal, vec3 lightDir) {
     float transmittance = 1.0f;
 
     for (int i = 0; i < int(tuning.shadowMaxSteps); i++) {
+        // ceilingY rather than HEIGHT: the sun is overhead, so a shadow ray only ever climbs, and
+        // once it is above the world's contents nothing further along it can block. That turns the
+        // march's length into a function of how much matter there is rather than how tall the
+        // world is -- which is what stops shadowMaxSteps from silently truncating at 256^3.
         if (voxelPos.x < 0 || voxelPos.x >= WIDTH ||
-            voxelPos.y < 0 || voxelPos.y >= HEIGHT ||
+            voxelPos.y < 0 || voxelPos.y >= ceilingY ||
             voxelPos.z < 0 || voxelPos.z >= DEPTH) {
             return transmittance;
         }
@@ -243,22 +268,24 @@ float calculateShadow(ivec3 hitVoxelPos, vec3 hitNormal, vec3 lightDir) {
 }
 
 // FUNCTION: getSmoothNormal
-vec3 getSmoothNormal(ivec3 p, uint matchType) {
+// The offsets are lattice points, so their lengths are square roots of small integers rather than
+// anything that needs measuring: inversesqrt of an exact int replaces 26 length() calls and 26
+// divides with 26 reciprocal square roots, which is the same arithmetic at a fraction of the cost.
+vec3 getSmoothNormal(ivec3 p) {
     vec3 n = vec3(0.0f);
     for (int x = -1; x <= 1; x++) {
         for (int y = -1; y <= 1; y++) {
             for (int z = -1; z <= 1; z++) {
                 if (x == 0 && y == 0 && z == 0) continue;
-                
-                uint neighborType = getVoxel(p + ivec3(x, y, z)) & 0xFFu;
-                float isSolid = (neighborType != 0u) ? 1.0f : 0.0f;
+
+                if ((getVoxel(p + ivec3(x, y, z)) & 0xFFu) == 0u) continue;
+
                 vec3 offset = vec3(float(x), float(y), float(z));
-                
-                n -= (offset / length(offset)) * isSolid;
+                n -= offset * inversesqrt(float(x * x + y * y + z * z));
             }
         }
     }
-    
+
     if (length(n) < 0.1f) return vec3(0.0f, 1.0f, 0.0f);
     return normalize(n);
 }
@@ -274,9 +301,8 @@ vec3 getSmoothNormal(ivec3 p, uint matchType) {
 // Spreading the same question across 80 weighted neighbours drops one cell's share to ~3 degrees,
 // comfortably inside the lobe, so the highlight slides instead of snapping.
 //
-// Radius 2 is where the curve flattens: radius 3 only reaches ~2.4 degrees for 178 taps. And 80 taps
-// at a single shading point is modest next to calculateShadow, which already walks up to 256 steps
-// for the same pixel.
+// Radius 2 is where the curve flattens: radius 3 only reaches ~2.4 degrees for 178 taps. 80 taps at
+// a single shading point is modest against the marches that reach the same pixel.
 vec3 getWaterNormal(ivec3 p) {
     vec3 n = vec3(0.0f);
 
@@ -285,15 +311,18 @@ vec3 getWaterNormal(ivec3 p) {
             for (int z = -2; z <= 2; z++) {
                 if (x == 0 && y == 0 && z == 0) continue;
 
-                vec3 offset = vec3(float(x), float(y), float(z));
-                float d = length(offset);
-                if (d > 2.5f) continue; // round the cube off, so the kernel has no corner bias
+                // Squared, so the radius test and the weight are both exact integer arithmetic.
+                // The weight wanted (offset/d) * (1/d), which is just offset/d2 -- the two divides
+                // and the 124 length() calls this used to make were computing a square root only to
+                // square it again.
+                int d2 = x * x + y * y + z * z;
+                if (d2 > 6) continue; // round the cube off, so the kernel has no corner bias
 
                 // Any solid counts as "inside", matching getSmoothNormal: water lying against sand
                 // should not bend its normal at the contact, only at the boundary with air.
                 if ((getVoxel(p + ivec3(x, y, z)) & 0xFFu) == 0u) continue;
 
-                n -= (offset / d) * (1.0f / d);
+                n -= vec3(float(x), float(y), float(z)) / float(d2);
             }
         }
     }
@@ -566,15 +595,21 @@ vec3 accretionGlow(vec3 color, ivec3 voxelPos) {
     if (blackHoleCount == 0u || tuning.blackHoleGlow <= 0.0f) return color;
 
     float radius = float(tuning.blackHoleRadius);
-    float closest = radius;
+    // Compared squared, so the loop costs one sqrt at the end rather than one per slot -- and it
+    // stops as soon as it has seen every live hole, since the table is sparse and usually holds one.
+    float closestSq = radius * radius;
+    uint seen = 0u;
 
-    for (int i = 0; i < BLACK_HOLE_MAX; i++) {
+    for (int i = 0; i < BLACK_HOLE_MAX && seen < blackHoleCount; i++) {
         uint code = blackHoles[i];
         if (code == 0u) continue;
-        closest = min(closest, length(vec3(bhDecode(code) - voxelPos)));
+        seen++;
+        vec3 d = vec3(bhDecode(code) - voxelPos);
+        closestSq = min(closestSq, dot(d, d));
     }
 
-    if (closest >= radius) return color;
+    if (closestSq >= radius * radius) return color;
+    float closest = sqrt(closestSq);
 
     // Ramps hard rather than linearly so only the inner disk actually glows -- a linear falloff
     // washed the entire influence sphere in orange and lost the shape of the spiral.
@@ -591,21 +626,15 @@ vec3 accretionGlow(vec3 color, ivec3 voxelPos) {
 // would make rain fall from a clear sky. Sharing the cache removes that hazard outright, and removes
 // the cost that made it worth duplicating in the first place: six sin() calls per cloud, re-derived
 // by every pixel, is ~369 M transcendentals a frame at 32 clouds and 1600x1200.
+//
+// The vertical centre and the edge fade are cached too. Both were still being re-derived here per
+// pixel after the first pass -- the centre carried a hash() of its own and the fade is four
+// smoothsteps -- and both are constant for the whole frame, so a pixel has nothing to contribute to
+// either answer.
 // =================================================================================================
-vec2 cloudCenterXZ(int i) { return vec2(cloudCache[i * 5 + 0], cloudCache[i * 5 + 1]); }
-vec3 cloudRadii(int i)    { return vec3(cloudCache[i * 5 + 2], cloudCache[i * 5 + 3], cloudCache[i * 5 + 4]); }
-
-// FUNCTION: cloudEdgeFade
-// 1 over the middle of the cube, falling to 0 at each border. The fade has to happen INSIDE the
-// footprint because clouds are already hard-clipped to the cube's XZ column -- fading outside it
-// would be invisible and clouds would still pop at the boundary. This is what makes a cloud
-// dissolve as it reaches the border and re-emerge on the opposite side.
-float cloudEdgeFade(vec2 c) {
-    float d = max(tuning.cloudEdgeFadeDist, 0.001f);
-    float fx = smoothstep(0.0f, d, c.x) * smoothstep(0.0f, d, float(WIDTH) - c.x);
-    float fz = smoothstep(0.0f, d, c.y) * smoothstep(0.0f, d, float(DEPTH) - c.y);
-    return fx * fz;
-}
+vec3  cloudCenter(int i) { return vec3(cloudCache[i * 7 + 0], cloudCache[i * 7 + 1], cloudCache[i * 7 + 2]); }
+vec3  cloudRadii(int i)  { return vec3(cloudCache[i * 7 + 3], cloudCache[i * 7 + 4], cloudCache[i * 7 + 5]); }
+float cloudFade(int i)   { return cloudCache[i * 7 + 6]; }
 
 // FUNCTION: marchBlockyCloud
 // Walks a per-cloud voxel grid (same DDA stepping pattern as the primary raymarch loop) bounded
@@ -727,9 +756,15 @@ void main() {
         if (isEdge(rayOrigin + rayDir * aabbHit.y)) hitBackBox = true;
     }
 
-    vec3 currentPos = rayOrigin + rayDir * max(0.0f, aabbHit.x); 
-    if (aabbHit.x > 0.0f) currentPos += rayDir * 0.001f; 
-    
+    // The march runs against the world clipped to its occupied height, not the full cube. The full
+    // extent is still what the wireframe edges above and the distance fade below are measured
+    // against -- only where the DDA starts and stops changes.
+    int ceilingY = marchCeiling();
+    vec2 marchHit = intersectAABB(rayOrigin, rayDir, vec3(0.0f), vec3(float(WIDTH), float(ceilingY), float(DEPTH)));
+
+    vec3 currentPos = rayOrigin + rayDir * max(0.0f, marchHit.x);
+    if (marchHit.x > 0.0f) currentPos += rayDir * 0.001f;
+
     ivec3 voxelPos = ivec3(floor(currentPos));
     ivec3 stepDir = ivec3(sign(rayDir));
     
@@ -749,12 +784,17 @@ void main() {
     bool hit = false;
     uint hitType = 0u;
     uint hitRawVoxel = 0u;
-    
+
+    // Measured against the full cube, not the clipped march box, so the fade does not change as the
+    // world fills up or empties.
+    float MAX_VISIBILITY = max(300.0f, aabbHit.y * 1.5f);
+
+
     for (int i = 0; i < int(tuning.marchMaxSteps); i++) {
-        if (voxelPos.x < 0 || voxelPos.x >= WIDTH || 
-            voxelPos.y < 0 || voxelPos.y >= HEIGHT || 
+        if (voxelPos.x < 0 || voxelPos.x >= WIDTH ||
+            voxelPos.y < 0 || voxelPos.y >= ceilingY ||
             voxelPos.z < 0 || voxelPos.z >= DEPTH) {
-            break; 
+            break;
         }
         
         uint rawVoxel = getVoxel(voxelPos);
@@ -824,7 +864,7 @@ void main() {
         if (hitType == 2u) {
             normal = applyWaterWaves(getWaterNormal(voxelPos), voxelPos);
         } else {
-            normal = getSmoothNormal(voxelPos, hitType);
+            normal = getSmoothNormal(voxelPos);
         }
 
         // Waves are applied above rather than inside renderWater so they drive the diffuse term too,
@@ -839,7 +879,7 @@ void main() {
         vec3 ambientColor = vec3(0.15f, 0.2f, 0.3f); 
         
         float diffuse = max(dot(normal, sunDir), 0.0f);
-        float shadow = calculateShadow(voxelPos, ddaNormal, sunDir);
+        float shadow = calculateShadow(voxelPos, ddaNormal, sunDir, ceilingY);
         vec3 baseLighting = ambientColor + (sunColor * diffuse * shadow);
         
         vec3 finalVoxelColor = vec3(1.0f, 0.0f, 1.0f) * baseLighting; 
@@ -881,8 +921,7 @@ void main() {
         finalVoxelColor = accretionGlow(finalVoxelColor, voxelPos);
 
         float distanceTraveled = length(vec3(voxelPos) + vec3(0.5f) - rayOrigin);
-        float MAX_VISIBILITY = max(300.0f, aabbHit.y * 1.5f);
-        finalVoxelColor *= mix(1.0f, 0.0f, clamp(distanceTraveled / MAX_VISIBILITY, 0.0f, 1.0f)); 
+        finalVoxelColor *= mix(1.0f, 0.0f, clamp(distanceTraveled / MAX_VISIBILITY, 0.0f, 1.0f));
         
         finalDist = distanceTraveled;
         finalColor = vec4(finalVoxelColor, 1.0f);
@@ -899,9 +938,11 @@ void main() {
     // draw a shape one ray/sphere test resolves exactly, and it would come out voxel-stepped besides,
     // where the point of a sphere is that it is smooth. ---
     if (blackHoleCount > 0u) {
-        for (int i = 0; i < BLACK_HOLE_MAX; i++) {
+        uint seenHoles = 0u;
+        for (int i = 0; i < BLACK_HOLE_MAX && seenHoles < blackHoleCount; i++) {
             uint code = blackHoles[i];
             if (code == 0u) continue;
+            seenHoles++;
 
             // Purge holes size straight off their remaining mass rather than the growth curve, so
             // they shrink as a smooth ramp. Must match bhLevelFor in falling_sand.comp.
@@ -929,7 +970,6 @@ void main() {
                 vec3 surfaceNormal = normalize(rayOrigin + rayDir * bodyDist - center);
 
                 vec3 bodyColor = renderBlackHole(surfaceNormal, rayDir);
-                float MAX_VISIBILITY = max(300.0f, aabbHit.y * 1.5f);
                 bodyColor *= mix(1.0f, 0.0f, clamp(bodyDist / MAX_VISIBILITY, 0.0f, 1.0f));
 
                 finalColor = vec4(bodyColor, 1.0f);
@@ -970,17 +1010,11 @@ void main() {
 
             int cloudN = int(min(tuning.cloudCount, uint(CLOUD_MAX)));
             for (int i = 0; i < cloudN; i++) {
-                vec2 centerXZ = cloudCenterXZ(i);
-                float edgeFade = cloudEdgeFade(centerXZ);
+                float edgeFade = cloudFade(i);
                 if (edgeFade <= 0.01f) continue;
 
-                float h3 = hash(vec3(float(i), 133.0f, 7.0f));
+                vec3 center = cloudCenter(i);
                 vec3 radii = cloudRadii(i);
-                vec3 center = vec3(
-                    centerXZ.x,
-                    float(HEIGHT) + radii.y + h3 * 4.0f, // bottom edge sits at the world's top, 0-4 units of gap
-                    centerXZ.y
-                );
 
                 vec3 oc = (rayOrigin - center) / radii;
                 vec3 rdn = rayDir / radii;
@@ -996,6 +1030,13 @@ void main() {
 
                     float clippedNear = max(t0, footprintClip.x);
                     float clippedFar = min(t1, footprintClip.y);
+
+                    // Only the nearest cloud is ever drawn, and only if it is in front of the
+                    // geometry, so a cloud whose whole interval starts behind either cannot change
+                    // the result -- and marching it is up to maxCloudSteps of DDA for an answer
+                    // already known. Exact rather than approximate: clippedNear is a lower bound on
+                    // anything this cloud could produce, and both tests below it are strict.
+                    if (clippedNear >= min(bestT, finalDist)) continue;
 
                     if (clippedNear < clippedFar && clippedFar > 0.0f) {
                         float cloudTHit;
