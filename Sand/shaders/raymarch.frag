@@ -427,6 +427,37 @@ vec3 renderFire(uint rawVoxel, ivec3 voxelPos) {
     return fireColor * 1.5f; 
 }
 
+// MATERIAL CURSOR PALETTE
+// One colour per material type, indexed directly.
+//
+// A table rather than a switch, deliberately. What was wrong with the if-chain this replaces was
+// never its shape -- a switch would read no better and compile to much the same thing -- it was that
+// the chain was a THIRD parallel list of per-material data, sitting alongside the MaterialType enum
+// and the UI's label array with nothing tying any of the three together. A table does not fix that
+// completely, but it makes adding a material one line in one obvious place, and an out-of-range
+// type now yields a defined colour instead of falling through to whatever the final else happened
+// to be (which was sand's yellow, so an unknown block previewed as sand).
+//
+// This is the CURSOR's palette specifically. The blocks themselves are shaded procedurally from
+// noise, moisture, coolness and lighting, so they cannot be reduced to one colour each -- which is
+// why the render dispatch downstream stays a switch. That one dispatches behaviour, not data.
+const int MATERIAL_COUNT = 13;
+const vec3 MATERIAL_CURSOR_COLOR[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
+    vec3(0.10f, 0.10f, 0.10f), // 0  void
+    vec3(1.00f, 0.90f, 0.20f), // 1  sand
+    vec3(0.20f, 0.60f, 1.00f), // 2  water
+    vec3(0.60f, 0.60f, 0.60f), // 3  stone
+    vec3(0.50f, 0.35f, 0.15f), // 4  dirt
+    vec3(1.00f, 0.50f, 0.00f), // 5  fire
+    vec3(0.90f, 0.90f, 0.90f), // 6  steam
+    vec3(0.80f, 0.40f, 1.00f), // 7  black hole
+    vec3(1.00f, 0.45f, 0.10f), // 8  lava, hottest -- the four walk the same ramp the blocks do
+    vec3(0.85f, 0.30f, 0.07f), // 9  lava
+    vec3(0.65f, 0.20f, 0.06f), // 10 lava
+    vec3(0.45f, 0.14f, 0.06f), // 11 lava, coldest
+    vec3(0.22f, 0.19f, 0.18f)  // 12 dark stone
+);
+
 // FUNCTION: renderLava
 // Emissive, like fire and unlike every lit material: molten rock is a light source, and running it
 // through baseLighting would leave the shaded side of a lava flow looking like wet clay.
@@ -439,15 +470,18 @@ vec3 renderLava(uint rawVoxel, ivec3 voxelPos) {
     float solidify = max(float(tuning.lavaStageSize) * 4.0f, 1.0f);
     float t = clamp(float((rawVoxel >> 24) & 0xFFu) / solidify, 0.0f, 1.0f);
 
-    vec3 hot  = vec3(1.00f, 0.86f, 0.42f);
-    vec3 mid  = vec3(1.00f, 0.36f, 0.06f);
-    vec3 cold = vec3(0.32f, 0.08f, 0.05f);
+    // Scaled so the hottest stage lands at roughly (1.0, 0.43, 0.10) AFTER the emissive gain below.
+    // The old values were pale to begin with and then multiplied by 2, which drove red and green
+    // both past 1.0 and clipped the hot end to white -- the brightness was eating the hue.
+    vec3 hot  = vec3(0.80f, 0.34f, 0.08f);
+    vec3 mid  = vec3(0.72f, 0.16f, 0.035f);
+    vec3 cold = vec3(0.30f, 0.075f, 0.05f);
     vec3 baseColor = (t < 0.5f) ? mix(hot, mid, t * 2.0f) : mix(mid, cold, (t - 0.5f) * 2.0f);
 
     // A slow crust flicker, seeded per voxel so neighbours are not in lockstep. Scaled down as it
     // cools, so nearly-solid lava stops shimmering rather than twinkling until the instant it turns.
     float flicker = hash(vec3(voxelPos) + vec3(floor(pc.time * 3.0f))) * 0.16f * (1.0f - t);
-    return baseColor * (mix(2.0f, 0.5f, t) + flicker);
+    return baseColor * (mix(1.25f, 0.5f, t) + flicker);
 }
 
 // FUNCTION: renderDarkStone
@@ -989,30 +1023,7 @@ void main() {
         vec3 boxMin = vec3(float(pc.spawnX - halfDistMin), float(pc.spawnY - halfDistMin), float(pc.spawnZ - halfDistMin));
         vec3 boxMax = vec3(float(pc.spawnX + halfDistMax + 1), float(pc.spawnY + halfDistMax + 1), float(pc.spawnZ + halfDistMax + 1));
 
-        vec3 cursorColor;
-        if (pc.spawnType == 0) {
-            cursorColor = vec3(0.1f, 0.1f, 0.1f);
-        } else if (pc.spawnType == 2) {
-            cursorColor = vec3(0.2f, 0.6f, 1.0f);
-        } else if (pc.spawnType == 3) {
-            cursorColor = vec3(0.6f, 0.6f, 0.6f);
-        } else if (pc.spawnType == 4) {
-            cursorColor = vec3(0.5f, 0.35f, 0.15f);
-        } else if (pc.spawnType == 5) {
-            cursorColor = vec3(1.0f, 0.5f, 0.0f);
-        } else if (pc.spawnType == 6) {
-            cursorColor = vec3(0.9f, 0.9f, 0.9f);
-        } else if (pc.spawnType == 7) {
-            cursorColor = vec3(0.8f, 0.4f, 1.0f);
-        } else if (pc.spawnType >= 8 && pc.spawnType <= 11) {
-            // Walks the same hot-to-cold ramp the blocks themselves use, so the cursor previews
-            // which stage is about to be placed rather than just saying "lava".
-            cursorColor = mix(vec3(1.0f, 0.7f, 0.2f), vec3(0.45f, 0.14f, 0.08f), float(pc.spawnType - 8) / 3.0f);
-        } else if (pc.spawnType == 12) {
-            cursorColor = vec3(0.22f, 0.19f, 0.18f);
-        } else {
-            cursorColor = vec3(1.0f, 0.9f, 0.2f);
-        }
+        vec3 cursorColor = MATERIAL_CURSOR_COLOR[clamp(pc.spawnType, 0, MATERIAL_COUNT - 1)];
 
         if (pc.spawnShape == 1) {
             // Matched to inBrush() in falling_sand.comp: same centre, same radius, so the outline
