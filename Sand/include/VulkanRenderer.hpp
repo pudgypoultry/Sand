@@ -23,6 +23,7 @@ private:
 
     void seedParticles();
     void beginPurge();
+    size_t voxelCount() const;
     void createFramebuffers();
     void createDescriptorSet();
     void createCommandPoolAndBuffer();

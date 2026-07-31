@@ -8,6 +8,18 @@
 // Layout must stay a flat struct of floats/ints to map directly onto the UBO's std140 layout --
 // add new fields at the end, and mirror any addition in both shaders' TuningParams block.
 struct TuningParams {
+    // --- World shape ---
+    // Derived in loadConfig from sim.grid_size and sim.two_dimensional rather than set directly, so
+    // the three can never disagree about what shape the world is. In 2D the depth is exactly 1: not
+    // a thin slab but a single layer, which is what makes the Z axis vanish from the simulation
+    // instead of merely being small.
+    //
+    // These live in the UBO rather than being compiled in, which costs a uniform read everywhere the
+    // old literals were. Specialisation constants would let the compiler fold them back into
+    // immediates and would be the natural next step if this ever shows up in a profile.
+    uint32_t gridWidth = 128;
+    uint32_t gridHeight = 128;
+    uint32_t gridDepth = 128;
     // --- Rain ---
     // A storm begins once the water deficit exceeds rainStartLayers full grid layers, then
     // returns water at rainDropsPerTick per dispatch until the deficit is repaid -- so storm

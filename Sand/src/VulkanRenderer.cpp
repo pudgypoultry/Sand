@@ -20,7 +20,7 @@ static constexpr uint32_t SIM_STATS_FIELDS = SIM_STATS_STARVE + BLACK_HOLE_MAX;
 // Black hole table slot encoding. Must match the constants in falling_sand.comp.
 static constexpr uint32_t BH_ACTIVE = 0x80000000u;
 static constexpr uint32_t BH_PURGE = 0x40000000u;
-static constexpr uint32_t BH_INDEX_MASK = 0x001FFFFFu;
+static constexpr uint32_t BH_INDEX_MASK = 0x3FFFFFFFu;
 
 // Constructor: Initializes the managed architecture instances
 VulkanRenderer::VulkanRenderer() {
@@ -43,7 +43,7 @@ void VulkanRenderer::initVulkan() {
     // Create SSBO Buffer via the new VulkanBuffer wrapper
     // NOTE: sized as a flat array of uint32_t, matching the packed voxel representation
     // actually read/written by falling_sand.comp and raymarch.frag (see pack()/getType()/etc).
-    VkDeviceSize bufferSize = sizeof(uint32_t) * GRID_SIZE * GRID_SIZE * GRID_SIZE;
+    VkDeviceSize bufferSize = sizeof(uint32_t) * voxelCount();
     ssboBuffer = std::make_unique<VulkanBuffer>(
         context.get(),
         bufferSize,
@@ -78,6 +78,10 @@ void VulkanRenderer::initVulkan() {
     void* tuningData = tuningBuffer->mapMemory();
     memcpy(tuningData, &config.tuning, sizeof(TuningParams));
     tuningBuffer->unmapMemory();
+
+    window->setWorldExtents((float)config.tuning.gridWidth,
+                            (float)config.tuning.gridHeight,
+                            (float)config.tuning.gridDepth);
 
     seedParticles();
 
@@ -177,7 +181,7 @@ void VulkanRenderer::cleanup() {
 // seedParticles: Initializes the voxel grid with empty space via a CPU-mapped pointer,
 // and resets the cloud/water tracking stats buffer alongside it.
 void VulkanRenderer::seedParticles() {
-    size_t totalVoxels = (size_t)GRID_SIZE * GRID_SIZE * GRID_SIZE;
+    size_t totalVoxels = voxelCount();
     void* data = ssboBuffer->mapMemory();
     memset(data, 0, sizeof(uint32_t) * totalVoxels);
     ssboBuffer->unmapMemory();
@@ -192,6 +196,12 @@ void VulkanRenderer::seedParticles() {
     steamCounterBuffer->unmapMemory();
 
     std::cout << "Seeded initial empty grid to GPU!\n";
+}
+
+// voxelCount: total cells in the configured world. Everything that sizes against the grid goes
+// through here rather than recomputing the product, so a 2D world allocates one layer and not a cube.
+size_t VulkanRenderer::voxelCount() const {
+    return (size_t)config.tuning.gridWidth * config.tuning.gridHeight * config.tuning.gridDepth;
 }
 
 // beginPurge: What "Clear Grid" does now. Resets the sky immediately, then drops one enormous black
@@ -223,7 +233,8 @@ void VulkanRenderer::beginPurge() {
     // enormous permanent deficit afterwards and open a storm over an empty grid.
     for (uint32_t i = 0; i < SIM_STATS_CLOUD_FIELDS; i++) stats[i] = 0u;
 
-    const uint32_t centre = (GRID_SIZE / 2) + (GRID_SIZE / 2) * GRID_SIZE + (GRID_SIZE / 2) * GRID_SIZE * GRID_SIZE;
+    const uint32_t w = config.tuning.gridWidth, h = config.tuning.gridHeight, d = config.tuning.gridDepth;
+    const uint32_t centre = (w / 2) + (h / 2) * w + (d / 2) * w * h;
     grid[centre] = 7u; // pack(BlackHole, 0, 0, 0)
 
     stats[SIM_STATS_HOLES] = BH_ACTIVE | BH_PURGE | centre;
@@ -453,8 +464,15 @@ void VulkanRenderer::drawFrame() {
 
     float t = std::clamp(pc.perspectiveBlend, 0.0f, 1.0f);
 
+    const float extentX = (float)config.tuning.gridWidth;
+    const float extentY = (float)config.tuning.gridHeight;
+    const float extentZ = (float)config.tuning.gridDepth;
+    const bool flatWorld = (config.tuning.gridDepth <= 1);
+
     float viewDistance = std::max(1.0f,
-        (64.0f - pc.camX) * forward.x + (64.0f - pc.camY) * forward.y + (64.0f - pc.camZ) * forward.z);
+        (extentX * 0.5f - pc.camX) * forward.x +
+        (extentY * 0.5f - pc.camY) * forward.y +
+        (extentZ * 0.5f - pc.camZ) * forward.z);
     float orthoHalfSize = viewDistance / pc.fovDistance;
 
     float localDirX = (1.0f - t) * 0.0f + t * ndcX;
@@ -475,12 +493,17 @@ void VulkanRenderer::drawFrame() {
     float oy = pc.camY + originOffsetY;
     float oz = pc.camZ + originOffsetZ;
 
-    bool isInside = (ox > 0.0f && ox < 128.0f && oy > 0.0f && oy < 128.0f && oz > 0.0f && oz < 128.0f);
+    bool isInside = (ox > 0.0f && ox < extentX && oy > 0.0f && oy < extentY && oz > 0.0f && oz < extentZ);
 
     int halfDistMin = brushSize / 2;
     int halfDistMax = (brushSize - 1) / 2;
     int minBound = 1 + halfDistMin;
-    int maxBound = 126 - halfDistMax;
+    int maxBoundX = (int)config.tuning.gridWidth - 2 - halfDistMax;
+    int maxBoundY = (int)config.tuning.gridHeight - 2 - halfDistMax;
+    // A flat world has exactly one layer, so Z is pinned there rather than being given a brush-sized
+    // margin it has no room for.
+    int minBoundZ = flatWorld ? 0 : minBound;
+    int maxBoundZ = flatWorld ? 0 : (int)config.tuning.gridDepth - 2 - halfDistMax;
 
     if (isInside) {
         float spawnDist = 30.0f;
@@ -488,17 +511,18 @@ void VulkanRenderer::drawFrame() {
         float hitY = oy + ry * spawnDist;
         float hitZ = oz + rz * spawnDist;
 
-        if (hitX >= minBound && hitX <= maxBound && hitY >= minBound && hitY <= maxBound && hitZ >= minBound && hitZ <= maxBound) {
+        if (hitX >= minBound && hitX <= maxBoundX && hitY >= minBound && hitY <= maxBoundY &&
+            (flatWorld || (hitZ >= minBoundZ && hitZ <= maxBoundZ))) {
             pc.spawnX = (int)hitX;
             pc.spawnY = (int)hitY;
-            pc.spawnZ = (int)hitZ;
+            pc.spawnZ = flatWorld ? 0 : (int)hitZ;
             if (window->isLeftClicking()) pc.spawnActive = 1;
         }
     }
     else {
-        float t1 = (0.0f - ox) / rx;  float t2 = (128.0f - ox) / rx;
-        float t3 = (0.0f - oy) / ry;  float t4 = (128.0f - oy) / ry;
-        float t5 = (0.0f - oz) / rz;  float t6 = (128.0f - oz) / rz;
+        float t1 = (0.0f - ox) / rx;  float t2 = (extentX - ox) / rx;
+        float t3 = (0.0f - oy) / ry;  float t4 = (extentY - oy) / ry;
+        float t5 = (0.0f - oz) / rz;  float t6 = (extentZ - oz) / rz;
 
         float tmin = std::max({ std::min(t1, t2), std::min(t3, t4), std::min(t5, t6) });
         float tmax = std::min({ std::max(t1, t2), std::max(t3, t4), std::max(t5, t6) });
@@ -508,9 +532,9 @@ void VulkanRenderer::drawFrame() {
             float hitY = oy + ry * tmin + ry * 0.01f;
             float hitZ = oz + rz * tmin + rz * 0.01f;
 
-            pc.spawnX = std::clamp((int)hitX, minBound, maxBound);
-            pc.spawnY = std::clamp((int)hitY, minBound, maxBound);
-            pc.spawnZ = std::clamp((int)hitZ, minBound, maxBound);
+            pc.spawnX = std::clamp((int)hitX, minBound, maxBoundX);
+            pc.spawnY = std::clamp((int)hitY, minBound, maxBoundY);
+            pc.spawnZ = flatWorld ? 0 : std::clamp((int)hitZ, minBoundZ, maxBoundZ);
             if (window->isLeftClicking()) pc.spawnActive = 1;
         }
     }
@@ -520,7 +544,12 @@ void VulkanRenderer::drawFrame() {
     for (int step = 0; step < simSteps; step++) {
         // We dispatch the compute shader multiple times, allowing it to run physics multiple times per visual frame
         vkCmdPushConstants(commandBuffer, pipeline->getComputePipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &pc);
-        vkCmdDispatch(commandBuffer, GRID_SIZE / 8, GRID_SIZE / 8, GRID_SIZE / 8);
+        // Rounded up, so a grid size that is not a multiple of 8 still covers its last partial
+        // workgroup. main() drops the overshoot before it touches the grid.
+        vkCmdDispatch(commandBuffer,
+            (config.tuning.gridWidth + 7) / 8,
+            (config.tuning.gridHeight + 7) / 8,
+            (config.tuning.gridDepth + 7) / 8);
 
         // Phase 2: Execution Barrier
         VkMemoryBarrier memoryBarrier{};

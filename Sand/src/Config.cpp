@@ -69,6 +69,23 @@ Config loadConfig(const std::string& path) {
     Config config; // struct defaults apply unless overridden below
     auto values = parseKeyValueFile(path);
 
+    // World shape first: everything downstream is sized against it. A single grid_size drives width
+    // and height together because the sim has no notion of a non-square footprint, and depth is
+    // derived rather than configured so a 2D world is exactly one layer deep by construction.
+    uint32_t gridSize = getUint(values, "sim.grid_size", config.tuning.gridWidth);
+    if (gridSize < 8u) {
+        std::cout << "Config 'sim.grid_size' below the 8-voxel minimum; clamping to 8.\n";
+        gridSize = 8u;
+    }
+    if (gridSize > 512u) {
+        std::cout << "Config 'sim.grid_size' above the 512-voxel maximum; clamping to 512.\n";
+        gridSize = 512u;
+    }
+    const bool twoDimensional = getUint(values, "sim.two_dimensional", 0u) != 0u;
+    config.tuning.gridWidth = gridSize;
+    config.tuning.gridHeight = gridSize;
+    config.tuning.gridDepth = twoDimensional ? 1u : gridSize;
+
     config.tuning.rainStartLayers = getUint(values, "rain.start_layers", config.tuning.rainStartLayers);
     config.tuning.rainDropsPerTick = getUint(values, "rain.drops_per_tick", config.tuning.rainDropsPerTick);
     config.tuning.rainOvershoot = getFloat(values, "rain.overshoot", config.tuning.rainOvershoot);

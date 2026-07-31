@@ -1,5 +1,18 @@
 # config.txt -- loaded once at startup, changes require relaunching the app
 
+# --- World shape ---
+# grid_size sets both width and height; the simulation has no notion of a non-square footprint.
+# Memory is 4 bytes per voxel, so 128 is 8 MB in 3D and 64 KB in 2D. Clamped to 8..512.
+#
+# two_dimensional=1 makes the world exactly ONE layer deep rather than a thin slab, and that
+# distinction is the whole feature: at depth 1 the Z axis leaves the simulation entirely. Movement
+# collapses to the XY plane, the one-voxel border that walls the other axes cannot exist in Z so it
+# is not applied there, black hole orbits all take the Z axis as their pole so they run in-plane, and
+# the brush becomes a square or circle one voxel thick. The result is a 2D falling-sand simulation
+# that still renders, lights and shadows as 3D geometry.
+sim.grid_size=128
+sim.two_dimensional=0
+
 # --- Rain ---
 # A storm begins once the water deficit (peak level minus current level) exceeds start_layers
 # full grid layers (1 layer = 128*128 = 16384). It then returns water at drops_per_tick per

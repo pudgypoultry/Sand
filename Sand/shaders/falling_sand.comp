@@ -32,6 +32,9 @@ layout(std430, binding = 1) buffer SimStats {
 };
 
 layout(std140, binding = 2) uniform TuningParams {
+    uint gridWidth;
+    uint gridHeight;
+    uint gridDepth;
     uint rainStartLayers;
     uint rainDropsPerTick;
     float rainOvershoot;
@@ -94,7 +97,7 @@ layout(std140, binding = 2) uniform TuningParams {
     float darkStoneDryChance;
 } tuning;
 
-const uint LAYER_SIZE = 128u * 128u; // 16384 — one layer
+#define LAYER_SIZE (uint(WIDTH) * uint(HEIGHT)) // one layer of the world
 
 layout(push_constant) uniform Constants {
     float time;
@@ -114,12 +117,32 @@ layout(push_constant) uniform Constants {
     int spawnShape; // 0 = cube, 1 = sphere
 } pc;
 
-const int WIDTH = 128;
-const int HEIGHT = 128;
-const int DEPTH = 128;
+// World extents. Macros rather than constants because they come from the UBO now -- every use below
+// is unchanged, it just reads a uniform where it used to read an immediate.
+#define WIDTH  int(tuning.gridWidth)
+#define HEIGHT int(tuning.gridHeight)
+#define DEPTH  int(tuning.gridDepth)
+
+// FUNCTION: isFlat
+// True when the world is a single layer deep. At depth 1 the Z axis is not merely small, it does not
+// exist: there is no room for the one-voxel wall the other axes get, and any step with a Z component
+// leaves the world entirely. Everything that moves has to ask this.
+bool isFlat() { return DEPTH <= 1; }
+
+// FUNCTION: planar
+// Flattens a step to the XY plane when the world is flat. Applied at the direction helpers and at
+// every hand-written diagonal, so no material needs its own 2D special case -- a Z-diagonal simply
+// collapses onto the straight-down move that was already tried, and fails harmlessly.
+ivec3 planar(ivec3 v) { return isFlat() ? ivec3(v.x, v.y, 0) : v; }
+
 
 // FUNCTION: getHDir
 ivec3 getHDir(int d) {
+    if (isFlat()) {
+        // Only two horizontal directions exist in a flat world. The eight callers all loop 0..7, so
+        // the set is folded rather than shortened: each direction still answers, just in-plane.
+        return ((d & 1) == 0) ? ivec3(1, 0, 0) : ivec3(-1, 0, 0);
+    }
     if (d == 0) return ivec3(1, 0, 0);
     if (d == 1) return ivec3(-1, 0, 0);
     if (d == 2) return ivec3(0, 0, 1);
@@ -132,6 +155,7 @@ ivec3 getHDir(int d) {
 
 // FUNCTION: getOrthoDir
 ivec3 getOrthoDir(int d) {
+    if (isFlat() && d >= 4) return ivec3(0, (d == 4) ? 1 : -1, 0); // fold the Z pair onto Y
     if (d == 0) return ivec3(1, 0, 0);
     if (d == 1) return ivec3(-1, 0, 0);
     if (d == 2) return ivec3(0, 1, 0);
@@ -253,11 +277,11 @@ uint getRainThreshold() { return tuning.rainStartLayers * LAYER_SIZE; }
 // free for the flag.
 // =================================================================================================
 const uint BH_ACTIVE = 0x80000000u;
-// 128^3 needs 21 bits, so the index mask is narrowed to exactly that and the freed high bits carry
-// per-hole flags. BH_PURGE marks the one enormous hole the Clear Grid button drops: same voxel, same
+// The index occupies bits 0..29, which covers any world up to 1024^3 -- comfortably past the 512
+// config ceiling -- leaving bit 30 for the purge flag and bit 31 for "slot in use". BH_PURGE marks the one enormous hole the Clear Grid button drops: same voxel, same
 // orbit and void code, but unlimited reach, a size taken straight from its mass, and a much shorter
 // fuse before it gives up and shrinks away.
-const uint BH_INDEX_MASK = 0x001FFFFFu;
+const uint BH_INDEX_MASK = 0x3FFFFFFFu;
 const uint BH_PURGE = 0x40000000u;
 
 // FUNCTION: bhDecode
@@ -361,6 +385,14 @@ vec3 bhPlaneNormal(int k, int planeCount, float seed) {
 // The circulation sense is hashed per plane index, which is stable because the index is, so roughly
 // half the fan runs retrograde and the shell doesn't read as all-one-way swirl.
 vec3 bhOrbitAxis(ivec3 center, ivec3 pos) {
+    // A flat world admits exactly one orbital plane -- its own -- so the fan collapses to the Z axis
+    // and the only remaining choice is which way round to go. Running the normal search here would
+    // pick planes that leave the world and every orbit would immediately stall against the wall.
+    if (isFlat()) {
+        float sense = (hash(vec3(center) + vec3(17.0f, 5.0f, 61.0f)) < 0.5f) ? -1.0f : 1.0f;
+        return vec3(0.0f, 0.0f, sense);
+    }
+
     vec3 radial = normalize(vec3(pos - center));
     int planeCount = int(clamp(tuning.blackHoleOrbitPlanes, 1u, 32u));
     float seed = hash(vec3(center) + vec3(29.0f, 3.0f, 71.0f)) * 6.28318f;
@@ -397,12 +429,22 @@ bool inBrush(ivec3 pos) {
 
     if (pos.x < pc.spawnX - halfMin || pos.x > pc.spawnX + halfMax) return false;
     if (pos.y < pc.spawnY - halfMin || pos.y > pc.spawnY + halfMax) return false;
-    if (pos.z < pc.spawnZ - halfMin || pos.z > pc.spawnZ + halfMax) return false;
+
+    // In a flat world the brush is one layer thick: a square or a circle rather than a cube or a
+    // ball. Depth is 1 so this is the only layer there is, but testing it explicitly keeps the rule
+    // stated rather than relying on the grid being too thin to hold anything else.
+    if (isFlat()) {
+        if (pos.z != pc.spawnZ) return false;
+    } else if (pos.z < pc.spawnZ - halfMin || pos.z > pc.spawnZ + halfMax) {
+        return false;
+    }
 
     if (pc.spawnShape != 1) return true;
 
     vec3 center = vec3(pc.spawnX, pc.spawnY, pc.spawnZ) + vec3(float(halfMax - halfMin + 1) * 0.5f);
     vec3 d = (vec3(pos) + 0.5f) - center;
+    // Measuring in XY only turns the ball into a disc without needing a second code path.
+    if (isFlat()) d.z = 0.0f;
     float radius = float(pc.spawnSize) * 0.5f;
     return dot(d, d) <= radius * radius;
 }
@@ -436,8 +478,8 @@ vec2 cloudCenterXZ(int i, float t) {
     float h2 = hash(vec3(float(i), 47.0f, 91.0f));
     float phase = hash(vec3(float(i), 91.0f, 250.0f)) * 6.28318f;
 
-    float x = mod(h1 * 128.0f + t * tuning.cloudDriftSpeed, 128.0f);
-    float z = mod(h2 * 128.0f + sin(t * 0.12f + phase) * 3.0f, 128.0f);
+    float x = mod(h1 * float(WIDTH) + t * tuning.cloudDriftSpeed, float(WIDTH));
+    float z = mod(h2 * float(DEPTH) + sin(t * 0.12f + phase) * 3.0f, float(DEPTH));
     return vec2(x, z);
 }
 
@@ -448,8 +490,9 @@ vec2 cloudCenterXZ(int i, float t) {
 // cloud dissolve as it reaches the border and re-emerge on the opposite side.
 float cloudEdgeFade(vec2 c) {
     float d = max(tuning.cloudEdgeFadeDist, 0.001f);
-    float fx = smoothstep(0.0f, d, c.x) * smoothstep(0.0f, d, 128.0f - c.x);
-    float fz = smoothstep(0.0f, d, c.y) * smoothstep(0.0f, d, 128.0f - c.y);
+    float fx = smoothstep(0.0f, d, c.x) * smoothstep(0.0f, d, float(WIDTH) - c.x);
+    // A flat world has no depth to fade across, so Z contributes nothing rather than everything.
+    float fz = isFlat() ? 1.0f : (smoothstep(0.0f, d, c.y) * smoothstep(0.0f, d, float(DEPTH) - c.y));
     return fx * fz;
 }
 
@@ -513,6 +556,7 @@ bool tryDisplace(uint currentIndex, uint currentValue, uint targetIndex, uint ta
 // arriving at the same cell should queue up behind each other, because that queueing is what gives
 // the shell visible density instead of letting everything pass through everything else.
 bool orbitStep(ivec3 pos, uint currentIndex, uint rawValue, ivec3 stepDir) {
+    stepDir = planar(stepDir);
     if (stepDir == ivec3(0)) return false;
 
     ivec3 target = pos + stepDir;
@@ -862,9 +906,9 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
             ivec3 slidePos1, slidePos2;
             
             if (fract(randVal * 100.0f) > 0.5f) {
-                slidePos1 = pos + ivec3(dir, -1, 0); slidePos2 = pos + ivec3(0, -1, dir);
+                slidePos1 = pos + ivec3(dir, -1, 0); slidePos2 = pos + planar(ivec3(0, -1, dir));
             } else {
-                slidePos1 = pos + ivec3(0, -1, dir); slidePos2 = pos + ivec3(dir, -1, 0);
+                slidePos1 = pos + planar(ivec3(0, -1, dir)); slidePos2 = pos + ivec3(dir, -1, 0);
             }
 
             if (slidePos1.x > 0 && slidePos1.x < WIDTH - 1 && slidePos1.z > 0 && slidePos1.z < DEPTH - 1) {
@@ -899,9 +943,9 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
             int dir = (fract(randVal * 10.0f) > 0.5f) ? 1 : -1;
             ivec3 slidePos[2];
             if (fract(randVal * 100.0f) > 0.5f) {
-                slidePos[0] = pos + ivec3(dir, -1, 0); slidePos[1] = pos + ivec3(0, -1, dir);
+                slidePos[0] = pos + ivec3(dir, -1, 0); slidePos[1] = pos + planar(ivec3(0, -1, dir));
             } else {
-                slidePos[0] = pos + ivec3(0, -1, dir); slidePos[1] = pos + ivec3(dir, -1, 0);
+                slidePos[0] = pos + planar(ivec3(0, -1, dir)); slidePos[1] = pos + ivec3(dir, -1, 0);
             }
 
             for (int s = 0; s < 2; s++) {
@@ -1026,9 +1070,9 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
             ivec3 slidePos1, slidePos2;
             
             if (fract(randVal * 100.0f) > 0.5f) {
-                slidePos1 = pos + ivec3(dir, -1, 0); slidePos2 = pos + ivec3(0, -1, dir);
+                slidePos1 = pos + ivec3(dir, -1, 0); slidePos2 = pos + planar(ivec3(0, -1, dir));
             } else {
-                slidePos1 = pos + ivec3(0, -1, dir); slidePos2 = pos + ivec3(dir, -1, 0);
+                slidePos1 = pos + planar(ivec3(0, -1, dir)); slidePos2 = pos + ivec3(dir, -1, 0);
             }
 
             if (slidePos1.x > 0 && slidePos1.x < WIDTH - 1 && slidePos1.z > 0 && slidePos1.z < DEPTH - 1) {
@@ -1063,9 +1107,9 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
             int dir = (fract(randVal * 10.0f) > 0.5f) ? 1 : -1;
             ivec3 slidePos[2];
             if (fract(randVal * 100.0f) > 0.5f) {
-                slidePos[0] = pos + ivec3(dir, -1, 0); slidePos[1] = pos + ivec3(0, -1, dir);
+                slidePos[0] = pos + ivec3(dir, -1, 0); slidePos[1] = pos + planar(ivec3(0, -1, dir));
             } else {
-                slidePos[0] = pos + ivec3(0, -1, dir); slidePos[1] = pos + ivec3(dir, -1, 0);
+                slidePos[0] = pos + planar(ivec3(0, -1, dir)); slidePos[1] = pos + ivec3(dir, -1, 0);
             }
 
             for (int s = 0; s < 2; s++) {
@@ -1196,7 +1240,7 @@ void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
     // The most expensive loop in the simulation: 8 directions x waterSpreadRadius reads per awake
     // water voxel per dispatch. Measured against the Simulation Speed slider, this is effectively the
     // only compute cost that scales -- every other material sleeps or is inert.
-    int waterReach = int(clamp(tuning.waterSpreadRadius, 1u, 128u));
+    int waterReach = int(clamp(tuning.waterSpreadRadius, 1u, uint(max(WIDTH, HEIGHT))));
 
     for (int r = 1; r <= waterReach; r++) {
         if (blockedMask == 255u) break;
@@ -1381,9 +1425,9 @@ void updateLava(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
             int slideDir = (fract(randVal * 10.0f) > 0.5f) ? 1 : -1;
             ivec3 slide[2];
             if (fract(randVal * 100.0f) > 0.5f) {
-                slide[0] = pos + ivec3(slideDir, -1, 0); slide[1] = pos + ivec3(0, -1, slideDir);
+                slide[0] = pos + ivec3(slideDir, -1, 0); slide[1] = pos + planar(ivec3(0, -1, slideDir));
             } else {
-                slide[0] = pos + ivec3(0, -1, slideDir); slide[1] = pos + ivec3(slideDir, -1, 0);
+                slide[0] = pos + planar(ivec3(0, -1, slideDir)); slide[1] = pos + ivec3(slideDir, -1, 0);
             }
             for (int s = 0; s < 2; s++) {
                 ivec3 sPos = slide[s];
@@ -1701,9 +1745,9 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
     checkPos[0] = pos + ivec3(0, 1, 0);
     int dir = (fract(randVal * 10.0f) > 0.5f) ? 1 : -1;
     if (fract(randVal * 100.0f) > 0.5f) {
-        checkPos[1] = pos + ivec3(dir, 1, 0); checkPos[2] = pos + ivec3(0, 1, dir);
+        checkPos[1] = pos + ivec3(dir, 1, 0); checkPos[2] = pos + planar(ivec3(0, 1, dir));
     } else {
-        checkPos[1] = pos + ivec3(0, 1, dir); checkPos[2] = pos + ivec3(dir, 1, 0);
+        checkPos[1] = pos + planar(ivec3(0, 1, dir)); checkPos[2] = pos + ivec3(dir, 1, 0);
     }
 
     // 2. Check for moisture-absorbing blocks (Sand = 1u, Dirt = 4u)
@@ -1746,6 +1790,12 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
 void main() {
     ivec3 pos = ivec3(gl_GlobalInvocationID.xyz);
 
+    // The dispatch rounds up to whole 8-voxel workgroups, so with a grid size that is not a multiple
+    // of 8 some invocations land outside the world. They must leave before anything indexes the grid
+    // -- the spawn block below runs ahead of the usual interior-bounds test and would write out of
+    // bounds. Invocation (0,0,0) is always inside, so the single-writer sweep is unaffected.
+    if (pos.x >= WIDTH || pos.y >= HEIGHT || pos.z >= DEPTH) return;
+
     updateSimState();
 
     if (pc.spawnActive == 1 && inBrush(pos)) {
@@ -1786,9 +1836,14 @@ void main() {
         }
     }
 
-    if (pos.x < 1 || pos.x >= WIDTH - 1 || 
-        pos.y < 1 || pos.y >= HEIGHT - 1 || 
-        pos.z < 1 || pos.z >= DEPTH - 1) {
+    // The world is walled by a one-voxel border on every axis that has room for one. A flat world
+    // does not: at depth 1 the single layer IS the border, so applying the Z test would reject every
+    // voxel in existence and nothing would ever move.
+    if (pos.x < 1 || pos.x >= WIDTH - 1 ||
+        pos.y < 1 || pos.y >= HEIGHT - 1) {
+        return;
+    }
+    if (!isFlat() && (pos.z < 1 || pos.z >= DEPTH - 1)) {
         return;
     }
 

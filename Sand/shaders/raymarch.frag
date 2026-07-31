@@ -10,7 +10,7 @@ layout(std430, binding = 0) readonly buffer VoxelGrid {
 // Must stay byte-identical to the SimStats block in falling_sand.comp, and BH_INDEX_MASK must match
 // the slot encoding used there.
 const int BLACK_HOLE_MAX = 8;
-const uint BH_INDEX_MASK = 0x001FFFFFu;
+const uint BH_INDEX_MASK = 0x3FFFFFFFu;
 const uint BH_PURGE = 0x40000000u;
 
 layout(std430, binding = 1) buffer SimStats {
@@ -30,6 +30,9 @@ layout(std430, binding = 1) buffer SimStats {
 };
 
 layout(std140, binding = 2) uniform TuningParams {
+    uint gridWidth;
+    uint gridHeight;
+    uint gridDepth;
     uint rainStartLayers;
     uint rainDropsPerTick;
     float rainOvershoot;
@@ -110,9 +113,16 @@ layout(push_constant) uniform Constants {
     int spawnShape; // 0 = cube, 1 = sphere
 } pc;
 
-const int WIDTH = 128;
-const int HEIGHT = 128;
-const int DEPTH = 128;
+// World extents, from the UBO. Must agree with falling_sand.comp.
+#define WIDTH  int(tuning.gridWidth)
+#define HEIGHT int(tuning.gridHeight)
+#define DEPTH  int(tuning.gridDepth)
+
+// FUNCTION: isFlat
+bool isFlat() { return DEPTH <= 1; }
+
+// FUNCTION: worldExtent
+vec3 worldExtent() { return vec3(float(WIDTH), float(HEIGHT), float(DEPTH)); }
 
 // FUNCTION: getVoxel
 uint getVoxel(ivec3 pos) {
@@ -158,10 +168,16 @@ vec2 intersectAABB(vec3 ro, vec3 rd, vec3 boxMin, vec3 boxMax) {
 bool isEdge(vec3 p) {
     float thickness = 0.3f; 
     int boundCount = 0;
-    if (p.x < thickness || p.x > 128.0f - thickness) boundCount++;
-    if (p.y < thickness || p.y > 128.0f - thickness) boundCount++;
-    if (p.z < thickness || p.z > 128.0f - thickness) boundCount++;
-    return boundCount >= 2;
+    vec3 extent = worldExtent();
+    if (p.x < thickness || p.x > extent.x - thickness) boundCount++;
+    if (p.y < thickness || p.y > extent.y - thickness) boundCount++;
+    // A one-voxel-deep world is entirely within `thickness` of both Z faces, so counting Z would mark
+    // every point an edge and outline the whole slab. In 2D the frame is the XY rectangle alone.
+    if (!isFlat() && (p.z < thickness || p.z > extent.z - thickness)) boundCount++;
+    // Two bounds means "on an edge of the box" -- where two faces meet. A flat world is a rectangle,
+    // not a box: its border is a single bound, and requiring two there would draw four corner dots
+    // instead of a frame.
+    return boundCount >= (isFlat() ? 1 : 2);
 }
 
 // FUNCTION: calculateShadow
@@ -600,8 +616,8 @@ vec2 cloudCenterXZ(int i, float t) {
     float h2 = hash(vec3(float(i), 47.0f, 91.0f));
     float phase = hash(vec3(float(i), 91.0f, 250.0f)) * 6.28318f;
 
-    float x = mod(h1 * 128.0f + t * tuning.cloudDriftSpeed, 128.0f);
-    float z = mod(h2 * 128.0f + sin(t * 0.12f + phase) * 3.0f, 128.0f);
+    float x = mod(h1 * float(WIDTH) + t * tuning.cloudDriftSpeed, float(WIDTH));
+    float z = mod(h2 * float(DEPTH) + sin(t * 0.12f + phase) * 3.0f, float(DEPTH));
     return vec2(x, z);
 }
 
@@ -612,8 +628,8 @@ vec2 cloudCenterXZ(int i, float t) {
 // dissolve as it reaches the border and re-emerge on the opposite side.
 float cloudEdgeFade(vec2 c) {
     float d = max(tuning.cloudEdgeFadeDist, 0.001f);
-    float fx = smoothstep(0.0f, d, c.x) * smoothstep(0.0f, d, 128.0f - c.x);
-    float fz = smoothstep(0.0f, d, c.y) * smoothstep(0.0f, d, 128.0f - c.y);
+    float fx = smoothstep(0.0f, d, c.x) * smoothstep(0.0f, d, float(WIDTH) - c.x);
+    float fz = isFlat() ? 1.0f : (smoothstep(0.0f, d, c.y) * smoothstep(0.0f, d, float(DEPTH) - c.y));
     return fx * fz;
 }
 
@@ -715,7 +731,7 @@ void main() {
 
     // Orthographic half-width/height auto-derived from distance to the cube's center along
     // the view direction, so scrubbing the blend slider doesn't cause a visible "pop" in scale.
-    vec3 cubeCenter = vec3(64.0f, 64.0f, 64.0f);
+    vec3 cubeCenter = worldExtent() * 0.5f;
     float viewDistance = max(1.0f, dot(cubeCenter - baseOrigin, forward));
     float orthoHalfSize = viewDistance / pc.fovDistance;
 
@@ -728,7 +744,7 @@ void main() {
     vec4 finalColor = vec4(0.05f, 0.05f, 0.1f, 1.0f);
     float finalDist = 1000000.0f;
     
-    vec2 aabbHit = intersectAABB(rayOrigin, rayDir, vec3(0.0f), vec3(128.0f));
+    vec2 aabbHit = intersectAABB(rayOrigin, rayDir, vec3(0.0f), worldExtent());
     bool hitFrontBox = false;
     bool hitBackBox = false;
 
@@ -970,7 +986,7 @@ void main() {
         }
 
         if (groupAlpha > 0.002f) {
-            vec2 footprintClip = intersectAABB(rayOrigin, rayDir, vec3(0.0f, -1000000.0f, 0.0f), vec3(128.0f, 1000000.0f, 128.0f));
+            vec2 footprintClip = intersectAABB(rayOrigin, rayDir, vec3(0.0f, -1000000.0f, 0.0f), vec3(float(WIDTH), 1000000.0f, float(DEPTH)));
             vec3 cloudSunDir = normalize(vec3(0.8f, 1.0f, 0.5f));
 
             float bestT = 1000000.0f;
@@ -988,7 +1004,7 @@ void main() {
                 vec3 radii = cloudRadii(i);
                 vec3 center = vec3(
                     centerXZ.x,
-                    128.0f + radii.y + h3 * 4.0f,   // bottom edge sits right at the cube's top, 0-4 units of gap
+                    float(HEIGHT) + radii.y + h3 * 4.0f, // bottom edge sits at the world's top, 0-4 units of gap
                     centerXZ.y
                 );
 
@@ -1033,8 +1049,12 @@ void main() {
         int halfDistMin = pc.spawnSize / 2;
         int halfDistMax = (pc.spawnSize - 1) / 2;
         
-        vec3 boxMin = vec3(float(pc.spawnX - halfDistMin), float(pc.spawnY - halfDistMin), float(pc.spawnZ - halfDistMin));
-        vec3 boxMax = vec3(float(pc.spawnX + halfDistMax + 1), float(pc.spawnY + halfDistMax + 1), float(pc.spawnZ + halfDistMax + 1));
+        // One layer thick in a flat world, matching inBrush: the cursor outlines a square or a
+        // circle rather than a cube or a ball.
+        float nearZ = isFlat() ? float(pc.spawnZ)        : float(pc.spawnZ - halfDistMin);
+        float farZ  = isFlat() ? float(pc.spawnZ) + 1.0f : float(pc.spawnZ + halfDistMax + 1);
+        vec3 boxMin = vec3(float(pc.spawnX - halfDistMin), float(pc.spawnY - halfDistMin), nearZ);
+        vec3 boxMax = vec3(float(pc.spawnX + halfDistMax + 1), float(pc.spawnY + halfDistMax + 1), farZ);
 
         vec3 cursorColor = MATERIAL_CURSOR_COLOR[clamp(pc.spawnType, 0, MATERIAL_COUNT - 1)];
 
@@ -1044,9 +1064,16 @@ void main() {
             vec3 sphereCenter = (boxMin + boxMax) * 0.5f;
             float sphereRadius = float(pc.spawnSize) * 0.5f;
 
-            vec3 oc = rayOrigin - sphereCenter;
-            float b = dot(oc, rayDir);
-            float c = dot(oc, oc) - sphereRadius * sphereRadius;
+            // Flattening the Z radius to half a voxel turns the ball into a disc, so the round brush
+            // stays round in the plane the world actually occupies. Solved as an ellipsoid, which is
+            // the same intersection the cloud layer already does -- scale the ray into the shape's
+            // own space and the sphere maths carries over unchanged.
+            vec3 radii = isFlat() ? vec3(sphereRadius, sphereRadius, 0.5f) : vec3(sphereRadius);
+            vec3 oc = (rayOrigin - sphereCenter) / radii;
+            vec3 rdn = rayDir / radii;
+            float a = dot(rdn, rdn);
+            float b = dot(oc, rdn) / a;
+            float c = (dot(oc, oc) - 1.0f) / a;
             float disc = b * b - c;
 
             if (disc > 0.0f) {
@@ -1059,7 +1086,7 @@ void main() {
                     // side and dim it -- the same read as the box cursor's back edges.
                     bool inside = tNear <= 0.0f;
                     float cursorDist = inside ? tFar : tNear;
-                    vec3 shellNormal = normalize((rayOrigin + rayDir * cursorDist) - sphereCenter);
+                    vec3 shellNormal = normalize(((rayOrigin + rayDir * cursorDist) - sphereCenter) / (radii * radii));
 
                     // 1 where the ray grazes the shell, which is exactly the silhouette. Shading
                     // the rim rather than filling the sphere keeps the world visible through it.
