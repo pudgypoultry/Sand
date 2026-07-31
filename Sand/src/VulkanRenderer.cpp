@@ -15,7 +15,11 @@ static constexpr uint32_t SIM_STATS_COUNT = SIM_STATS_CLOUD_FIELDS; // blackHole
 static constexpr uint32_t SIM_STATS_HOLES = SIM_STATS_COUNT + 1;    // blackHoles[]
 static constexpr uint32_t SIM_STATS_MASS = SIM_STATS_HOLES + BLACK_HOLE_MAX;
 static constexpr uint32_t SIM_STATS_STARVE = SIM_STATS_MASS + BLACK_HOLE_MAX;
-static constexpr uint32_t SIM_STATS_FIELDS = SIM_STATS_STARVE + BLACK_HOLE_MAX;
+static constexpr uint32_t SIM_STATS_STARVE_END = SIM_STATS_STARVE + BLACK_HOLE_MAX;
+// Cloud placement, cached once per dispatch instead of re-derived by every voxel and every pixel.
+// Five floats per cloud; must match the cloudCache array in both shaders.
+static constexpr uint32_t CLOUD_MAX = 64;
+static constexpr uint32_t SIM_STATS_FIELDS = SIM_STATS_STARVE_END + CLOUD_MAX * 5;
 
 // Black hole table slot encoding. Must match the constants in falling_sand.comp.
 static constexpr uint32_t BH_ACTIVE = 0x80000000u;

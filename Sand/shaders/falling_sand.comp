@@ -11,6 +11,7 @@ layout(std430, binding = 0) buffer VoxelGrid {
 // table instead, which every captured particle scans in full -- 8 entries is cheap enough to read
 // per voxel per dispatch, and it means the orbit field is exact rather than sampled.
 const int BLACK_HOLE_MAX = 8;
+const int CLOUD_MAX = 64;
 
 // The per-slot reveal/footprint arrays are gone: the cloud field is now a fixed drifting
 // population whose layout is a pure function of (index, time), so there is nothing per-cloud
@@ -29,6 +30,9 @@ layout(std430, binding = 1) buffer SimStats {
     uint blackHoles[BLACK_HOLE_MAX];      // 0 = free slot, else BH_ACTIVE | linear voxel index
     uint blackHoleMass[BLACK_HOLE_MAX];   // voxels swallowed; the hole's body size is derived from it
     uint blackHoleStarve[BLACK_HOLE_MAX]; // dispatches since it last had anything captured
+    // Cloud placement, computed once per dispatch instead of re-derived by every reader. Five floats
+    // per cloud: centre x, centre z, radius x, radius y, radius z.
+    float cloudCache[CLOUD_MAX * 5];
 };
 
 layout(std140, binding = 2) uniform TuningParams {
@@ -427,11 +431,17 @@ bool inBrush(ivec3 pos) {
 //
 // The population is fixed: clouds scroll along +X and wrap, so one drifts out of the far border
 // exactly as another drifts in at the near one. Nothing is ever "revealed" or "retired".
+//
+// The placement maths below is now evaluated ONCE per dispatch, by the first CLOUD_MAX invocations,
+// into cloudCache. It used to be re-derived by every reader, and the readers are the whole top layer
+// of the grid and every pixel on screen -- six sin() calls per cloud, so 32 clouds cost 192
+// transcendentals to answer a question with one answer per frame. Caching also retires the hazard
+// that the comment above used to warn about: the fragment shader no longer carries its own copy of
+// this maths, so the two stages cannot drift apart and rain cannot fall from a clear sky.
 // =================================================================================================
-const int CLOUD_MAX = 64;
 
-// FUNCTION: cloudRadii
-vec3 cloudRadii(int i) {
+// FUNCTION: cloudRadiiSource
+vec3 cloudRadiiSource(int i) {
     float h4 = hash(vec3(float(i), 211.0f, 5.0f));
     float h5 = hash(vec3(float(i), 71.0f, 61.0f));
     float h6 = hash(vec3(float(i), 19.0f, 173.0f));
@@ -439,8 +449,8 @@ vec3 cloudRadii(int i) {
     return vec3(rxz, 4.0f + h5 * 6.0f, rxz * (0.7f + h6 * 0.6f));
 }
 
-// FUNCTION: cloudCenterXZ
-vec2 cloudCenterXZ(int i, float t) {
+// FUNCTION: cloudCenterXZSource
+vec2 cloudCenterXZSource(int i, float t) {
     float h1 = hash(vec3(float(i), 11.0f, 3.0f));
     float h2 = hash(vec3(float(i), 47.0f, 91.0f));
     float phase = hash(vec3(float(i), 91.0f, 250.0f)) * 6.28318f;
@@ -448,6 +458,32 @@ vec2 cloudCenterXZ(int i, float t) {
     float x = mod(h1 * float(WIDTH) + t * tuning.cloudDriftSpeed, float(WIDTH));
     float z = mod(h2 * float(DEPTH) + sin(t * 0.12f + phase) * 3.0f, float(DEPTH));
     return vec2(x, z);
+}
+
+// FUNCTION: cloudCenterXZ / cloudRadii
+// Cache readers. Every consumer goes through these; only updateCloudCache touches the maths.
+vec2 cloudCenterXZ(int i) { return vec2(cloudCache[i * 5 + 0], cloudCache[i * 5 + 1]); }
+vec3 cloudRadii(int i)    { return vec3(cloudCache[i * 5 + 2], cloudCache[i * 5 + 3], cloudCache[i * 5 + 4]); }
+
+// FUNCTION: updateCloudCache
+// One invocation per cloud, taken from the first row of the dispatch. Those voxels sit in the border
+// the simulation walls off and return early anyway, so the work is close to free.
+//
+// Readers may see the previous dispatch's values, which is deliberate and matches how the rain
+// census already rotates: clouds drift a fraction of a voxel per tick, so a one-dispatch-old position
+// is invisible, and the alternative would be a barrier for no visible gain.
+void updateCloudCache() {
+    if (gl_GlobalInvocationID.y != 0u || gl_GlobalInvocationID.z != 0u) return;
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uint(CLOUD_MAX)) return;
+
+    vec2 c = cloudCenterXZSource(int(i), pc.time);
+    vec3 r = cloudRadiiSource(int(i));
+    cloudCache[i * 5u + 0u] = c.x;
+    cloudCache[i * 5u + 1u] = c.y;
+    cloudCache[i * 5u + 2u] = r.x;
+    cloudCache[i * 5u + 3u] = r.y;
+    cloudCache[i * 5u + 4u] = r.z;
 }
 
 // FUNCTION: cloudEdgeFade
@@ -756,6 +792,31 @@ float getRainDropChance(uint candidates, uint remaining) {
 }
 
 
+// FUNCTION: grainCanMove
+// Cheap precondition for a grain's entire falling path: five reads answering "is there anywhere at
+// all for this to go".
+//
+// A grain buried in a settled dune answers no, and that lets everything below be skipped -- most
+// importantly the 3x3x3 cohesion scan, which is 27 reads spent deciding whether a grain that has
+// nowhere to go should stick. Wet settled sand was paying 47 reads a tick forever to reach that
+// conclusion; dry sand escaped it only because the cohesion test is gated on moisture, which is why
+// this never showed up until it rained.
+//
+// Behaviour-preserving rather than a trade: cohesion only ever gates a move, so when no move is
+// possible its value cannot be observed.
+bool grainCanMove(ivec3 pos) {
+    if (pos.y <= 1) return false;
+
+    for (int i = 0; i < 5; i++) {
+        ivec3 target = pos + ivec3((i == 1) ? 1 : ((i == 2) ? -1 : 0), -1,
+                                   (i == 3) ? 1 : ((i == 4) ? -1 : 0));
+        if (target.x <= 0 || target.x >= WIDTH - 1 || target.z <= 0 || target.z >= DEPTH - 1) continue;
+        uint t = getType(grid[getIndex(target)]);
+        if (t == 0u || t == 2u) return true; // empty to fall into, or water to displace
+    }
+    return false;
+}
+
 // FUNCTION: updateSand
 void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, uint currentAge, float randVal) {
     uint moisture = currentAge;
@@ -823,8 +884,12 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
 
     if (moistureModified) return;
 
+    // Nowhere to go: skip the cohesion scan and the move attempts alike, and just age the sleep
+    // counter. This is the difference between a settled dune costing ~11 reads a tick and ~47.
+    bool canMove = grainCanMove(pos);
+
     bool isClumped = false;
-    if (moisture > 0u && currentSleep > tuning.wakeSleepThreshold) {
+    if (canMove && moisture > 0u && currentSleep > tuning.wakeSleepThreshold) {
         int emptyBelowCount = 0;
         if (pos.y > 1) {
             for (int x = -1; x <= 1; x++) {
@@ -858,7 +923,7 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
         }
     }
 
-    if (!isClumped) {
+    if (canMove && !isClumped) {
         if (pos.y > 1) {
             ivec3 belowPos = pos + ivec3(0, -1, 0);
             if (getType(grid[getIndex(belowPos)]) == 0u) {
@@ -987,8 +1052,10 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
 
     if (moistureModified) return;
 
+    bool canMove = grainCanMove(pos);
+
     bool isClumped = false;
-    if (currentSleep > tuning.wakeSleepThreshold) {
+    if (canMove && currentSleep > tuning.wakeSleepThreshold) {
         int emptyBelowCount = 0;
         if (pos.y > 1) {
             for (int x = -1; x <= 1; x++) {
@@ -1022,7 +1089,7 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
         }
     }
 
-    if (!isClumped) {
+    if (canMove && !isClumped) {
         if (pos.y > 1) {
             ivec3 belowPos = pos + ivec3(0, -1, 0);
             if (getType(grid[getIndex(belowPos)]) == 0u) {
@@ -1762,6 +1829,7 @@ void main() {
     if (pos.x >= WIDTH || pos.y >= HEIGHT || pos.z >= DEPTH) return;
 
     updateSimState();
+    updateCloudCache();
 
     if (pc.spawnActive == 1 && inBrush(pos)) {
         uint spawnIndex = getIndex(pos);
@@ -1824,7 +1892,7 @@ void main() {
         bool underCloud = false;
         int cloudN = int(min(tuning.cloudCount, uint(CLOUD_MAX)));
         for (int ci = 0; ci < cloudN; ci++) {
-            vec2 c = cloudCenterXZ(ci, pc.time);
+            vec2 c = cloudCenterXZ(ci);
             if (cloudEdgeFade(c) <= 0.01f) continue;
             vec3 r = cloudRadii(ci);
             vec2 d = (vec2(float(pos.x), float(pos.z)) - c) / vec2(r.x, r.z);

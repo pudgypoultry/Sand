@@ -10,6 +10,7 @@ layout(std430, binding = 0) readonly buffer VoxelGrid {
 // Must stay byte-identical to the SimStats block in falling_sand.comp, and BH_INDEX_MASK must match
 // the slot encoding used there.
 const int BLACK_HOLE_MAX = 8;
+const int CLOUD_MAX = 64;
 const uint BH_INDEX_MASK = 0x3FFFFFFFu;
 const uint BH_PURGE = 0x40000000u;
 
@@ -27,6 +28,7 @@ layout(std430, binding = 1) buffer SimStats {
     uint blackHoles[BLACK_HOLE_MAX];
     uint blackHoleMass[BLACK_HOLE_MAX];
     uint blackHoleStarve[BLACK_HOLE_MAX];
+    float cloudCache[CLOUD_MAX * 5];
 };
 
 layout(std140, binding = 2) uniform TuningParams {
@@ -582,38 +584,16 @@ vec3 accretionGlow(vec3 color, ivec3 voxelPos) {
 }
 
 // =================================================================================================
-// CLOUD FIELD -- shared placement math. THIS BLOCK IS DUPLICATED VERBATIM IN falling_sand.comp.
+// CLOUD FIELD -- read only. The placement maths lives in falling_sand.comp, which evaluates it once
+// per dispatch into cloudCache; this stage just reads the answer.
 //
-// Cloud layout is a pure function of (index, time) and is stored nowhere. Both stages receive the
-// same pc.time in a single vkCmdPushConstants call, so the compute stage (deciding which columns
-// sit under a cloud and may rain) and the fragment stage (drawing them) derive byte-identical
-// positions with no synchronisation and no per-slot buffer. If you edit one copy you MUST edit
-// the other, or rain will fall out of a clear sky.
-//
-// The population is fixed: clouds scroll along +X and wrap, so one drifts out of the far border
-// exactly as another drifts in at the near one. Nothing is ever "revealed" or "retired".
+// It used to be duplicated here verbatim, with a warning that editing one copy without the other
+// would make rain fall from a clear sky. Sharing the cache removes that hazard outright, and removes
+// the cost that made it worth duplicating in the first place: six sin() calls per cloud, re-derived
+// by every pixel, is ~369 M transcendentals a frame at 32 clouds and 1600x1200.
 // =================================================================================================
-const int CLOUD_MAX = 64;
-
-// FUNCTION: cloudRadii
-vec3 cloudRadii(int i) {
-    float h4 = hash(vec3(float(i), 211.0f, 5.0f));
-    float h5 = hash(vec3(float(i), 71.0f, 61.0f));
-    float h6 = hash(vec3(float(i), 19.0f, 173.0f));
-    float rxz = 10.0f + h4 * 18.0f;
-    return vec3(rxz, 4.0f + h5 * 6.0f, rxz * (0.7f + h6 * 0.6f));
-}
-
-// FUNCTION: cloudCenterXZ
-vec2 cloudCenterXZ(int i, float t) {
-    float h1 = hash(vec3(float(i), 11.0f, 3.0f));
-    float h2 = hash(vec3(float(i), 47.0f, 91.0f));
-    float phase = hash(vec3(float(i), 91.0f, 250.0f)) * 6.28318f;
-
-    float x = mod(h1 * float(WIDTH) + t * tuning.cloudDriftSpeed, float(WIDTH));
-    float z = mod(h2 * float(DEPTH) + sin(t * 0.12f + phase) * 3.0f, float(DEPTH));
-    return vec2(x, z);
-}
+vec2 cloudCenterXZ(int i) { return vec2(cloudCache[i * 5 + 0], cloudCache[i * 5 + 1]); }
+vec3 cloudRadii(int i)    { return vec3(cloudCache[i * 5 + 2], cloudCache[i * 5 + 3], cloudCache[i * 5 + 4]); }
 
 // FUNCTION: cloudEdgeFade
 // 1 over the middle of the cube, falling to 0 at each border. The fade has to happen INSIDE the
@@ -990,7 +970,7 @@ void main() {
 
             int cloudN = int(min(tuning.cloudCount, uint(CLOUD_MAX)));
             for (int i = 0; i < cloudN; i++) {
-                vec2 centerXZ = cloudCenterXZ(i, pc.time);
+                vec2 centerXZ = cloudCenterXZ(i);
                 float edgeFade = cloudEdgeFade(centerXZ);
                 if (edgeFade <= 0.01f) continue;
 
