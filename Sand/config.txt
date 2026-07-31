@@ -1,17 +1,26 @@
 # config.txt -- loaded once at startup, changes require relaunching the app
 
 # --- World shape ---
-# grid_size sets both width and height; the simulation has no notion of a non-square footprint.
-# Memory is 4 bytes per voxel, so 128 is 8 MB in 3D and 64 KB in 2D. Clamped to 8..512.
-#
-# two_dimensional=1 makes the world exactly ONE layer deep rather than a thin slab, and that
-# distinction is the whole feature: at depth 1 the Z axis leaves the simulation entirely. Movement
-# collapses to the XY plane, the one-voxel border that walls the other axes cannot exist in Z so it
-# is not applied there, black hole orbits all take the Z axis as their pole so they run in-plane, and
-# the brush becomes a square or circle one voxel thick. The result is a 2D falling-sand simulation
-# that still renders, lights and shadows as 3D geometry.
+# grid_size sets all three axes. Memory is 4 bytes per voxel, so 128 is 8 MB and 256 is 128 MB, and
+# the simulation cost rises with the cube of it. Clamped to 8..512.
 sim.grid_size=128
-sim.two_dimensional=0
+
+# --- Rendering budget ---
+# march_max_steps bounds the primary raymarch in voxel steps. 0 means derive it from the world, which
+# is what you want: a DDA crossing a WxHxD box visits at most W+H+D cells, so W+H+D is exactly the
+# budget a ray needs to reach the far side.
+#
+# This was a hardcoded 400, which happens to suit 128^3 (384) and silently truncates every ray at
+# anything larger. At 256^3 a ray needs 768 and got 400, so the far half of the world was simply not
+# drawn -- and because zooming in brought geometry back within budget, it read as a camera problem
+# rather than a renderer one. Leave this at 0 and it follows grid_size automatically.
+#
+# Set it non-zero to deliberately trade distant geometry for frame time. Far surfaces stop being
+# drawn at all rather than degrading, so it is a blunt instrument.
+render.march_max_steps=0
+# Shadow rays are bounded separately: truncating one is graceful, it simply reads as lit, so this can
+# stay short at large world sizes where tracing every shadow in full is the expensive half of a frame.
+render.shadow_max_steps=256
 
 # --- Rain ---
 # A storm begins once the water deficit (peak level minus current level) exceeds start_layers

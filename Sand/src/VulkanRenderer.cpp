@@ -467,7 +467,6 @@ void VulkanRenderer::drawFrame() {
     const float extentX = (float)config.tuning.gridWidth;
     const float extentY = (float)config.tuning.gridHeight;
     const float extentZ = (float)config.tuning.gridDepth;
-    const bool flatWorld = (config.tuning.gridDepth <= 1);
 
     float viewDistance = std::max(1.0f,
         (extentX * 0.5f - pc.camX) * forward.x +
@@ -500,10 +499,7 @@ void VulkanRenderer::drawFrame() {
     int minBound = 1 + halfDistMin;
     int maxBoundX = (int)config.tuning.gridWidth - 2 - halfDistMax;
     int maxBoundY = (int)config.tuning.gridHeight - 2 - halfDistMax;
-    // A flat world has exactly one layer, so Z is pinned there rather than being given a brush-sized
-    // margin it has no room for.
-    int minBoundZ = flatWorld ? 0 : minBound;
-    int maxBoundZ = flatWorld ? 0 : (int)config.tuning.gridDepth - 2 - halfDistMax;
+    int maxBoundZ = (int)config.tuning.gridDepth - 2 - halfDistMax;
 
     if (isInside) {
         float spawnDist = 30.0f;
@@ -512,10 +508,10 @@ void VulkanRenderer::drawFrame() {
         float hitZ = oz + rz * spawnDist;
 
         if (hitX >= minBound && hitX <= maxBoundX && hitY >= minBound && hitY <= maxBoundY &&
-            (flatWorld || (hitZ >= minBoundZ && hitZ <= maxBoundZ))) {
+            hitZ >= minBound && hitZ <= maxBoundZ) {
             pc.spawnX = (int)hitX;
             pc.spawnY = (int)hitY;
-            pc.spawnZ = flatWorld ? 0 : (int)hitZ;
+            pc.spawnZ = (int)hitZ;
             if (window->isLeftClicking()) pc.spawnActive = 1;
         }
     }
@@ -534,7 +530,7 @@ void VulkanRenderer::drawFrame() {
 
             pc.spawnX = std::clamp((int)hitX, minBound, maxBoundX);
             pc.spawnY = std::clamp((int)hitY, minBound, maxBoundY);
-            pc.spawnZ = flatWorld ? 0 : std::clamp((int)hitZ, minBoundZ, maxBoundZ);
+            pc.spawnZ = std::clamp((int)hitZ, minBound, maxBoundZ);
             if (window->isLeftClicking()) pc.spawnActive = 1;
         }
     }

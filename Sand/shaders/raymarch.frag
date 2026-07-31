@@ -33,6 +33,8 @@ layout(std140, binding = 2) uniform TuningParams {
     uint gridWidth;
     uint gridHeight;
     uint gridDepth;
+    uint marchMaxSteps;
+    uint shadowMaxSteps;
     uint rainStartLayers;
     uint rainDropsPerTick;
     float rainOvershoot;
@@ -118,9 +120,6 @@ layout(push_constant) uniform Constants {
 #define HEIGHT int(tuning.gridHeight)
 #define DEPTH  int(tuning.gridDepth)
 
-// FUNCTION: isFlat
-bool isFlat() { return DEPTH <= 1; }
-
 // FUNCTION: worldExtent
 vec3 worldExtent() { return vec3(float(WIDTH), float(HEIGHT), float(DEPTH)); }
 
@@ -171,13 +170,8 @@ bool isEdge(vec3 p) {
     vec3 extent = worldExtent();
     if (p.x < thickness || p.x > extent.x - thickness) boundCount++;
     if (p.y < thickness || p.y > extent.y - thickness) boundCount++;
-    // A one-voxel-deep world is entirely within `thickness` of both Z faces, so counting Z would mark
-    // every point an edge and outline the whole slab. In 2D the frame is the XY rectangle alone.
-    if (!isFlat() && (p.z < thickness || p.z > extent.z - thickness)) boundCount++;
-    // Two bounds means "on an edge of the box" -- where two faces meet. A flat world is a rectangle,
-    // not a box: its border is a single bound, and requiring two there would draw four corner dots
-    // instead of a frame.
-    return boundCount >= (isFlat() ? 1 : 2);
+    if (p.z < thickness || p.z > extent.z - thickness) boundCount++;
+    return boundCount >= 2;
 }
 
 // FUNCTION: calculateShadow
@@ -208,7 +202,7 @@ float calculateShadow(ivec3 hitVoxelPos, vec3 hitNormal, vec3 lightDir) {
     vec3 tMax = 0.5f * tDelta;
     float transmittance = 1.0f;
 
-    for (int i = 0; i < 256; i++) {
+    for (int i = 0; i < int(tuning.shadowMaxSteps); i++) {
         if (voxelPos.x < 0 || voxelPos.x >= WIDTH ||
             voxelPos.y < 0 || voxelPos.y >= HEIGHT ||
             voxelPos.z < 0 || voxelPos.z >= DEPTH) {
@@ -629,7 +623,7 @@ vec2 cloudCenterXZ(int i, float t) {
 float cloudEdgeFade(vec2 c) {
     float d = max(tuning.cloudEdgeFadeDist, 0.001f);
     float fx = smoothstep(0.0f, d, c.x) * smoothstep(0.0f, d, float(WIDTH) - c.x);
-    float fz = isFlat() ? 1.0f : (smoothstep(0.0f, d, c.y) * smoothstep(0.0f, d, float(DEPTH) - c.y));
+    float fz = smoothstep(0.0f, d, c.y) * smoothstep(0.0f, d, float(DEPTH) - c.y);
     return fx * fz;
 }
 
@@ -776,7 +770,7 @@ void main() {
     uint hitType = 0u;
     uint hitRawVoxel = 0u;
     
-    for (int i = 0; i < 400; i++) {
+    for (int i = 0; i < int(tuning.marchMaxSteps); i++) {
         if (voxelPos.x < 0 || voxelPos.x >= WIDTH || 
             voxelPos.y < 0 || voxelPos.y >= HEIGHT || 
             voxelPos.z < 0 || voxelPos.z >= DEPTH) {
@@ -1049,12 +1043,8 @@ void main() {
         int halfDistMin = pc.spawnSize / 2;
         int halfDistMax = (pc.spawnSize - 1) / 2;
         
-        // One layer thick in a flat world, matching inBrush: the cursor outlines a square or a
-        // circle rather than a cube or a ball.
-        float nearZ = isFlat() ? float(pc.spawnZ)        : float(pc.spawnZ - halfDistMin);
-        float farZ  = isFlat() ? float(pc.spawnZ) + 1.0f : float(pc.spawnZ + halfDistMax + 1);
-        vec3 boxMin = vec3(float(pc.spawnX - halfDistMin), float(pc.spawnY - halfDistMin), nearZ);
-        vec3 boxMax = vec3(float(pc.spawnX + halfDistMax + 1), float(pc.spawnY + halfDistMax + 1), farZ);
+        vec3 boxMin = vec3(float(pc.spawnX - halfDistMin), float(pc.spawnY - halfDistMin), float(pc.spawnZ - halfDistMin));
+        vec3 boxMax = vec3(float(pc.spawnX + halfDistMax + 1), float(pc.spawnY + halfDistMax + 1), float(pc.spawnZ + halfDistMax + 1));
 
         vec3 cursorColor = MATERIAL_CURSOR_COLOR[clamp(pc.spawnType, 0, MATERIAL_COUNT - 1)];
 
@@ -1064,16 +1054,9 @@ void main() {
             vec3 sphereCenter = (boxMin + boxMax) * 0.5f;
             float sphereRadius = float(pc.spawnSize) * 0.5f;
 
-            // Flattening the Z radius to half a voxel turns the ball into a disc, so the round brush
-            // stays round in the plane the world actually occupies. Solved as an ellipsoid, which is
-            // the same intersection the cloud layer already does -- scale the ray into the shape's
-            // own space and the sphere maths carries over unchanged.
-            vec3 radii = isFlat() ? vec3(sphereRadius, sphereRadius, 0.5f) : vec3(sphereRadius);
-            vec3 oc = (rayOrigin - sphereCenter) / radii;
-            vec3 rdn = rayDir / radii;
-            float a = dot(rdn, rdn);
-            float b = dot(oc, rdn) / a;
-            float c = (dot(oc, oc) - 1.0f) / a;
+            vec3 oc = rayOrigin - sphereCenter;
+            float b = dot(oc, rayDir);
+            float c = dot(oc, oc) - sphereRadius * sphereRadius;
             float disc = b * b - c;
 
             if (disc > 0.0f) {
@@ -1086,7 +1069,7 @@ void main() {
                     // side and dim it -- the same read as the box cursor's back edges.
                     bool inside = tNear <= 0.0f;
                     float cursorDist = inside ? tFar : tNear;
-                    vec3 shellNormal = normalize(((rayOrigin + rayDir * cursorDist) - sphereCenter) / (radii * radii));
+                    vec3 shellNormal = normalize((rayOrigin + rayDir * cursorDist) - sphereCenter);
 
                     // 1 where the ray grazes the shell, which is exactly the silhouette. Shading
                     // the rim rather than filling the sphere keeps the world visible through it.

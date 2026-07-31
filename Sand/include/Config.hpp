@@ -9,10 +9,8 @@
 // add new fields at the end, and mirror any addition in both shaders' TuningParams block.
 struct TuningParams {
     // --- World shape ---
-    // Derived in loadConfig from sim.grid_size and sim.two_dimensional rather than set directly, so
-    // the three can never disagree about what shape the world is. In 2D the depth is exactly 1: not
-    // a thin slab but a single layer, which is what makes the Z axis vanish from the simulation
-    // instead of merely being small.
+    // Derived in loadConfig from sim.grid_size rather than set directly, so the three can never
+    // disagree about the shape of the world.
     //
     // These live in the UBO rather than being compiled in, which costs a uniform read everywhere the
     // old literals were. Specialisation constants would let the compiler fold them back into
@@ -20,6 +18,14 @@ struct TuningParams {
     uint32_t gridWidth = 128;
     uint32_t gridHeight = 128;
     uint32_t gridDepth = 128;
+    // Upper bound on the primary raymarch, in voxel steps. A DDA crossing a WxHxD box visits at most
+    // W+H+D cells, so this is derived from the world rather than fixed: the old hardcoded 400 was
+    // sized for 128^3 (384) and silently truncated every ray at larger sizes, which cut the far side
+    // of the world out of the image entirely.
+    uint32_t marchMaxSteps = 384;
+    // Shadow rays are bounded separately because truncating one is graceful -- it reads as lit --
+    // and at large world sizes tracing them in full is the more expensive half of the frame.
+    uint32_t shadowMaxSteps = 256;
     // --- Rain ---
     // A storm begins once the water deficit exceeds rainStartLayers full grid layers, then
     // returns water at rainDropsPerTick per dispatch until the deficit is repaid -- so storm
