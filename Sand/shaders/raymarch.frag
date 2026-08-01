@@ -98,6 +98,20 @@ layout(std140, binding = 2) uniform TuningParams {
     float lavaConsumeChance;
     float lavaIgniteChance;
     float darkStoneDryChance;
+    uint locustTickDispatches;
+    uint locustStageSize;
+    uint locustSpawnSize;
+    uint locustMaxSize;
+    uint locustBudSize;
+    uint locustEatGain;
+    uint locustEatTicksMin;
+    uint locustEatTicksMax;
+    uint locustRunLength;
+    float locustClimbChance;
+    float locustDensityMin;
+    float locustDensityMax;
+    uint locustSubdivision;
+    float locustCrawlRate;
 } tuning;
 
 layout(push_constant) uniform Constants {
@@ -490,7 +504,7 @@ vec3 renderFire(uint rawVoxel, ivec3 voxelPos) {
 // This is the CURSOR's palette specifically. The blocks themselves are shaded procedurally from
 // noise, moisture, coolness and lighting, so they cannot be reduced to one colour each -- which is
 // why the render dispatch downstream stays a switch. That one dispatches behaviour, not data.
-const int MATERIAL_COUNT = 13;
+const int MATERIAL_COUNT = 18;
 const vec3 MATERIAL_CURSOR_COLOR[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
     vec3(0.10f, 0.10f, 0.10f), // 0  void
     vec3(1.00f, 0.90f, 0.20f), // 1  sand
@@ -504,7 +518,12 @@ const vec3 MATERIAL_CURSOR_COLOR[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
     vec3(0.85f, 0.30f, 0.07f), // 9  lava
     vec3(0.65f, 0.20f, 0.06f), // 10 lava
     vec3(0.45f, 0.14f, 0.06f), // 11 lava, coldest
-    vec3(0.22f, 0.19f, 0.18f)  // 12 dark stone
+    vec3(0.22f, 0.19f, 0.18f), // 12 dark stone
+    vec3(0.38f, 0.30f, 0.12f), // 13 locusts, sparsest -- the five darken as the swarm thickens
+    vec3(0.46f, 0.35f, 0.13f), // 14 locusts
+    vec3(0.54f, 0.40f, 0.14f), // 15 locusts, the placeable stage
+    vec3(0.62f, 0.45f, 0.15f), // 16 locusts
+    vec3(0.70f, 0.51f, 0.16f)  // 17 locusts, densest
 );
 
 // FUNCTION: renderLava
@@ -541,6 +560,114 @@ vec3 renderDarkStone(ivec3 voxelPos, vec3 baseLighting) {
     float noise = hash(vec3(voxelPos));
     float val = 0.10f + noise * 0.06f;
     return vec3(val * 1.08f, val * 0.94f, val * 0.92f) * baseLighting;
+}
+
+// =================================================================================================
+// LOCUSTS
+//
+// A swarm is drawn as what it is -- a cloud of separate bodies -- rather than as a block tinted to
+// suggest one. When the primary march reaches a locust voxel it does not stop there; it hands off to
+// a second DDA that runs INSIDE that single voxel over a locustSubdivision^3 lattice of sub-cubes,
+// each present or absent by a hash test. A ray that threads all the way through the gaps is not a
+// hit at all and carries on to whatever is behind, exactly the way steam's dither already works.
+//
+// The cost is bounded and small: crossing a cube of N cells on a side takes at most 3N sub-steps, so
+// 12 at the default subdivision, and only for pixels that actually land on a swarm. Nothing else in
+// the frame pays for it.
+//
+// Fill comes from the stage, which is the head count -- so a swarm visibly thins as it starves and
+// thickens as it eats, and the five types are legible at a glance without a legend.
+// =================================================================================================
+const uint LOCUST_SPARSEST = 13u;
+const uint LOCUST_DENSEST = 17u;
+
+// FUNCTION: isLocustType
+bool isLocustType(uint type) { return type >= LOCUST_SPARSEST && type <= LOCUST_DENSEST; }
+
+// FUNCTION: locustDensity
+float locustDensity(uint type) {
+    float stage = float(type - LOCUST_SPARSEST) / 4.0f;
+    return clamp(mix(tuning.locustDensityMin, tuning.locustDensityMax, stage), 0.02f, 0.98f);
+}
+
+// FUNCTION: locustSubMarch
+// Walks the sub-lattice of one voxel and reports the first occupied sub-cube.
+//
+// entryNormal is the face the primary DDA came through, and it is the answer for the very first
+// sub-cell -- that cell has taken no step of its own yet, so there is nothing else to derive a
+// normal from. Every later cell gets the face its own step crossed.
+bool locustSubMarch(ivec3 voxelPos, vec3 rayOrigin, vec3 rayDir, uint type, vec3 entryNormal,
+                    out float tHit, out vec3 subNormal, out vec3 subCell) {
+    tHit = 0.0f; subNormal = entryNormal; subCell = vec3(0.0f);
+
+    int sub = clamp(int(tuning.locustSubdivision), 1, 8);
+    float cellSize = 1.0f / float(sub);
+
+    vec3 boxMin = vec3(voxelPos);
+    vec2 span = intersectAABB(rayOrigin, rayDir, boxMin, boxMin + vec3(1.0f));
+    float t = max(span.x, 0.0f);
+    if (t > span.y) return false;
+
+    // Nudged inward so a ray entering exactly on the face lands in the first cell rather than on
+    // the boundary between it and the one outside.
+    vec3 local = (rayOrigin + rayDir * (t + 1e-4f) - boxMin) * float(sub);
+    ivec3 c = clamp(ivec3(floor(local)), ivec3(0), ivec3(sub - 1));
+    ivec3 stepDir = ivec3(sign(rayDir));
+
+    vec3 tDelta = vec3(
+        (rayDir.x == 0.0f) ? 1000000.0f : abs(cellSize / rayDir.x),
+        (rayDir.y == 0.0f) ? 1000000.0f : abs(cellSize / rayDir.y),
+        (rayDir.z == 0.0f) ? 1000000.0f : abs(cellSize / rayDir.z)
+    );
+    vec3 fracPos = local - vec3(c);
+    vec3 tMax = t + vec3(
+        (stepDir.x > 0) ? (1.0f - fracPos.x) * tDelta.x : fracPos.x * tDelta.x,
+        (stepDir.y > 0) ? (1.0f - fracPos.y) * tDelta.y : fracPos.y * tDelta.y,
+        (stepDir.z > 0) ? (1.0f - fracPos.z) * tDelta.z : fracPos.z * tDelta.z
+    );
+
+    float density = locustDensity(type);
+    // Quantised time, so the swarm re-scatters in discrete jumps rather than boiling continuously.
+    // A smooth term here would put exactly the high-frequency shimmer back into the frame that the
+    // water normals were widened to take out -- and insects crawling read better as steps anyway.
+    vec3 jitter = vec3(floor(pc.time * tuning.locustCrawlRate) * 1.7f);
+
+    for (int i = 0; i < 3 * sub; i++) {
+        if (c.x < 0 || c.x >= sub || c.y < 0 || c.y >= sub || c.z < 0 || c.z >= sub) return false;
+
+        // Seeded off the sub-cell's world position, so neighbouring swarm voxels do not line their
+        // bodies up into a visible grid across the boundary.
+        if (hash(vec3(voxelPos * sub + c) + jitter) < density) {
+            tHit = t;
+            subCell = vec3(c);
+            return true;
+        }
+
+        if (tMax.x < tMax.y) {
+            if (tMax.x < tMax.z) {
+                c.x += stepDir.x; t = tMax.x; tMax.x += tDelta.x; subNormal = vec3(float(-stepDir.x), 0.0f, 0.0f);
+            } else {
+                c.z += stepDir.z; t = tMax.z; tMax.z += tDelta.z; subNormal = vec3(0.0f, 0.0f, float(-stepDir.z));
+            }
+        } else {
+            if (tMax.y < tMax.z) {
+                c.y += stepDir.y; t = tMax.y; tMax.y += tDelta.y; subNormal = vec3(0.0f, float(-stepDir.y), 0.0f);
+            } else {
+                c.z += stepDir.z; t = tMax.z; tMax.z += tDelta.z; subNormal = vec3(0.0f, 0.0f, float(-stepDir.z));
+            }
+        }
+    }
+
+    return false;
+}
+
+// FUNCTION: renderLocust
+// Brown-amber bodies, shaded per sub-cube so the swarm reads as many individuals rather than one
+// carved mass. The variation is seeded off the sub-cell rather than the voxel for that reason.
+vec3 renderLocust(ivec3 voxelPos, vec3 subCell, vec3 baseLighting) {
+    float n = hash(subCell * 1.37f + vec3(voxelPos) * 0.11f);
+    vec3 shell = mix(vec3(0.15f, 0.10f, 0.035f), vec3(0.55f, 0.40f, 0.11f), n);
+    return shell * baseLighting;
 }
 
 // FUNCTION: renderSteam
@@ -785,6 +912,11 @@ void main() {
     uint hitType = 0u;
     uint hitRawVoxel = 0u;
 
+    // Filled in only when the ray stops on a locust sub-cube; see locustSubMarch.
+    float locustT = 0.0f;
+    vec3 locustNormal = vec3(0.0f, 1.0f, 0.0f);
+    vec3 locustCell = vec3(0.0f);
+
     // Measured against the full cube, not the clipped march box, so the fade does not change as the
     // world fills up or empties.
     float MAX_VISIBILITY = max(300.0f, aabbHit.y * 1.5f);
@@ -821,9 +953,21 @@ void main() {
                     hitType = 0u; // Skip this hit, let the ray keep traveling
                 } else {
                     hit = true;
-                    hitRawVoxel = rawVoxel; 
+                    hitRawVoxel = rawVoxel;
                     break;
                 }
+            } else if (isLocustType(hitType)) {
+                // A swarm is bodies and gaps, not a block. The ray drops into the voxel's own
+                // sub-lattice; if it threads all the way through without meeting a body then this
+                // was never a hit, and it carries on to whatever is behind -- the same "keep
+                // traveling" the steam dither above does, just resolved geometrically.
+                if (locustSubMarch(voxelPos, rayOrigin, rayDir, hitType, normal,
+                                   locustT, locustNormal, locustCell)) {
+                    hit = true;
+                    hitRawVoxel = rawVoxel;
+                    break;
+                }
+                hitType = 0u;
             } else {
                 hit = true;
                 hitRawVoxel = rawVoxel; 
@@ -863,6 +1007,11 @@ void main() {
         // which is fine for materials that are not in constant motion at their surface.
         if (hitType == 2u) {
             normal = applyWaterWaves(getWaterNormal(voxelPos), voxelPos);
+        } else if (isLocustType(hitType)) {
+            // The sub-cube's own face. Smoothing across the voxel's neighbours would be actively
+            // wrong here: the surface the ray met is a small cube inside this voxel, and it has
+            // nothing to do with which voxels happen to sit next to this one.
+            normal = locustNormal;
         } else {
             normal = getSmoothNormal(voxelPos);
         }
@@ -912,6 +1061,13 @@ void main() {
             case 12u:
                 finalVoxelColor = renderDarkStone(voxelPos, baseLighting);
                 break;
+            case 13u:
+            case 14u:
+            case 15u:
+            case 16u:
+            case 17u:
+                finalVoxelColor = renderLocust(voxelPos, locustCell, baseLighting);
+                break;
             // No case for type 7: the march above never reports a black hole voxel as a hit, because
             // the body is drawn as a ball further down rather than as the voxel it is anchored to.
             default:
@@ -920,7 +1076,12 @@ void main() {
 
         finalVoxelColor = accretionGlow(finalVoxelColor, voxelPos);
 
-        float distanceTraveled = length(vec3(voxelPos) + vec3(0.5f) - rayOrigin);
+        // rayDir is normalised, so the sub-march's ray parameter is already a distance -- and it is
+        // the exact one, where the voxel-centre estimate every other material uses would put a
+        // swarm's bodies up to half a voxel out against the clouds and the cursor.
+        float distanceTraveled = isLocustType(hitType)
+            ? locustT
+            : length(vec3(voxelPos) + vec3(0.5f) - rayOrigin);
         finalVoxelColor *= mix(1.0f, 0.0f, clamp(distanceTraveled / MAX_VISIBILITY, 0.0f, 1.0f));
         
         finalDist = distanceTraveled;

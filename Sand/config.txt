@@ -239,3 +239,58 @@ purge.decay_rate=200
 #                  world visibly swirls in instead of collapsing straight to the middle.
 purge.orbit_speed=8.0
 purge.infall=0.5
+# --- Locusts ------------------------------------------------------------------------------------
+# A swarm carries a head count in its age byte and its visual stage (types 13..17, sparsest to
+# densest) is derived from that count -- the same arrangement lava uses for coolness, so a swarm's
+# size and its appearance can never disagree.
+#
+# tick_dispatches is the one to read first, because it is what makes every other number here mean
+# something. A dispatch is not a locust's tick. At sim speed 1 there is one dispatch per frame, so
+# reading the rules literally -- "loses one locust per tick", "eats a grass block over 10 to 30
+# ticks" -- would starve a fresh swarm of 30 to death in half a second and let it strip a block of
+# grass in a sixth of one. Locusts therefore run on their own clock, one tick per this many
+# dispatches, counted in each swarm's own sleep byte. At 12 that is about 5 ticks a second, so a
+# starving swarm of 30 has roughly six seconds to find grass and a meal takes two to six. Set it
+# to 1 for the literal per-dispatch reading.
+locust.tick_dispatches=12
+#   stage_size / max_size = head counts per visual stage, and the cap. Five stages, so max_size is
+#                  clamped to 5 * stage_size. Bands are [1..10], [11..20] ... which is what makes
+#                  the placeable stage seed exactly 30 with no special case.
+#   spawn_size   = what a hand-placed swarm starts with. Only the stage containing this value is on
+#                  the keyboard (key 0); all five are in the dropdown.
+#   bud_size     = head count of a child swarm. A meal that pushes a swarm past the cap buds one off
+#                  in a random direction rather than throwing the surplus away, which is the whole
+#                  reason a single placed swarm becomes a plague.
+#   eat_gain     = head count gained per grass block finished.
+locust.stage_size=10
+locust.max_size=50
+locust.spawn_size=30
+locust.bud_size=10
+locust.eat_gain=20
+#   eat_ticks_min / max = ticks to strip one grass block, at the cap and at one stage respectively,
+#                  interpolated linearly between. Bigger swarms eat faster: 50 locusts take 10
+#                  ticks, 30 take 20, 10 take 30.
+locust.eat_ticks_min=10
+locust.eat_ticks_max=30
+#   run_length   = steps a swarm commits to a heading before it looks around for grass again.
+#                  Gating the search on the end of a run rather than running it every tick is what
+#                  makes swarms wander; checked every tick they would lock onto the nearest grass
+#                  the moment it came into range. Capped at 7 by the bits the counter lives in.
+#   climb_chance = when something blocks the run, the chance of climbing it rather than turning
+#                  away. A climb prefers to mount the obstacle -- stepping onto its top, which
+#                  keeps the swarm going the way it was -- over scaling a wall face.
+locust.run_length=3
+locust.climb_chance=0.5
+#   Appearance. A swarm is drawn as a lattice of small cubes inside its voxel rather than as a solid
+#   block, and a ray that finds a gap all the way through passes on to whatever is behind.
+#   subdivision  = sub-cubes per voxel edge. 4 means up to 64 bodies per block; the sub-march costs
+#                  at most 3x this many steps, and only for pixels that land on a swarm.
+#   density_min / max = how full the sparsest and densest stages look. This is the whole visual
+#                  read of a swarm's health -- it thins as it starves and thickens as it eats.
+#   crawl_rate   = times a second the swarm re-scatters. Quantised deliberately: a smooth version
+#                  reintroduces exactly the per-pixel shimmer the water normals were widened to
+#                  remove, and crawling insects read better as steps in any case.
+locust.subdivision=4
+locust.density_min=0.18
+locust.density_max=0.62
+locust.crawl_rate=6.0

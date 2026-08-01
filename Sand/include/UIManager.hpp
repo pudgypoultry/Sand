@@ -28,7 +28,16 @@ enum class MaterialType {
     LavaHot = 9,
     LavaWarm = 10,
     LavaCooling = 11,
-    DarkStone = 12
+    DarkStone = 12,
+    // Five views of one head count, exactly as the lava stages are five views of one coolness --
+    // see the LOCUSTS block in falling_sand.comp. LocustSwarm is the only one meant to be placed in
+    // normal play and is the one on the shortcut; the others are in the dropdown so a swarm can be
+    // dropped in partway through its life.
+    LocustSparse = 13,
+    LocustSmall = 14,
+    LocustSwarm = 15,
+    LocustLarge = 16,
+    LocustPlague = 17
 };
 
 enum class CursorShape {
@@ -125,7 +134,9 @@ public:
         // Index must line up with MaterialType -- these are parallel lists with nothing tying them
         // together at compile time, so a gap here silently places the wrong block.
         const char* items[] = { "Void", "Sand", "Water", "Stone", "Dirt", "Fire", "Steam", "Black Hole",
-                                "Lava", "Lava (Hot)", "Lava (Warm)", "Lava (Cooling)", "Dark Stone" };
+                                "Lava", "Lava (Hot)", "Lava (Warm)", "Lava (Cooling)", "Dark Stone",
+                                "Locusts (10)", "Locusts (20)", "Locusts (30)", "Locusts (40)",
+                                "Locusts (50)" };
         int currentMat = static_cast<int>(m_currentMaterial);
         if (ImGui::Combo("Material", &currentMat, items, IM_ARRAYSIZE(items))) {
             m_currentMaterial = static_cast<MaterialType>(currentMat);
@@ -425,8 +436,11 @@ private:
         if (ImGui::IsKeyPressed(ImGuiKey_8)) m_currentMaterial = MaterialType::BlackHole;
         // Only the hottest stage gets a key. The cooler ones exist to be inspected, not poured --
         // placing a half-cooled flow by hand is a debugging affordance, not a building material.
-        // Dark stone is dropdown-only for the same reason; key 0 is deliberately left free.
+        // Dark stone is dropdown-only for the same reason.
         if (ImGui::IsKeyPressed(ImGuiKey_9)) m_currentMaterial = MaterialType::LavaHottest;
+        // Same rule for the swarm stages: one key, and it places the 30-strong swarm. The other four
+        // are dropdown-only, since a swarm's size is meant to be something it earns or loses.
+        if (ImGui::IsKeyPressed(ImGuiKey_0)) m_currentMaterial = MaterialType::LocustSwarm;
 
         if (ImGui::IsKeyPressed(ImGuiKey_Tab)) {
             m_cursorShape = (m_cursorShape == CursorShape::Cube) ? CursorShape::Sphere : CursorShape::Cube;

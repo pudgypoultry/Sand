@@ -198,6 +198,31 @@ struct TuningParams {
     float lavaConsumeChance = 0.05f;   // chance per tick to eat a neighbour it has already dried out
     float lavaIgniteChance = 0.2f;     // chance per tick to set adjacent grass alight
     float darkStoneDryChance = 0.002f; // chance per tick for dark stone to shed one unit of water
+
+    // --- Locusts ---
+    // A swarm voxel carrying a head count in its age byte, with the visual stage (types 13..17,
+    // sparsest to densest) derived from it exactly the way lava derives its stage from coolness.
+    //
+    // locustTickDispatches is the one that makes the rest of these mean anything. A dispatch is not
+    // a locust's tick: at sim speed 1 that is one per frame, so "loses one locust per tick" would
+    // starve a fresh swarm in half a second and "eats for 10-30 ticks" would be a sixth of a second.
+    // Locusts therefore run on their own clock, one tick per this many dispatches, counted in each
+    // voxel's own sleep byte. Raise it for slower, more deliberate swarms; set it to 1 to get the
+    // literal per-dispatch reading.
+    uint32_t locustTickDispatches = 12; // dispatches per locust tick (~5 ticks/sec at 60fps)
+    uint32_t locustStageSize = 10;      // head count per visual stage; 5 stages, so 50 is the cap
+    uint32_t locustSpawnSize = 30;      // head count a hand-placed swarm starts with
+    uint32_t locustMaxSize = 50;        // hard cap; exceeding it buds off a child swarm
+    uint32_t locustBudSize = 10;        // head count a budded child starts with
+    uint32_t locustEatGain = 20;        // head count gained per grass block finished
+    uint32_t locustEatTicksMin = 10;    // ticks to eat one grass block at the cap
+    uint32_t locustEatTicksMax = 30;    // ticks to eat one grass block at one stage
+    uint32_t locustRunLength = 3;       // steps committed to a heading before re-scanning for grass
+    float locustClimbChance = 0.5f;     // when blocked, chance to climb rather than turn
+    float locustDensityMin = 0.18f;     // sub-cube fill of the sparsest stage
+    float locustDensityMax = 0.62f;     // sub-cube fill of the densest stage
+    uint32_t locustSubdivision = 4;     // sub-cubes per voxel edge; 4 means up to 64 per block
+    float locustCrawlRate = 6.0f;       // swarm re-scatters this many times a second
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

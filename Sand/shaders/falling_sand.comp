@@ -102,6 +102,20 @@ layout(std140, binding = 2) uniform TuningParams {
     float lavaConsumeChance;
     float lavaIgniteChance;
     float darkStoneDryChance;
+    uint locustTickDispatches;
+    uint locustStageSize;
+    uint locustSpawnSize;
+    uint locustMaxSize;
+    uint locustBudSize;
+    uint locustEatGain;
+    uint locustEatTicksMin;
+    uint locustEatTicksMax;
+    uint locustRunLength;
+    float locustClimbChance;
+    float locustDensityMin;
+    float locustDensityMax;
+    uint locustSubdivision;
+    float locustCrawlRate;
 } tuning;
 
 #define LAYER_SIZE (uint(WIDTH) * uint(HEIGHT)) // one layer of the world
@@ -226,6 +240,145 @@ uint lavaSpawnCoolness(uint type) {
     if (type == DARK_STONE) return lavaSolidifyCoolness();
     if (isLava(type)) return (type - LAVA_HOTTEST) * max(tuning.lavaStageSize, 1u);
     return 0u;
+}
+
+// =================================================================================================
+// LOCUSTS
+//
+// Five voxel types, sparsest to densest, over one 8-bit head count in the age byte. Exactly the lava
+// arrangement: the stage is a denormalised view of the number, not independent state, so a swarm's
+// look and its size can never contradict each other.
+//
+// The other two bytes are shared rather than dedicated, because a swarm is only ever doing one of
+// two things and they need different state:
+//
+//   age   -- head count, 1..locustMaxSize. Zero is death, so it is never stored.
+//   sleep -- position within the current locust tick. NOT the engine's sleep/wake counter; a swarm
+//            is never dormant, it is starving on a clock, so the byte is free for the clock itself.
+//   dir   -- the eat timer when standing on grass, and packed heading+steps when not. Which one it
+//            means is read off the grid (is there grass under me?) rather than stored, so there is
+//            no third state to keep consistent. The one hazard is a swarm STEPPING onto grass with
+//            navigation bits still in the byte, which would read as a meal already part-eaten --
+//            locustArriveDir exists solely to clear it at the moment of arrival.
+// =================================================================================================
+const uint LOCUST_SPARSEST = 13u;
+const uint LOCUST_DENSEST = 17u;
+
+// FUNCTION: isLocust
+bool isLocust(uint type) { return type >= LOCUST_SPARSEST && type <= LOCUST_DENSEST; }
+
+// FUNCTION: locustMaxCount
+uint locustMaxCount() { return max(tuning.locustMaxSize, 1u); }
+
+// FUNCTION: locustStage
+uint locustStage() { return max(tuning.locustStageSize, 1u); }
+
+// FUNCTION: locustTypeFor
+// Head count to visual stage. Bands are [1..s], [s+1..2s], ... so a count sitting exactly on a band
+// edge belongs to the lower band -- which is what makes locustSpawnCount's round trip exact.
+uint locustTypeFor(uint count) {
+    uint stage = (count == 0u) ? 0u : (count - 1u) / locustStage();
+    return LOCUST_SPARSEST + min(stage, 4u);
+}
+
+// FUNCTION: locustSpawnCount
+// Seed head count for a stage placed straight from the material dropdown, the same job
+// lavaSpawnCoolness does. Returns the TOP of the stage's band, which is why the placeable stage
+// starts at exactly locustSpawnSize with no special case: at the default stage size of 10 the third
+// band tops out at 30, and locustTypeFor(30) lands back on that same third band.
+uint locustSpawnCount(uint type) {
+    if (!isLocust(type)) return 0u;
+    return min((type - LOCUST_SPARSEST + 1u) * locustStage(), locustMaxCount());
+}
+
+// FUNCTION: locustEatTicks
+// How many locust ticks a swarm needs to strip one grass block. Interpolated across the whole live
+// range so a bigger swarm eats faster: the cap takes locustEatTicksMin, a swarm down to its last
+// stage takes locustEatTicksMax, and everything between is linear.
+uint locustEatTicks(uint count) {
+    uint fast = tuning.locustEatTicksMin;
+    uint slow = tuning.locustEatTicksMax;
+    uint cap = locustMaxCount();
+    uint floorCount = min(locustStage(), cap);
+
+    if (count >= cap) return fast;
+    if (count <= floorCount || cap == floorCount) return slow;
+
+    float t = float(count - floorCount) / float(cap - floorCount);
+    return uint(round(mix(float(slow), float(fast), t)));
+}
+
+// FUNCTION: locustInBounds
+// The interior test, matching the one main() applies to the invocation itself -- the outer shell is
+// walled off, so a swarm must never be written into it.
+bool locustInBounds(ivec3 p) {
+    return p.x > 0 && p.x < WIDTH - 1 && p.y > 0 && p.y < HEIGHT - 1 && p.z > 0 && p.z < DEPTH - 1;
+}
+
+// FUNCTION: locustIsGrass
+// Grass is a range on dirt's flora byte, not a type: 1..10 is bare soil warming up, 11..100 is
+// visible grass, and past 100 it is drowning. Only the middle band is food.
+bool locustIsGrass(uint value) {
+    uint flora = (value >> 8) & 0xFFu;
+    return getType(value) == 4u && flora > 10u && flora <= 100u;
+}
+
+// FUNCTION: locustGrassAt
+bool locustGrassAt(ivec3 p) {
+    if (p.x < 0 || p.x >= WIDTH || p.y < 0 || p.y >= HEIGHT || p.z < 0 || p.z >= DEPTH) return false;
+    return locustIsGrass(grid[getIndex(p)]);
+}
+
+// FUNCTION: locustPackNav / locustHeading / locustSteps
+// Heading in the low 3 bits, steps left in the run in the next 3. Two bits spare.
+uint locustPackNav(uint heading, uint steps) { return (heading & 7u) | ((min(steps, 7u)) << 3); }
+uint locustHeading(uint dirByte) { return dirByte & 7u; }
+uint locustSteps(uint dirByte) { return (dirByte >> 3) & 7u; }
+
+// FUNCTION: locustRunSteps
+uint locustRunSteps() { return clamp(tuning.locustRunLength, 1u, 7u); }
+
+// FUNCTION: locustReverse
+// The about-face for each of getHDir's eight headings. Used for the cliff rule, which turns a swarm
+// back rather than letting it walk off an edge.
+uint locustReverse(uint d) {
+    if (d == 0u) return 1u;
+    if (d == 1u) return 0u;
+    if (d == 2u) return 3u;
+    if (d == 3u) return 2u;
+    if (d == 4u) return 7u;
+    if (d == 5u) return 6u;
+    if (d == 6u) return 5u;
+    return 4u;
+}
+
+// FUNCTION: locustHasGrip
+// Is there anything at this level for a swarm to hold on to? True if any of the eight horizontal
+// neighbours is solid.
+//
+// This is what makes the climb rule work at all. Gravity and the upward step are applied in the same
+// tick, so without it every climb is undone the instant it is made: a swarm steps up the face of a
+// wall, finds nothing beneath it next tick, and drops straight back down. It can then only ever
+// mount an obstacle exactly one block tall -- anything higher and it oscillates at the foot of it
+// forever, which is not "prefer to go upward" in any useful sense.
+//
+// Clinging is also the honest reading of what a locust is. Insects hold on to vertical surfaces;
+// falling off the moment they leave the floor is sand behaviour, not swarm behaviour.
+bool locustHasGrip(ivec3 pos) {
+    for (int d = 0; d < 8; d++) {
+        ivec3 n = pos + getHDir(d);
+        if (n.x <= 0 || n.x >= WIDTH - 1 || n.z <= 0 || n.z >= DEPTH - 1) continue;
+        if (grid[getIndex(n)] != 0u) return true;
+    }
+    return false;
+}
+
+// FUNCTION: locustArriveDir
+// The dir byte a swarm should carry into `dest`. Zero when it is landing on grass, because there the
+// byte is the eat timer and navigation bits left in it would read as a meal already part eaten --
+// a swarm could finish a block it had only just stepped onto.
+uint locustArriveDir(ivec3 dest, uint nav) {
+    return locustGrassAt(dest + ivec3(0, -1, 0)) ? 0u : nav;
 }
 
 // FUNCTION: incWater / decWater
@@ -1199,7 +1352,11 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
                 if (fract(randVal * 66.0f) < tuning.grassSubmergedDecayChance) floraState++;
                 if (floraState >= 200u) floraState = 0u;
             }
-        } else if (aboveType != 5u) {
+        } else if (aboveType != 5u && !isLocust(aboveType)) {
+            // Anything else resting on top smothers the grass at once. Fire is excepted because it
+            // burns grass down over time instead, and locusts for the same reason -- a swarm eats a
+            // block over 10 to 30 of its own ticks, and smothering would delete the meal on the
+            // first dispatch after it arrived, so a swarm could never actually be fed.
             floraState = 0u;
         }
     }
@@ -1563,6 +1720,207 @@ void updateDarkStone(ivec3 pos, uint currentIndex, uint rawValue, uint currentAg
     }
 }
 
+// FUNCTION: locustBud
+// Drops a child swarm in a random direction, trying the other seven if that cell is taken. Called
+// only when a meal pushes a swarm past its cap, so the overflow becomes another swarm rather than
+// being thrown away.
+void locustBud(ivec3 pos, float randVal) {
+    uint bud = clamp(tuning.locustBudSize, 1u, locustMaxCount());
+    int start = int(fract(randVal * 31.0f) * 8.0f);
+
+    for (int i = 0; i < 8; i++) {
+        int d = (start + i) % 8;
+        ivec3 c = pos + getHDir(d);
+        if (!locustInBounds(c)) continue;
+
+        uint idx = getIndex(c);
+        if (grid[idx] != 0u) continue;
+        if (atomicCompSwap(grid[idx], 0u, pack(locustTypeFor(bud), 0u, 0u, bud)) == 0u) return;
+    }
+}
+
+// FUNCTION: updateLocust
+// One swarm, one dispatch. Most dispatches do nothing but advance the clock.
+//
+// The clock is the whole reason this reads as a creature rather than a particle. Every other
+// material here is happy to act on every dispatch, because their rates are probabilities and a
+// probability is scale-free. A locust's rules are counted, not rolled -- "loses one per tick",
+// "eats for 10 to 30 ticks" -- and a dispatch is far too short a unit for counted rules: at sim
+// speed 1 a fresh swarm of 30 would starve to death in half a second. So a locust tick is
+// locustTickDispatches dispatches, counted per voxel in its own sleep byte, and every number in
+// the rules is expressed in those.
+void updateLocust(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentSleep, uint currentAge, float randVal) {
+    uint type = getType(rawValue);
+
+    // --- The clock ------------------------------------------------------------------------------
+    uint phase = currentSleep + 1u;
+    if (phase < tuning.locustTickDispatches) {
+        atomicCompSwap(grid[currentIndex], rawValue, pack(type, currentDir, phase, currentAge));
+        return;
+    }
+
+    uint count = currentAge;
+    ivec3 belowPos = pos + ivec3(0, -1, 0);
+    uint belowIndex = getIndex(belowPos);
+    uint belowValue = grid[belowIndex];
+
+    // --- Grazing --------------------------------------------------------------------------------
+    // Standing on grass is the whole of the feeding rule: no stored "am I eating" flag, just the
+    // block underneath. A swarm that is fed does not starve this tick, which is what makes a patch
+    // of grassland somewhere a swarm can survive instead of merely somewhere it dies more slowly.
+    if (locustIsGrass(belowValue)) {
+        uint need = locustEatTicks(count);
+        uint progress = currentDir + 1u; // dir is the eat timer while grazing
+
+        if (progress < need) {
+            // Thin the grass as the meal goes on, so a swarm at work is visible from outside --
+            // but never below 11, the bottom of the grass band. Letting it fall out of that band
+            // early would end the meal from underneath and the swarm would walk off unfed.
+            uint flora = (belowValue >> 8) & 0xFFu;
+            uint bite = max(90u / max(need, 1u), 1u);
+            uint thinned = (flora > 11u + bite) ? (flora - bite) : 11u;
+            atomicCompSwap(grid[belowIndex], belowValue,
+                           pack(4u, thinned, getSleep(belowValue), getAge(belowValue)));
+            atomicCompSwap(grid[currentIndex], rawValue, pack(type, progress, 0u, count));
+            return;
+        }
+
+        // Meal finished. The grass goes first: if that CAS loses, another swarm ate this block and
+        // this one must not be paid for it.
+        uint stripped = pack(4u, 0u, getSleep(belowValue), getAge(belowValue));
+        if (atomicCompSwap(grid[belowIndex], belowValue, stripped) != belowValue) return;
+
+        uint grown = count + tuning.locustEatGain;
+        if (grown > locustMaxCount()) {
+            locustBud(pos, randVal);
+            grown = locustMaxCount();
+        }
+        atomicCompSwap(grid[currentIndex], rawValue, pack(locustTypeFor(grown), 0u, 0u, grown));
+        return;
+    }
+
+    // --- Starvation -----------------------------------------------------------------------------
+    if (count <= 1u) {
+        atomicCompSwap(grid[currentIndex], rawValue, 0u);
+        return;
+    }
+    count -= 1u;
+    uint newType = locustTypeFor(count);
+
+    // --- Gravity --------------------------------------------------------------------------------
+    // Not in the rules, and deliberately added: swarms walk on surfaces, so nothing else would ever
+    // bring one down, and a swarm whose ground was eaten or dug out from under it would hang in the
+    // air permanently.
+    //
+    // Skipped when the swarm has something to hold on to -- see locustHasGrip. A swarm on a wall is
+    // climbing it, not falling off it, and applying gravity there cancels the climb rule outright.
+    //
+    // locustInBounds, not just "is it empty": the outer shell is walled off and main() returns
+    // early for anything in it, so a swarm dropped onto y=0 would never be updated again -- it
+    // would sit there permanently, immortal and inert.
+    if (getType(belowValue) == 0u && locustInBounds(belowPos) && !locustHasGrip(pos)) {
+        if (tryMove(currentIndex, rawValue, belowIndex,
+                    pack(newType, locustArriveDir(belowPos, currentDir), 0u, count))) return;
+    }
+
+    uint heading = locustHeading(currentDir);
+    uint steps = locustSteps(currentDir);
+
+    // --- End of a run: look for grass ------------------------------------------------------------
+    // Gated on the run being over rather than checked every tick, which is the rule as written --
+    // commit to a heading, move three times, then look again. Checked every tick instead, a swarm
+    // would lock onto the nearest grass from the moment it was in range and never wander at all.
+    if (steps == 0u) {
+        int start = int(fract(randVal * 17.0f) * 8.0f);
+        for (int i = 0; i < 8; i++) {
+            int d = (start + i) % 8;
+            ivec3 c = pos + getHDir(d);
+
+            // Level, then up one, then down one: ground that steps should still be followable.
+            for (int rise = 0; rise < 3; rise++) {
+                ivec3 t = c + ivec3(0, (rise == 1) ? 1 : ((rise == 2) ? -1 : 0), 0);
+                if (!locustInBounds(t)) continue;
+                if (grid[getIndex(t)] != 0u) continue;
+                if (!locustGrassAt(t + ivec3(0, -1, 0))) continue;
+                // Arrives with a zeroed dir byte because it is landing on grass: the meal starts now.
+                if (tryMove(currentIndex, rawValue, getIndex(t), pack(newType, 0u, 0u, count))) return;
+            }
+        }
+
+        heading = uint(fract(randVal * 23.0f) * 8.0f) & 7u;
+        steps = locustRunSteps();
+    }
+
+    // --- Advance along the heading ----------------------------------------------------------------
+    ivec3 target = pos + getHDir(int(heading));
+    bool blocked = !locustInBounds(target) || grid[getIndex(target)] != 0u;
+
+    if (!blocked) {
+        // Cliff rule: a clear cell with nothing under it is a drop, and a swarm turns back rather
+        // than take it. Only the grass search above is allowed to step down, and only by one.
+        //
+        // The bounds test makes the world's own floor count as ground rather than as a bottomless
+        // drop. Without it a swarm walking at y=1 reads every direction as a cliff, turns on the
+        // spot until it starves, and the bottom layer of the world becomes quietly lethal.
+        ivec3 footing = target + ivec3(0, -1, 0);
+        if (locustInBounds(footing) && grid[getIndex(footing)] == 0u) {
+            // "Prefer to turn around" is a preference, not a reflex, and it has to be written as one.
+            // Reversing unconditionally makes a swarm on a ledge flip between the same two headings
+            // forever: both are cliffs, each turn produces the other, and it never rolls one of the
+            // other six -- so it never reaches the blocked branch below, where climbing lives. A
+            // swarm clinging to the side of a plateau would starve inches beneath the top of it.
+            //
+            // So: take the about-face when the about-face is actually walkable, and otherwise pick
+            // a fresh heading and start a new run.
+            uint back = locustReverse(heading);
+            ivec3 backPos = pos + getHDir(int(back));
+            ivec3 backFoot = backPos + ivec3(0, -1, 0);
+            bool backOpen = locustInBounds(backPos) && grid[getIndex(backPos)] == 0u &&
+                            !(locustInBounds(backFoot) && grid[getIndex(backFoot)] == 0u);
+
+            uint turnedNav = backOpen
+                ? locustPackNav(back, steps)
+                : locustPackNav(uint(fract(randVal * 71.0f) * 8.0f) & 7u, locustRunSteps());
+
+            atomicCompSwap(grid[currentIndex], rawValue, pack(newType, turnedNav, 0u, count));
+            return;
+        }
+
+        uint nav = locustPackNav(heading, steps - 1u);
+        if (tryMove(currentIndex, rawValue, getIndex(target),
+                    pack(newType, locustArriveDir(target, nav), 0u, count))) return;
+    } else {
+        // Something in the way: climb it or turn, decided by a roll.
+        if (fract(randVal * 41.0f) < tuning.locustClimbChance) {
+            // Onto the top of the obstacle first, straight up only as a fallback. Mounting the
+            // obstacle keeps the swarm travelling in the direction it was already going -- it is a
+            // step of the run and is counted as one -- where climbing a wall face is not progress
+            // along anything and leaves the run where it was.
+            ivec3 overTop = target + ivec3(0, 1, 0);
+            if (locustInBounds(overTop) && grid[getIndex(overTop)] == 0u) {
+                uint nav = locustPackNav(heading, steps - 1u);
+                if (tryMove(currentIndex, rawValue, getIndex(overTop),
+                            pack(newType, locustArriveDir(overTop, nav), 0u, count))) return;
+            }
+
+            ivec3 up = pos + ivec3(0, 1, 0);
+            if (locustInBounds(up) && grid[getIndex(up)] == 0u) {
+                uint nav = locustPackNav(heading, steps);
+                if (tryMove(currentIndex, rawValue, getIndex(up),
+                            pack(newType, locustArriveDir(up, nav), 0u, count))) return;
+            }
+        }
+
+        heading = uint(fract(randVal * 53.0f) * 8.0f) & 7u;
+        steps = locustRunSteps();
+    }
+
+    // Reached when the swarm turned instead of moving, or when a move lost its CAS. The write still
+    // has to happen: this tick's starvation and heading change are real whether or not it stepped.
+    atomicCompSwap(grid[currentIndex], rawValue,
+                   pack(newType, locustPackNav(heading, steps), 0u, count));
+}
+
 // FUNCTION: updateFire
 void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentSleep, uint currentAge, float randVal) {
     uint newAge = currentAge + 1u;
@@ -1882,10 +2240,12 @@ void main() {
                 if (newType == 2u) incWater();
             }
 
-            // Lava stages and dark stone are views of a coolness value, so a hand-placed voxel has
-            // to be seeded with one. Without it a stage-3 lava dropped from the dropdown would carry
-            // coolness 0 and be retyped straight back to stage 0 on its first update.
-            grid[spawnIndex] = pack(newType, 0u, 0u, lavaSpawnCoolness(newType));
+            // Lava stages, dark stone and locust swarms are all views of a number in the age byte,
+            // so a hand-placed voxel has to be seeded with one. Without it a stage-3 lava dropped
+            // from the dropdown would carry coolness 0 and be retyped straight back to stage 0 on
+            // its first update, and a placed swarm would be a swarm of nobody and die immediately.
+            uint seedAge = isLocust(newType) ? locustSpawnCount(newType) : lavaSpawnCoolness(newType);
+            grid[spawnIndex] = pack(newType, 0u, 0u, seedAge);
 
             if (newType == 7u) {
                 // The voxel is published BEFORE the slot is claimed, and the barrier is what makes
@@ -2006,6 +2366,13 @@ void main() {
             break;
         case 12u:
             updateDarkStone(pos, currentIndex, rawValue, currentAge, randVal);
+            break;
+        case 13u:
+        case 14u:
+        case 15u:
+        case 16u:
+        case 17u:
+            updateLocust(pos, currentIndex, rawValue, currentDir, currentSleep, currentAge, randVal);
             break;
         default:
             break;

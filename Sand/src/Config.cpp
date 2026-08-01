@@ -3,6 +3,7 @@
 #include <fstream>
 #include <unordered_map>
 #include <iostream>
+#include <algorithm>
 
 // FUNCTION: trim
 static std::string trim(const std::string& s) {
@@ -152,6 +153,40 @@ Config loadConfig(const std::string& path) {
     config.tuning.lavaConsumeChance = getFloat(values, "lava.consume_chance", config.tuning.lavaConsumeChance);
     config.tuning.lavaIgniteChance = getFloat(values, "lava.ignite_chance", config.tuning.lavaIgniteChance);
     config.tuning.darkStoneDryChance = getFloat(values, "lava.dark_stone_dry_chance", config.tuning.darkStoneDryChance);
+    config.tuning.locustTickDispatches = getUint(values, "locust.tick_dispatches", config.tuning.locustTickDispatches);
+    config.tuning.locustStageSize = getUint(values, "locust.stage_size", config.tuning.locustStageSize);
+    config.tuning.locustSpawnSize = getUint(values, "locust.spawn_size", config.tuning.locustSpawnSize);
+    config.tuning.locustMaxSize = getUint(values, "locust.max_size", config.tuning.locustMaxSize);
+    config.tuning.locustBudSize = getUint(values, "locust.bud_size", config.tuning.locustBudSize);
+    config.tuning.locustEatGain = getUint(values, "locust.eat_gain", config.tuning.locustEatGain);
+    config.tuning.locustEatTicksMin = getUint(values, "locust.eat_ticks_min", config.tuning.locustEatTicksMin);
+    config.tuning.locustEatTicksMax = getUint(values, "locust.eat_ticks_max", config.tuning.locustEatTicksMax);
+    config.tuning.locustRunLength = getUint(values, "locust.run_length", config.tuning.locustRunLength);
+    config.tuning.locustClimbChance = getFloat(values, "locust.climb_chance", config.tuning.locustClimbChance);
+    config.tuning.locustDensityMin = getFloat(values, "locust.density_min", config.tuning.locustDensityMin);
+    config.tuning.locustDensityMax = getFloat(values, "locust.density_max", config.tuning.locustDensityMax);
+    config.tuning.locustSubdivision = getUint(values, "locust.subdivision", config.tuning.locustSubdivision);
+    config.tuning.locustCrawlRate = getFloat(values, "locust.crawl_rate", config.tuning.locustCrawlRate);
+
+    // Every locust field below shares a voxel's three spare bytes, so each has a hard ceiling that
+    // is a property of the packing rather than a taste call -- past it the value silently wraps and
+    // the swarm's behaviour goes strange rather than merely wrong.
+    //
+    // The tick phase lives in the sleep byte and is compared against this, so an interval it can
+    // never reach freezes every swarm in the world; 0 does the same from the other end.
+    config.tuning.locustTickDispatches = std::clamp(config.tuning.locustTickDispatches, 1u, 255u);
+    // The eat timer lives in the dir byte and counts up to this.
+    config.tuning.locustEatTicksMax = std::clamp(config.tuning.locustEatTicksMax, 1u, 255u);
+    config.tuning.locustEatTicksMin = std::clamp(config.tuning.locustEatTicksMin, 1u, config.tuning.locustEatTicksMax);
+    // Steps left in a run get 3 bits alongside the heading's 3.
+    config.tuning.locustRunLength = std::clamp(config.tuning.locustRunLength, 1u, 7u);
+    // The stage table is exactly 5 wide, so the cap has to be reachable within 5 bands or the top
+    // stages would be unreachable and the head count could outrun its own type.
+    if (config.tuning.locustStageSize == 0u) config.tuning.locustStageSize = 1u;
+    config.tuning.locustMaxSize = std::min(config.tuning.locustMaxSize, config.tuning.locustStageSize * 5u);
+    config.tuning.locustMaxSize = std::max(config.tuning.locustMaxSize, 1u);
+    // The head count shares an 8-bit field with nothing, but it is still one byte.
+    config.tuning.locustMaxSize = std::min(config.tuning.locustMaxSize, 255u);
 
     return config;
 }
