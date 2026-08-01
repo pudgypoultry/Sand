@@ -116,6 +116,23 @@ layout(std140, binding = 2) uniform TuningParams {
     float locustDensityMax;
     uint locustSubdivision;
     float locustCrawlRate;
+    float treeBloomChance;
+    uint treeMaxHeight;
+    uint treeSoilReserve;
+    uint treeWaterMax;
+    float treeDrinkChance;
+    float treeFlowChance;
+    uint treeGrowCost;
+    uint treeLeafCost;
+    uint treeSpreadCost;
+    float treeSpreadChance;
+    float treeLeafChance;
+    uint treeLeafReach;
+    float treeLeafSpreadChance;
+    float treeLeafTickChance;
+    float treeLeafDecayChance;
+    uint treeTrunkColumns;
+    float treeTrunkRadius;
 } tuning;
 
 #define LAYER_SIZE (uint(WIDTH) * uint(HEIGHT)) // one layer of the world
@@ -315,18 +332,19 @@ bool locustInBounds(ivec3 p) {
     return p.x > 0 && p.x < WIDTH - 1 && p.y > 0 && p.y < HEIGHT - 1 && p.z > 0 && p.z < DEPTH - 1;
 }
 
-// FUNCTION: locustIsGrass
+// FUNCTION: isGrassBlock / grassAt
 // Grass is a range on dirt's flora byte, not a type: 1..10 is bare soil warming up, 11..100 is
-// visible grass, and past 100 it is drowning. Only the middle band is food.
-bool locustIsGrass(uint value) {
+// visible grass, and past 100 it is drowning. Only the middle band counts as grass -- it is what
+// locusts eat and what a tree will seed a sapling onto.
+bool isGrassBlock(uint value) {
     uint flora = (value >> 8) & 0xFFu;
     return getType(value) == 4u && flora > 10u && flora <= 100u;
 }
 
-// FUNCTION: locustGrassAt
-bool locustGrassAt(ivec3 p) {
+// FUNCTION: grassAt
+bool grassAt(ivec3 p) {
     if (p.x < 0 || p.x >= WIDTH || p.y < 0 || p.y >= HEIGHT || p.z < 0 || p.z >= DEPTH) return false;
-    return locustIsGrass(grid[getIndex(p)]);
+    return isGrassBlock(grid[getIndex(p)]);
 }
 
 // FUNCTION: locustPackNav / locustHeading / locustSteps
@@ -378,7 +396,45 @@ bool locustHasGrip(ivec3 pos) {
 // byte is the eat timer and navigation bits left in it would read as a meal already part eaten --
 // a swarm could finish a block it had only just stepped onto.
 uint locustArriveDir(ivec3 dest, uint nav) {
-    return locustGrassAt(dest + ivec3(0, -1, 0)) ? 0u : nav;
+    return grassAt(dest + ivec3(0, -1, 0)) ? 0u : nav;
+}
+
+// =================================================================================================
+// TREES
+//
+// Two types over one idea each. A TRUNK holds drawn-up water in its age byte and its height above
+// the soil in dir; a LEAF holds its distance from the nearest trunk in its age byte, and nothing
+// else. Both are pure functions of the grid around them, so neither needs a growth plan stored
+// anywhere -- a forest is emergent rather than authored.
+//
+// Water only ever enters at the bottom, out of soil moisture, and is passed up the column one voxel
+// at a time. That is what keeps a tree honest: its height, its canopy and its ability to seed the
+// grass beside it are all paid for out of the ground it is standing in, and it will not drink the
+// soil below treeSoilReserve -- the moisture grass itself needs to grow. A forest therefore thins
+// itself out on dry ground and thickens after rain without any rule saying so.
+//
+// The leaf distance is doing more work than it looks. It bounds the canopy, it makes two trees whose
+// crowns overlap merge into one continuous roof rather than two balls, and it is the test for
+// whether a leaf is still attached to anything -- a leaf with no closer neighbour has had its tree
+// taken out from under it and falls.
+// =================================================================================================
+const uint TREE_TRUNK = 18u;
+const uint TREE_LEAF = 19u;
+
+// FUNCTION: isTree
+bool isTree(uint type) { return type == TREE_TRUNK || type == TREE_LEAF; }
+
+// FUNCTION: treeInBounds
+bool treeInBounds(ivec3 p) {
+    return p.x > 0 && p.x < WIDTH - 1 && p.y > 0 && p.y < HEIGHT - 1 && p.z > 0 && p.z < DEPTH - 1;
+}
+
+// FUNCTION: tree26
+// The 26 surrounding offsets, centre skipped. Index 13 of a 3x3x3 walk IS the centre, so stepping
+// the index past it is all the skipping that is needed.
+ivec3 tree26(int i) {
+    int j = (i >= 13) ? i + 1 : i;
+    return ivec3(j % 3, (j / 3) % 3, j / 9) - ivec3(1);
 }
 
 // FUNCTION: incWater / decWater
@@ -1339,11 +1395,27 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
     
     if (isClumped || currentSleep > tuning.wakeSleepThreshold) {
         ivec3 abovePos = pos + ivec3(0, 1, 0);
-        uint aboveType = (abovePos.y < HEIGHT - 1) ? getType(grid[getIndex(abovePos)]) : 0u;
+        bool aboveInside = (abovePos.y < HEIGHT - 1);
+        uint aboveIndex = getIndex(abovePos);
+        uint aboveType = aboveInside ? getType(grid[aboveIndex]) : 0u;
 
-        if (aboveType == 0u) {
+        // A trunk counts as open sky here, not as something resting on top. A tree grows OUT of its
+        // grass rather than over it -- the block keeps its turf, and keeps growing it back if it is
+        // burnt or eaten away, exactly as it would with nothing standing there.
+        if (aboveType == 0u || aboveType == TREE_TRUNK) {
             if (moisture >= 5u && floraState < 100u) {
-                if (fract(randVal * 55.0f) < tuning.grassGrowChance) floraState++;
+                if (fract(randVal * 55.0f) < tuning.grassGrowChance) {
+                    floraState++;
+
+                    // The bloom. Rolled at the single moment the turf finishes growing in, rather
+                    // than every tick it is grass: a per-tick roll would turn every field into
+                    // forest given long enough, because each block would keep rolling until it hit.
+                    // Once per block per time it greens over is what "one in a thousand" means.
+                    if (floraState == 100u && aboveType == 0u && aboveInside &&
+                        fract(randVal * 97.0f) < tuning.treeBloomChance) {
+                        atomicCompSwap(grid[aboveIndex], 0u, pack(TREE_TRUNK, 0u, 0u, 0u));
+                    }
+                }
             }
             if (floraState > 100u) floraState = 100u;
         } else if (aboveType == 2u) {
@@ -1720,6 +1792,209 @@ void updateDarkStone(ivec3 pos, uint currentIndex, uint rawValue, uint currentAg
     }
 }
 
+// FUNCTION: updateTrunk
+// One trunk voxel. Four jobs, in the order a tree actually does them: drink, pass water up, spend it
+// on height or leaves, and -- only once it is well watered -- seed the grass beside it.
+void updateTrunk(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentAge, float randVal) {
+    uint height = currentDir;
+    uint water = currentAge;
+    bool changed = false;
+
+    // --- Drink ----------------------------------------------------------------------------------
+    // From the soil directly below and the eight beside it, which in practice means the base of the
+    // column: everything above it is surrounded by air.
+    //
+    // The reserve is the important part. Grass needs moisture 5 to grow, so a tree that could drink
+    // a block dry would kill the grass under itself and every neighbour it was about to seed into --
+    // it would strip the ground it depends on. Leaving that floor alone makes trees and grass share
+    // the water table instead of competing to extinction.
+    // The reachable soil is the 3x3 patch UNDER the trunk -- the block below and the eight around
+    // it -- plus the eight at its own level. The diagonals-below are the ones that matter and were
+    // the easy thing to leave out: a trunk standing on the ground has nothing but air beside it, so
+    // limiting "adjacent" to its own level leaves it drinking from exactly one block. Simulated that
+    // way, a tree drained its single root block to the reserve within seconds and then spent the
+    // rest of its life rate-limited by rainfall on one square metre -- it took 3000 ticks to reach
+    // full height with the world's soil sitting unused at three times the moisture it needed.
+    if (water < tuning.treeWaterMax && fract(randVal * 13.0f) < tuning.treeDrinkChance) {
+        int start = int(fract(randVal * 101.0f) * 17.0f);
+        for (int k = 0; k < 17; k++) {
+            int i = (start + k) % 17;
+            ivec3 c = (i == 0) ? (pos + ivec3(0, -1, 0))
+                    : (i < 9)  ? (pos + getHDir(i - 1) + ivec3(0, -1, 0))
+                               : (pos + getHDir(i - 9));
+            if (!treeInBounds(c)) continue;
+
+            uint idx = getIndex(c);
+            uint v = grid[idx];
+            if (getType(v) != 4u) continue;
+
+            uint moisture = getAge(v);
+            if (moisture <= tuning.treeSoilReserve) continue;
+
+            if (atomicCompSwap(grid[idx], v, pack(4u, getDir(v), getSleep(v), moisture - 1u)) == v) {
+                water += 1u;
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    // --- Pump water up ----------------------------------------------------------------------------
+    // Unconditionally toward the trunk above, not as a diffusion step toward whichever side holds
+    // less. That distinction is the difference between a tree and a stump.
+    //
+    // Diffusion was the obvious first answer and it is quietly fatal here: water arrives at one unit
+    // per drink and levels out across the column faster than it comes in, so every voxel converges
+    // on the same small amount and NONE of them ever reaches the cost of a growth step. Simulated,
+    // a tree sat at three voxels tall holding 15, 15, 16 against a cost of 20, forever.
+    //
+    // Growth and leaves both happen at the tip, so the tip is where the water has to end up. A real
+    // tree pumps to its growing point for the same reason. The tip has no trunk above it, so it is
+    // the one voxel that keeps what it is given.
+    ivec3 upPos = pos + ivec3(0, 1, 0);
+    bool upIsTrunk = false;
+    uint upValue = 0u;
+    uint upIndex = 0u;
+    if (treeInBounds(upPos)) {
+        upIndex = getIndex(upPos);
+        upValue = grid[upIndex];
+        upIsTrunk = (getType(upValue) == TREE_TRUNK);
+    }
+
+    if (upIsTrunk && water > 0u && getAge(upValue) < 255u && fract(randVal * 29.0f) < tuning.treeFlowChance) {
+        uint lifted = pack(TREE_TRUNK, getDir(upValue), 0u, getAge(upValue) + 1u);
+        if (atomicCompSwap(grid[upIndex], upValue, lifted) == upValue) {
+            water -= 1u;
+            changed = true;
+        }
+    }
+
+    // --- Grow, or crown ---------------------------------------------------------------------------
+    if (height + 1u < tuning.treeMaxHeight) {
+        // Still a sapling: put the water into height. Growing into a leaf is allowed and wanted --
+        // a crown put out early would otherwise cap the tree at whatever height it first branched.
+        if (water >= tuning.treeGrowCost && treeInBounds(upPos)) {
+            uint upType = getType(upValue);
+            if (upType == 0u || upType == TREE_LEAF) {
+                uint sapling = pack(TREE_TRUNK, height + 1u, 0u, 0u);
+                if (atomicCompSwap(grid[upIndex], upValue, sapling) == upValue) {
+                    water -= tuning.treeGrowCost;
+                    changed = true;
+                }
+            }
+        }
+    } else if (water >= tuning.treeLeafCost && fract(randVal * 37.0f) < tuning.treeLeafChance) {
+        // Full height: this is the crown, and it is the only thing that seeds leaves. Everything
+        // further out is a leaf spreading from a leaf, which is what bounds the canopy.
+        int start = int(fract(randVal * 43.0f) * 26.0f);
+        for (int i = 0; i < 26; i++) {
+            ivec3 c = pos + tree26((start + i) % 26);
+            if (!treeInBounds(c)) continue;
+
+            uint idx = getIndex(c);
+            if (grid[idx] != 0u) continue;
+            if (atomicCompSwap(grid[idx], 0u, pack(TREE_LEAF, 0u, 0u, 1u)) == 0u) {
+                water -= tuning.treeLeafCost;
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    // --- Seed the neighbours ----------------------------------------------------------------------
+    // A well watered trunk puts a sapling on the grass beside it. The geometry does the filtering by
+    // itself: the target must be an empty cell with grass-topped soil directly under it, which only
+    // ever describes ground level, so this needs no height test of its own.
+    if (water >= tuning.treeSpreadCost && fract(randVal * 59.0f) < tuning.treeSpreadChance) {
+        int start = int(fract(randVal * 61.0f) * 8.0f);
+        for (int i = 0; i < 8; i++) {
+            ivec3 c = pos + getHDir((start + i) % 8);
+            if (!treeInBounds(c)) continue;
+
+            uint idx = getIndex(c);
+            if (grid[idx] != 0u) continue;
+            if (!isGrassBlock(grid[getIndex(c + ivec3(0, -1, 0))])) continue;
+
+            if (atomicCompSwap(grid[idx], 0u, pack(TREE_TRUNK, 0u, 0u, 0u)) == 0u) {
+                water -= tuning.treeSpreadCost;
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    if (changed) {
+        atomicCompSwap(grid[currentIndex], rawValue, pack(TREE_TRUNK, height, 0u, water));
+    }
+}
+
+// FUNCTION: updateLeaf
+// One leaf. Its whole life is the number it carries: how many leaves it is from a trunk.
+//
+// Gated on a roll before it does anything, because leaves are far and away the most numerous voxel
+// in a forest and the support scan below reads 26 neighbours. At the default that is about 1.6 reads
+// per leaf per dispatch amortised rather than 26, and "slowly" is the specified behaviour anyway.
+void updateLeaf(ivec3 pos, uint currentIndex, uint rawValue, uint currentAge, float randVal) {
+    if (fract(randVal * 7.0f) >= tuning.treeLeafTickChance) return;
+
+    uint dist = currentAge;
+    uint nearest = 255u;
+    bool touchesTrunk = false;
+
+    // One pass answers both questions -- what is the closest thing to a trunk around me, and where
+    // could I put a new leaf -- so the 26 reads are paid for once rather than twice.
+    int start = int(fract(randVal * 71.0f) * 26.0f);
+    bool haveSpot = false;
+    ivec3 spot = pos;
+
+    for (int i = 0; i < 26; i++) {
+        ivec3 c = pos + tree26((start + i) % 26);
+        if (!treeInBounds(c)) continue;
+
+        uint v = grid[getIndex(c)];
+        uint t = getType(v);
+
+        // Only the CROWN anchors a canopy, not any trunk voxel. Letting the whole column anchor is
+        // the obvious reading and it does not make a tree: leaves take root against every voxel of
+        // the trunk, spread their full reach outward from all of them, and the result is a solid
+        // rectangular hedge running from the soil to the tip with a pole buried in it. Anchoring
+        // only at the top gives a canopy centred where a canopy belongs.
+        if (t == TREE_TRUNK && getDir(v) + 1u >= tuning.treeMaxHeight) {
+            touchesTrunk = true;
+        } else if (t == TREE_LEAF) {
+            nearest = min(nearest, getAge(v));
+        } else if (v == 0u && !haveSpot) {
+            haveSpot = true;
+            spot = c;
+        }
+    }
+
+    // --- Support ----------------------------------------------------------------------------------
+    // Recomputed every time rather than trusted, so a canopy re-roots itself onto whatever is still
+    // holding it up. Cut the trunk out and the number climbs one ring per tick until it passes the
+    // reach and the canopy comes down from the inside out.
+    uint supported = touchesTrunk ? 1u : (nearest == 255u ? 255u : nearest + 1u);
+    if (supported > tuning.treeLeafReach) {
+        if (fract(randVal * 83.0f) < tuning.treeLeafDecayChance) {
+            atomicCompSwap(grid[currentIndex], rawValue, 0u);
+        }
+        return;
+    }
+
+    // --- Spread ------------------------------------------------------------------------------------
+    // A leaf can only ever put out one further from the trunk than itself, which is what makes the
+    // canopy stop -- and what makes two trees standing close enough grow into one roof instead of
+    // two, since the leaves between them are in reach of both.
+    if (supported < tuning.treeLeafReach && haveSpot &&
+        fract(randVal * 89.0f) < tuning.treeLeafSpreadChance) {
+        atomicCompSwap(grid[getIndex(spot)], 0u, pack(TREE_LEAF, 0u, 0u, supported + 1u));
+    }
+
+    if (supported != dist) {
+        atomicCompSwap(grid[currentIndex], rawValue, pack(TREE_LEAF, 0u, 0u, supported));
+    }
+}
+
 // FUNCTION: locustBud
 // Drops a child swarm in a random direction, trying the other seven if that cell is taken. Called
 // only when a meal pushes a swarm past its cap, so the overflow becomes another swarm rather than
@@ -1768,7 +2043,7 @@ void updateLocust(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, 
     // Standing on grass is the whole of the feeding rule: no stored "am I eating" flag, just the
     // block underneath. A swarm that is fed does not starve this tick, which is what makes a patch
     // of grassland somewhere a swarm can survive instead of merely somewhere it dies more slowly.
-    if (locustIsGrass(belowValue)) {
+    if (isGrassBlock(belowValue)) {
         uint need = locustEatTicks(count);
         uint progress = currentDir + 1u; // dir is the eat timer while grazing
 
@@ -1841,7 +2116,7 @@ void updateLocust(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, 
                 ivec3 t = c + ivec3(0, (rise == 1) ? 1 : ((rise == 2) ? -1 : 0), 0);
                 if (!locustInBounds(t)) continue;
                 if (grid[getIndex(t)] != 0u) continue;
-                if (!locustGrassAt(t + ivec3(0, -1, 0))) continue;
+                if (!grassAt(t + ivec3(0, -1, 0))) continue;
                 // Arrives with a zeroed dir byte because it is landing on grass: the meal starts now.
                 if (tryMove(currentIndex, rawValue, getIndex(t), pack(newType, 0u, 0u, count))) return;
             }
@@ -2373,6 +2648,12 @@ void main() {
         case 16u:
         case 17u:
             updateLocust(pos, currentIndex, rawValue, currentDir, currentSleep, currentAge, randVal);
+            break;
+        case 18u:
+            updateTrunk(pos, currentIndex, rawValue, currentDir, currentAge, randVal);
+            break;
+        case 19u:
+            updateLeaf(pos, currentIndex, rawValue, currentAge, randVal);
             break;
         default:
             break;

@@ -112,6 +112,23 @@ layout(std140, binding = 2) uniform TuningParams {
     float locustDensityMax;
     uint locustSubdivision;
     float locustCrawlRate;
+    float treeBloomChance;
+    uint treeMaxHeight;
+    uint treeSoilReserve;
+    uint treeWaterMax;
+    float treeDrinkChance;
+    float treeFlowChance;
+    uint treeGrowCost;
+    uint treeLeafCost;
+    uint treeSpreadCost;
+    float treeSpreadChance;
+    float treeLeafChance;
+    uint treeLeafReach;
+    float treeLeafSpreadChance;
+    float treeLeafTickChance;
+    float treeLeafDecayChance;
+    uint treeTrunkColumns;
+    float treeTrunkRadius;
 } tuning;
 
 layout(push_constant) uniform Constants {
@@ -504,7 +521,7 @@ vec3 renderFire(uint rawVoxel, ivec3 voxelPos) {
 // This is the CURSOR's palette specifically. The blocks themselves are shaded procedurally from
 // noise, moisture, coolness and lighting, so they cannot be reduced to one colour each -- which is
 // why the render dispatch downstream stays a switch. That one dispatches behaviour, not data.
-const int MATERIAL_COUNT = 18;
+const int MATERIAL_COUNT = 20;
 const vec3 MATERIAL_CURSOR_COLOR[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
     vec3(0.10f, 0.10f, 0.10f), // 0  void
     vec3(1.00f, 0.90f, 0.20f), // 1  sand
@@ -523,7 +540,9 @@ const vec3 MATERIAL_CURSOR_COLOR[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
     vec3(0.46f, 0.35f, 0.13f), // 14 locusts
     vec3(0.54f, 0.40f, 0.14f), // 15 locusts, the placeable stage
     vec3(0.62f, 0.45f, 0.15f), // 16 locusts
-    vec3(0.70f, 0.51f, 0.16f)  // 17 locusts, densest
+    vec3(0.70f, 0.51f, 0.16f), // 17 locusts, densest
+    vec3(0.36f, 0.24f, 0.12f), // 18 tree trunk
+    vec3(0.22f, 0.46f, 0.15f)  // 19 tree leaves
 );
 
 // FUNCTION: renderLava
@@ -590,14 +609,72 @@ float locustDensity(uint type) {
     return clamp(mix(tuning.locustDensityMin, tuning.locustDensityMax, stage), 0.02f, 0.98f);
 }
 
-// FUNCTION: locustSubMarch
+// =================================================================================================
+// TREES
+//
+// A trunk does not fill its voxel -- it is one or two slender stems standing inside it, with air
+// around them, which is what makes a trunk read as a trunk rather than as a brown cube. That is the
+// same sub-voxel geometry locusts use, so it goes through the same sub-march below; only the test
+// for "is this little cube solid" differs, which is why that test is a switch on kind rather than
+// baked into the march.
+//
+// Leaves deliberately do NOT take part. They are far and away the most numerous voxel in a forest,
+// a canopy fills a lot of screen, and a sub-march for each of them would be the most expensive
+// thing in the frame -- for a shape that is meant to read as a dense mass anyway. They are ordinary
+// solid voxels with per-voxel colour variation.
+// =================================================================================================
+const uint TREE_TRUNK = 18u;
+const uint TREE_LEAF = 19u;
+
+const uint SUB_LOCUST = 0u;
+const uint SUB_TRUNK = 1u;
+
+// FUNCTION: trunkStems
+// Where this column's stems sit, in voxel-local XZ. Seeded from the voxel's X and Z only, with Y
+// left out on purpose: every trunk voxel stacked above the same ground must produce the same
+// answer, or the stems would jump sideways from one voxel to the next and the tree would zigzag.
+void trunkStems(ivec3 voxelPos, out vec2 a, out vec2 b, out int count) {
+    float h0 = hash(vec3(float(voxelPos.x), 7.0f, float(voxelPos.z)));
+    float h1 = hash(vec3(float(voxelPos.x), 19.0f, float(voxelPos.z)));
+    float h2 = hash(vec3(float(voxelPos.x), 53.0f, float(voxelPos.z)));
+
+    count = 1 + int(h2 * float(max(int(tuning.treeTrunkColumns), 1)));
+    count = clamp(count, 1, 2);
+
+    // Kept off the voxel's edges so a stem is never sliced in half by the boundary between two
+    // trunk voxels of the same tree.
+    a = vec2(0.30f + h0 * 0.40f, 0.30f + h1 * 0.40f);
+    b = vec2(0.30f + h1 * 0.40f, 0.30f + h0 * 0.40f);
+}
+
+// FUNCTION: subOccupied
+// The per-sub-cube solidity test, shared by everything the sub-march draws.
+bool subOccupied(uint kind, uint type, ivec3 voxelPos, ivec3 cell, int sub, vec3 jitter) {
+    if (kind == SUB_TRUNK) {
+        // A disc test in XZ, extruded the full height of the voxel -- so the stems are continuous
+        // columns rather than a stack of separate blobs.
+        vec2 p = (vec2(cell.xz) + 0.5f) / float(sub);
+        vec2 a, b;
+        int count;
+        trunkStems(voxelPos, a, b, count);
+
+        float r = max(tuning.treeTrunkRadius, 0.02f);
+        if (dot(p - a, p - a) <= r * r) return true;
+        if (count > 1 && dot(p - b, p - b) <= r * r) return true;
+        return false;
+    }
+
+    return hash(vec3(voxelPos * sub + cell) + jitter) < locustDensity(type);
+}
+
+// FUNCTION: subMarch
 // Walks the sub-lattice of one voxel and reports the first occupied sub-cube.
 //
 // entryNormal is the face the primary DDA came through, and it is the answer for the very first
 // sub-cell -- that cell has taken no step of its own yet, so there is nothing else to derive a
 // normal from. Every later cell gets the face its own step crossed.
-bool locustSubMarch(ivec3 voxelPos, vec3 rayOrigin, vec3 rayDir, uint type, vec3 entryNormal,
-                    out float tHit, out vec3 subNormal, out vec3 subCell) {
+bool subMarch(ivec3 voxelPos, vec3 rayOrigin, vec3 rayDir, uint kind, uint type, vec3 entryNormal,
+              out float tHit, out vec3 subNormal, out vec3 subCell) {
     tHit = 0.0f; subNormal = entryNormal; subCell = vec3(0.0f);
 
     int sub = clamp(int(tuning.locustSubdivision), 1, 8);
@@ -626,18 +703,18 @@ bool locustSubMarch(ivec3 voxelPos, vec3 rayOrigin, vec3 rayDir, uint type, vec3
         (stepDir.z > 0) ? (1.0f - fracPos.z) * tDelta.z : fracPos.z * tDelta.z
     );
 
-    float density = locustDensity(type);
-    // Quantised time, so the swarm re-scatters in discrete jumps rather than boiling continuously.
-    // A smooth term here would put exactly the high-frequency shimmer back into the frame that the
+    // Quantised time, so a swarm re-scatters in discrete jumps rather than boiling continuously. A
+    // smooth term here would put exactly the high-frequency shimmer back into the frame that the
     // water normals were widened to take out -- and insects crawling read better as steps anyway.
-    vec3 jitter = vec3(floor(pc.time * tuning.locustCrawlRate) * 1.7f);
+    // Trunks ignore it: a tree that shimmered would be absurd.
+    vec3 jitter = (kind == SUB_LOCUST)
+        ? vec3(floor(pc.time * tuning.locustCrawlRate) * 1.7f)
+        : vec3(0.0f);
 
     for (int i = 0; i < 3 * sub; i++) {
         if (c.x < 0 || c.x >= sub || c.y < 0 || c.y >= sub || c.z < 0 || c.z >= sub) return false;
 
-        // Seeded off the sub-cell's world position, so neighbouring swarm voxels do not line their
-        // bodies up into a visible grid across the boundary.
-        if (hash(vec3(voxelPos * sub + c) + jitter) < density) {
+        if (subOccupied(kind, type, voxelPos, c, sub, jitter)) {
             tHit = t;
             subCell = vec3(c);
             return true;
@@ -668,6 +745,29 @@ vec3 renderLocust(ivec3 voxelPos, vec3 subCell, vec3 baseLighting) {
     float n = hash(subCell * 1.37f + vec3(voxelPos) * 0.11f);
     vec3 shell = mix(vec3(0.15f, 0.10f, 0.035f), vec3(0.55f, 0.40f, 0.11f), n);
     return shell * baseLighting;
+}
+
+// FUNCTION: renderTrunk
+// Bark. Varied along the column's height rather than per sub-cube, so a stem reads as one continuous
+// piece of wood with grain running up it instead of a stack of separate flecks.
+vec3 renderTrunk(ivec3 voxelPos, vec3 subCell, vec3 baseLighting) {
+    float grain = hash(vec3(float(voxelPos.x), float(voxelPos.y) * 0.35f + subCell.y * 0.2f, float(voxelPos.z)));
+    vec3 bark = mix(vec3(0.20f, 0.13f, 0.07f), vec3(0.38f, 0.25f, 0.13f), grain);
+    return bark * baseLighting;
+}
+
+// FUNCTION: renderLeaf
+// Canopy. The colour is pushed around by the leaf's distance from its trunk as well as by noise:
+// the outer ring of a canopy is lighter and yellower, which gives the mass some depth and quietly
+// shows where one tree's crown ends and the next begins.
+vec3 renderLeaf(uint rawVoxel, ivec3 voxelPos, vec3 baseLighting) {
+    float n = hash(vec3(voxelPos));
+    float depth = clamp(float((rawVoxel >> 24) & 0xFFu) / max(float(tuning.treeLeafReach), 1.0f), 0.0f, 1.0f);
+
+    vec3 inner = vec3(0.10f, 0.30f, 0.09f);
+    vec3 outer = vec3(0.28f, 0.52f, 0.16f);
+    vec3 leaf = mix(inner, outer, depth * 0.7f + n * 0.3f);
+    return leaf * baseLighting;
 }
 
 // FUNCTION: renderSteam
@@ -912,10 +1012,11 @@ void main() {
     uint hitType = 0u;
     uint hitRawVoxel = 0u;
 
-    // Filled in only when the ray stops on a locust sub-cube; see locustSubMarch.
-    float locustT = 0.0f;
-    vec3 locustNormal = vec3(0.0f, 1.0f, 0.0f);
-    vec3 locustCell = vec3(0.0f);
+    // Filled in only when the ray stops inside a voxel's sub-lattice; see subMarch. Shared by the
+    // two materials that do not fill their voxel -- locust swarms and tree trunks.
+    float subT = 0.0f;
+    vec3 subNormal = vec3(0.0f, 1.0f, 0.0f);
+    vec3 subCell = vec3(0.0f);
 
     // Measured against the full cube, not the clipped march box, so the fade does not change as the
     // world fills up or empties.
@@ -956,13 +1057,15 @@ void main() {
                     hitRawVoxel = rawVoxel;
                     break;
                 }
-            } else if (isLocustType(hitType)) {
-                // A swarm is bodies and gaps, not a block. The ray drops into the voxel's own
-                // sub-lattice; if it threads all the way through without meeting a body then this
-                // was never a hit, and it carries on to whatever is behind -- the same "keep
-                // traveling" the steam dither above does, just resolved geometrically.
-                if (locustSubMarch(voxelPos, rayOrigin, rayDir, hitType, normal,
-                                   locustT, locustNormal, locustCell)) {
+            } else if (isLocustType(hitType) || hitType == TREE_TRUNK) {
+                // Neither of these fills its voxel. A swarm is bodies and gaps; a trunk is a stem or
+                // two with air around it. The ray drops into the voxel's own sub-lattice, and if it
+                // threads all the way through without meeting anything then this was never a hit and
+                // it carries on to whatever is behind -- the same "keep traveling" the steam dither
+                // above does, just resolved geometrically rather than by a coin flip.
+                uint kind = (hitType == TREE_TRUNK) ? SUB_TRUNK : SUB_LOCUST;
+                if (subMarch(voxelPos, rayOrigin, rayDir, kind, hitType, normal,
+                             subT, subNormal, subCell)) {
                     hit = true;
                     hitRawVoxel = rawVoxel;
                     break;
@@ -1007,11 +1110,11 @@ void main() {
         // which is fine for materials that are not in constant motion at their surface.
         if (hitType == 2u) {
             normal = applyWaterWaves(getWaterNormal(voxelPos), voxelPos);
-        } else if (isLocustType(hitType)) {
+        } else if (isLocustType(hitType) || hitType == TREE_TRUNK) {
             // The sub-cube's own face. Smoothing across the voxel's neighbours would be actively
             // wrong here: the surface the ray met is a small cube inside this voxel, and it has
             // nothing to do with which voxels happen to sit next to this one.
-            normal = locustNormal;
+            normal = subNormal;
         } else {
             normal = getSmoothNormal(voxelPos);
         }
@@ -1066,7 +1169,13 @@ void main() {
             case 15u:
             case 16u:
             case 17u:
-                finalVoxelColor = renderLocust(voxelPos, locustCell, baseLighting);
+                finalVoxelColor = renderLocust(voxelPos, subCell, baseLighting);
+                break;
+            case 18u:
+                finalVoxelColor = renderTrunk(voxelPos, subCell, baseLighting);
+                break;
+            case 19u:
+                finalVoxelColor = renderLeaf(hitRawVoxel, voxelPos, baseLighting);
                 break;
             // No case for type 7: the march above never reports a black hole voxel as a hit, because
             // the body is drawn as a ball further down rather than as the voxel it is anchored to.
@@ -1079,8 +1188,8 @@ void main() {
         // rayDir is normalised, so the sub-march's ray parameter is already a distance -- and it is
         // the exact one, where the voxel-centre estimate every other material uses would put a
         // swarm's bodies up to half a voxel out against the clouds and the cursor.
-        float distanceTraveled = isLocustType(hitType)
-            ? locustT
+        float distanceTraveled = (isLocustType(hitType) || hitType == TREE_TRUNK)
+            ? subT
             : length(vec3(voxelPos) + vec3(0.5f) - rayOrigin);
         finalVoxelColor *= mix(1.0f, 0.0f, clamp(distanceTraveled / MAX_VISIBILITY, 0.0f, 1.0f));
         

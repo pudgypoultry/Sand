@@ -223,6 +223,33 @@ struct TuningParams {
     float locustDensityMax = 0.62f;     // sub-cube fill of the densest stage
     uint32_t locustSubdivision = 4;     // sub-cubes per voxel edge; 4 means up to 64 per block
     float locustCrawlRate = 6.0f;       // swarm re-scatters this many times a second
+
+    // --- Trees ---
+    // A trunk holds drawn-up water in its age byte and its height above the soil in dir, and spends
+    // that water on the three things a tree does: growing taller, putting out leaves, and seeding
+    // the grass next to it. Water enters only at the bottom, from soil moisture, and is passed up
+    // the column one voxel at a time -- so a tree's reach really is limited by the ground under it.
+    //
+    // A leaf holds its distance from the nearest trunk. That single number does all the work: it
+    // bounds how far a canopy can spread, it makes canopies of neighbouring trees merge into one
+    // continuous roof, and it is what lets a leaf tell whether it is still attached to anything.
+    float treeBloomChance = 0.001f;      // 1 in 1000 grass blocks sprouts a tree instead
+    uint32_t treeMaxHeight = 6;          // trunk voxels in a full-grown column
+    uint32_t treeSoilReserve = 5;        // soil moisture a trunk will not drink below
+    uint32_t treeWaterMax = 200;         // trunk water capacity
+    float treeDrinkChance = 0.20f;       // chance per tick to draw one unit out of the soil
+    float treeFlowChance = 0.50f;        // chance per tick to pass one unit up the trunk
+    uint32_t treeGrowCost = 20;          // water spent adding a trunk voxel
+    uint32_t treeLeafCost = 6;           // water spent putting out one leaf
+    uint32_t treeSpreadCost = 150;       // water spent seeding a neighbouring grass block
+    float treeSpreadChance = 0.02f;      // chance per tick to try, once the water is there
+    float treeLeafChance = 0.15f;        // chance per tick for a crown trunk to put out a leaf
+    uint32_t treeLeafReach = 3;          // how many leaves a canopy may chain from its trunk
+    float treeLeafSpreadChance = 0.15f;  // chance per leaf tick to extend the canopy
+    float treeLeafTickChance = 0.06f;    // chance a leaf does anything at all this dispatch
+    float treeLeafDecayChance = 0.10f;   // chance per leaf tick for an unsupported leaf to fall
+    uint32_t treeTrunkColumns = 2;       // upper bound on the little stems drawn inside a trunk
+    float treeTrunkRadius = 0.17f;       // stem radius in voxel units
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

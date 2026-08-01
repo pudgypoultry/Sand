@@ -168,6 +168,30 @@ Config loadConfig(const std::string& path) {
     config.tuning.locustSubdivision = getUint(values, "locust.subdivision", config.tuning.locustSubdivision);
     config.tuning.locustCrawlRate = getFloat(values, "locust.crawl_rate", config.tuning.locustCrawlRate);
 
+    config.tuning.treeBloomChance = getFloat(values, "tree.bloom_chance", config.tuning.treeBloomChance);
+    config.tuning.treeMaxHeight = getUint(values, "tree.max_height", config.tuning.treeMaxHeight);
+    config.tuning.treeSoilReserve = getUint(values, "tree.soil_reserve", config.tuning.treeSoilReserve);
+    config.tuning.treeWaterMax = getUint(values, "tree.water_max", config.tuning.treeWaterMax);
+    config.tuning.treeDrinkChance = getFloat(values, "tree.drink_chance", config.tuning.treeDrinkChance);
+    config.tuning.treeFlowChance = getFloat(values, "tree.flow_chance", config.tuning.treeFlowChance);
+    config.tuning.treeGrowCost = getUint(values, "tree.grow_cost", config.tuning.treeGrowCost);
+    config.tuning.treeLeafCost = getUint(values, "tree.leaf_cost", config.tuning.treeLeafCost);
+    config.tuning.treeSpreadCost = getUint(values, "tree.spread_cost", config.tuning.treeSpreadCost);
+    config.tuning.treeSpreadChance = getFloat(values, "tree.spread_chance", config.tuning.treeSpreadChance);
+    config.tuning.treeLeafChance = getFloat(values, "tree.leaf_chance", config.tuning.treeLeafChance);
+    config.tuning.treeLeafReach = getUint(values, "tree.leaf_reach", config.tuning.treeLeafReach);
+    config.tuning.treeLeafSpreadChance = getFloat(values, "tree.leaf_spread_chance", config.tuning.treeLeafSpreadChance);
+    config.tuning.treeLeafTickChance = getFloat(values, "tree.leaf_tick_chance", config.tuning.treeLeafTickChance);
+    config.tuning.treeLeafDecayChance = getFloat(values, "tree.leaf_decay_chance", config.tuning.treeLeafDecayChance);
+    config.tuning.treeTrunkColumns = getUint(values, "tree.trunk_columns", config.tuning.treeTrunkColumns);
+    config.tuning.treeTrunkRadius = getFloat(values, "tree.trunk_radius", config.tuning.treeTrunkRadius);
+
+    // The trunk's height counter and the leaf's distance counter are each one byte, and a max height
+    // of 0 would leave a sapling unable to ever be a crown -- so it would never put out a leaf.
+    config.tuning.treeMaxHeight = std::clamp(config.tuning.treeMaxHeight, 1u, 255u);
+    config.tuning.treeLeafReach = std::clamp(config.tuning.treeLeafReach, 1u, 200u);
+    config.tuning.treeWaterMax = std::clamp(config.tuning.treeWaterMax, 1u, 255u);
+
     // Every locust field below shares a voxel's three spare bytes, so each has a hard ceiling that
     // is a property of the packing rather than a taste call -- past it the value silently wraps and
     // the swarm's behaviour goes strange rather than merely wrong.

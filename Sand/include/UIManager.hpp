@@ -37,7 +37,12 @@ enum class MaterialType {
     LocustSmall = 14,
     LocustSwarm = 15,
     LocustLarge = 16,
-    LocustPlague = 17
+    LocustPlague = 17,
+    // Trees: a trunk that drinks from the soil and grows, and the leaves its crown puts out. Both
+    // are placeable so a forest can be started by hand, but neither is on a shortcut -- trees are
+    // meant to arrive by blooming out of grass, not by being painted.
+    TreeTrunk = 18,
+    TreeLeaf = 19
 };
 
 enum class CursorShape {
@@ -136,7 +141,7 @@ public:
         const char* items[] = { "Void", "Sand", "Water", "Stone", "Dirt", "Fire", "Steam", "Black Hole",
                                 "Lava", "Lava (Hot)", "Lava (Warm)", "Lava (Cooling)", "Dark Stone",
                                 "Locusts (10)", "Locusts (20)", "Locusts (30)", "Locusts (40)",
-                                "Locusts (50)" };
+                                "Locusts (50)", "Tree Trunk", "Tree Leaves" };
         int currentMat = static_cast<int>(m_currentMaterial);
         if (ImGui::Combo("Material", &currentMat, items, IM_ARRAYSIZE(items))) {
             m_currentMaterial = static_cast<MaterialType>(currentMat);
