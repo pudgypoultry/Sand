@@ -236,18 +236,19 @@ struct TuningParams {
     float treeBloomChance = 0.001f;      // 1 in 1000 grass blocks sprouts a tree instead
     uint32_t treeMaxHeight = 6;          // trunk voxels in a full-grown column
     uint32_t treeSoilReserve = 5;        // soil moisture a trunk will not drink below
-    uint32_t treeWaterMax = 200;         // trunk water capacity
+    uint32_t treeWaterMax = 255;         // trunk water capacity (one byte, so this is the ceiling)
     float treeDrinkChance = 0.20f;       // chance per tick to draw one unit out of the soil
     float treeFlowChance = 0.50f;        // chance per tick to pass one unit up the trunk
     uint32_t treeGrowCost = 20;          // water spent adding a trunk voxel
     uint32_t treeLeafCost = 6;           // water spent putting out one leaf
-    uint32_t treeSpreadCost = 150;       // water spent seeding a neighbouring grass block
-    float treeSpreadChance = 0.02f;      // chance per tick to try, once the water is there
+    uint32_t treeSpreadCost = 250;       // water spent seeding a neighbouring grass block
+    float treeSpreadChance = 0.005f;     // chance per tick to try, once the water is there
     float treeLeafChance = 0.15f;        // chance per tick for a crown trunk to put out a leaf
-    uint32_t treeLeafReach = 3;          // how many leaves a canopy may chain from its trunk
+    uint32_t treeLeafReach = 1;          // how many leaves a canopy may chain from its crown
     float treeLeafSpreadChance = 0.15f;  // chance per leaf tick to extend the canopy
     float treeLeafTickChance = 0.06f;    // chance a leaf does anything at all this dispatch
     float treeLeafDecayChance = 0.10f;   // chance per leaf tick for an unsupported leaf to fall
+    float treeLeafBurnChance = 0.15f;    // chance per tick for fire to take an adjacent leaf
     uint32_t treeTrunkColumns = 2;       // upper bound on the little stems drawn inside a trunk
     float treeTrunkRadius = 0.17f;       // stem radius in voxel units
 };

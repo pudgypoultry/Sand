@@ -127,6 +127,7 @@ layout(std140, binding = 2) uniform TuningParams {
     float treeLeafSpreadChance;
     float treeLeafTickChance;
     float treeLeafDecayChance;
+    float treeLeafBurnChance;
     uint treeTrunkColumns;
     float treeTrunkRadius;
 } tuning;

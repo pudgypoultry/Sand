@@ -323,25 +323,28 @@ tree.bloom_chance=0.001
 #                  has to reach the tip, because that is where both growing and leafing happen.
 tree.max_height=6
 tree.soil_reserve=5
-tree.water_max=200
+tree.water_max=255
 tree.drink_chance=0.20
 tree.flow_chance=0.50
 #   What the water is spent on. Growing a voxel of trunk, putting out one leaf, and seeding a
-#   sapling on the grass next door. Raise spread_cost to slow a forest's march across a meadow;
-#   raise grow_cost to make individual trees take longer to come up.
+#   sapling on the grass next door. spread_cost is capped by water_max -- a cost above the tank size
+#   can never be paid and spreading stops entirely -- so past 255 the only lever left is
+#   spread_chance, which is how often a tree that is ALREADY full tries at all. Both are set slow:
+#   a mature tree spends nearly its whole tank on a sapling and then has to refill it.
 tree.grow_cost=20
 tree.leaf_cost=6
-tree.spread_cost=150
-tree.spread_chance=0.02
+tree.spread_cost=250
+tree.spread_chance=0.005
 tree.leaf_chance=0.15
-#   leaf_reach   = how many leaves a canopy may chain out from its crown, and so how wide a tree is:
-#                  3 gives a crown seven voxels across. It is also the knob for how much of a forest
-#                  a forest looks like -- at 3 the crowns of neighbouring trees run together into one
-#                  continuous roof, at 2 they stay separate enough to count.
+#   leaf_reach   = how many leaves a canopy may chain out from its crown, and so how wide a tree is.
+#                  1 is a tuft in the 26 cells around the crown; each step up adds a ring, so 3 is a
+#                  crown seven voxels across. Bridging survives at 1 because a tree seeds its
+#                  saplings onto the grass immediately beside it -- the crowns end up adjacent, so
+#                  their leaves are in reach of both trunks and the canopy joins up anyway.
 #   leaf_tick_chance = chance a leaf does anything at all on a given dispatch. Leaves are by far the
 #                  most numerous voxel in a forest and the support test reads 26 neighbours, so this
 #                  is what keeps a canopy costing about 1.6 reads per leaf per dispatch instead of 26.
-tree.leaf_reach=3
+tree.leaf_reach=1
 tree.leaf_spread_chance=0.15
 tree.leaf_tick_chance=0.06
 tree.leaf_decay_chance=0.10
@@ -350,5 +353,16 @@ tree.leaf_decay_chance=0.10
 #   voxel's X and Z only, never its Y, so every voxel of a column produces the same stems and the
 #   tree does not zigzag. Leaves are ordinary solid voxels: there are far too many of them in a
 #   canopy to justify a sub-march, and they are meant to read as a dense mass anyway.
+#   leaf_burn_chance = how readily fire takes a leaf it is touching. There is a floor under this
+#                  worth knowing about: a flame lives physics.fire_lifetime ticks, so below roughly
+#                  1/lifetime each flame converts less than one leaf before it dies and a fire
+#                  fizzles out instead of spreading. Measured on a solid slab of canopy, 0.15 takes
+#                  all of it, 0.10 leaves survivors in patches, and 0.02 never gets going. A burning leaf simply becomes an
+#                  ordinary fire voxel, so it then ages out and lights its own neighbours -- which is
+#                  the whole of how a canopy fire spreads, and how it crosses from tree to tree over
+#                  the leaves that bridge them. Lava is not on this path at all: it voids leaves
+#                  outright on contact, with no roll, so a flow actually pours through a canopy
+#                  instead of perching on top of one it is slowly negotiating with.
+tree.leaf_burn_chance=0.15
 tree.trunk_columns=2
 tree.trunk_radius=0.17

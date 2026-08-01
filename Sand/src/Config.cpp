@@ -183,6 +183,7 @@ Config loadConfig(const std::string& path) {
     config.tuning.treeLeafSpreadChance = getFloat(values, "tree.leaf_spread_chance", config.tuning.treeLeafSpreadChance);
     config.tuning.treeLeafTickChance = getFloat(values, "tree.leaf_tick_chance", config.tuning.treeLeafTickChance);
     config.tuning.treeLeafDecayChance = getFloat(values, "tree.leaf_decay_chance", config.tuning.treeLeafDecayChance);
+    config.tuning.treeLeafBurnChance = getFloat(values, "tree.leaf_burn_chance", config.tuning.treeLeafBurnChance);
     config.tuning.treeTrunkColumns = getUint(values, "tree.trunk_columns", config.tuning.treeTrunkColumns);
     config.tuning.treeTrunkRadius = getFloat(values, "tree.trunk_radius", config.tuning.treeTrunkRadius);
 

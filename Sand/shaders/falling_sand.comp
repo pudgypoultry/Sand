@@ -131,6 +131,7 @@ layout(std140, binding = 2) uniform TuningParams {
     float treeLeafSpreadChance;
     float treeLeafTickChance;
     float treeLeafDecayChance;
+    float treeLeafBurnChance;
     uint treeTrunkColumns;
     float treeTrunkRadius;
 } tuning;
@@ -237,6 +238,12 @@ const uint LAVA_HOTTEST = 8u;
 const uint LAVA_COLDEST = 11u;
 const uint DARK_STONE = 12u;
 
+// Declared up here with the other material ids rather than down in the TREES block, because the
+// things that eat, burn and melt a tree are all defined before it -- locusts graze on leaves, fire
+// takes them and lava voids them outright, so the id has to exist before any of those can name it.
+const uint TREE_TRUNK = 18u;
+const uint TREE_LEAF = 19u;
+
 // FUNCTION: isLava
 bool isLava(uint type) { return type >= LAVA_HOTTEST && type <= LAVA_COLDEST; }
 
@@ -341,10 +348,21 @@ bool isGrassBlock(uint value) {
     return getType(value) == 4u && flora > 10u && flora <= 100u;
 }
 
-// FUNCTION: grassAt
-bool grassAt(ivec3 p) {
+// FUNCTION: isLocustFood
+// What a swarm will stand on and eat. Grass, and the leaves of a tree.
+//
+// Leaves need no special case anywhere else because they are already solid: a swarm walks onto a
+// canopy exactly as it walks onto the ground, and "the block under me is food" is then the same
+// test it always was. Eating one drops the swarm through the hole it just made, which is precisely
+// what a swarm stripping a canopy should look like.
+bool isLocustFood(uint value) {
+    return isGrassBlock(value) || getType(value) == TREE_LEAF;
+}
+
+// FUNCTION: locustFoodAt
+bool locustFoodAt(ivec3 p) {
     if (p.x < 0 || p.x >= WIDTH || p.y < 0 || p.y >= HEIGHT || p.z < 0 || p.z >= DEPTH) return false;
-    return isGrassBlock(grid[getIndex(p)]);
+    return isLocustFood(grid[getIndex(p)]);
 }
 
 // FUNCTION: locustPackNav / locustHeading / locustSteps
@@ -396,7 +414,7 @@ bool locustHasGrip(ivec3 pos) {
 // byte is the eat timer and navigation bits left in it would read as a meal already part eaten --
 // a swarm could finish a block it had only just stepped onto.
 uint locustArriveDir(ivec3 dest, uint nav) {
-    return grassAt(dest + ivec3(0, -1, 0)) ? 0u : nav;
+    return locustFoodAt(dest + ivec3(0, -1, 0)) ? 0u : nav;
 }
 
 // =================================================================================================
@@ -418,9 +436,6 @@ uint locustArriveDir(ivec3 dest, uint nav) {
 // whether a leaf is still attached to anything -- a leaf with no closer neighbour has had its tree
 // taken out from under it and falls.
 // =================================================================================================
-const uint TREE_TRUNK = 18u;
-const uint TREE_LEAF = 19u;
-
 // FUNCTION: isTree
 bool isTree(uint type) { return type == TREE_TRUNK || type == TREE_LEAF; }
 
@@ -1604,6 +1619,12 @@ void lavaInteract(ivec3 pos, inout uint coolness, float randVal) {
                 coolness = min(coolness + tuning.lavaWaterCool, 255u);
                 return;
             }
+        } else if (nType == TREE_LEAF) {
+            // Leaves are simply gone, with no roll and no cooling paid for them. Grass gets fire set
+            // in the air above it and left to the fire rules, but a canopy has to actually open: a
+            // probabilistic burn would leave a lava flow perched on a roof of leaves it was slowly
+            // negotiating with, instead of pouring through it.
+            if (atomicCompSwap(grid[nIndex], nVal, 0u) == nVal) return;
         } else if (nType == 1u || nType == 4u) {
             uint moisture = getAge(nVal);
             uint flora = getDir(nVal);
@@ -2043,7 +2064,8 @@ void updateLocust(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, 
     // Standing on grass is the whole of the feeding rule: no stored "am I eating" flag, just the
     // block underneath. A swarm that is fed does not starve this tick, which is what makes a patch
     // of grassland somewhere a swarm can survive instead of merely somewhere it dies more slowly.
-    if (isGrassBlock(belowValue)) {
+    if (isLocustFood(belowValue)) {
+        bool onLeaf = (getType(belowValue) == TREE_LEAF);
         uint need = locustEatTicks(count);
         uint progress = currentDir + 1u; // dir is the eat timer while grazing
 
@@ -2051,18 +2073,24 @@ void updateLocust(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, 
             // Thin the grass as the meal goes on, so a swarm at work is visible from outside --
             // but never below 11, the bottom of the grass band. Letting it fall out of that band
             // early would end the meal from underneath and the swarm would walk off unfed.
-            uint flora = (belowValue >> 8) & 0xFFu;
-            uint bite = max(90u / max(need, 1u), 1u);
-            uint thinned = (flora > 11u + bite) ? (flora - bite) : 11u;
-            atomicCompSwap(grid[belowIndex], belowValue,
-                           pack(4u, thinned, getSleep(belowValue), getAge(belowValue)));
+            //
+            // A leaf has no equivalent to thin: it is eaten or it is not. It simply keeps its shape
+            // until the swarm finishes and then goes.
+            if (!onLeaf) {
+                uint flora = (belowValue >> 8) & 0xFFu;
+                uint bite = max(90u / max(need, 1u), 1u);
+                uint thinned = (flora > 11u + bite) ? (flora - bite) : 11u;
+                atomicCompSwap(grid[belowIndex], belowValue,
+                               pack(4u, thinned, getSleep(belowValue), getAge(belowValue)));
+            }
             atomicCompSwap(grid[currentIndex], rawValue, pack(type, progress, 0u, count));
             return;
         }
 
-        // Meal finished. The grass goes first: if that CAS loses, another swarm ate this block and
-        // this one must not be paid for it.
-        uint stripped = pack(4u, 0u, getSleep(belowValue), getAge(belowValue));
+        // Meal finished. The food goes first: if that CAS loses, another swarm ate this block and
+        // this one must not be paid for it. Grass is stripped back to bare soil; a leaf is removed
+        // outright, which drops the swarm through the hole it just opened in the canopy.
+        uint stripped = onLeaf ? 0u : pack(4u, 0u, getSleep(belowValue), getAge(belowValue));
         if (atomicCompSwap(grid[belowIndex], belowValue, stripped) != belowValue) return;
 
         uint grown = count + tuning.locustEatGain;
@@ -2116,7 +2144,7 @@ void updateLocust(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, 
                 ivec3 t = c + ivec3(0, (rise == 1) ? 1 : ((rise == 2) ? -1 : 0), 0);
                 if (!locustInBounds(t)) continue;
                 if (grid[getIndex(t)] != 0u) continue;
-                if (!grassAt(t + ivec3(0, -1, 0))) continue;
+                if (!locustFoodAt(t + ivec3(0, -1, 0))) continue;
                 // Arrives with a zeroed dir byte because it is landing on grass: the meal starts now.
                 if (tryMove(currentIndex, rawValue, getIndex(t), pack(newType, 0u, 0u, count))) return;
             }
@@ -2213,6 +2241,34 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
                     return;
                 }
             }
+        }
+    }
+
+    // --- Leaves catch -------------------------------------------------------------------------
+    // A leaf next to a flame becomes a flame. That single substitution is all a canopy fire needs:
+    // the new flame is an ordinary fire voxel, so it ages out, lights ITS neighbours, and the burn
+    // walks the canopy on its own -- and because leaves bridge between trees, it walks from tree to
+    // tree the same way. Nothing here knows what a forest is.
+    //
+    // Checked over the 26 neighbours rather than the 6, so fire climbs a canopy diagonally instead
+    // of stalling wherever the leaves happen to only touch at a corner.
+    //
+    // The roll comes BEFORE the scan, not after finding a leaf. Both orderings give exactly the
+    // same rate -- chance times "is there a leaf" either way -- but this one skips 26 grid reads on
+    // the dispatches it was never going to act on, and a canopy fire is thousands of flames all
+    // running this at once.
+    if (fract(randVal * 47.0f) < tuning.treeLeafBurnChance) {
+        int start = int(fract(randVal * 31.0f) * 26.0f);
+        for (int i = 0; i < 26; i++) {
+            ivec3 nPos = pos + tree26((start + i) % 26);
+            if (!treeInBounds(nPos)) continue;
+
+            uint nIndex = getIndex(nPos);
+            uint nVal = grid[nIndex];
+            if (getType(nVal) != TREE_LEAF) continue;
+
+            atomicCompSwap(grid[nIndex], nVal, pack(5u, 0u, 0u, 0u));
+            break;
         }
     }
 
