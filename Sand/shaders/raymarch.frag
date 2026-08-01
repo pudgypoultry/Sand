@@ -126,7 +126,8 @@ layout(std140, binding = 2) uniform TuningParams {
     uint treeLeafReach;
     float treeLeafSpreadChance;
     float treeLeafTickChance;
-    float treeLeafDecayChance;
+    float treeLeafFallChance;
+    float treeTrunkBurnChance;
     float treeLeafBurnChance;
     uint treeTrunkColumns;
     float treeTrunkRadius;
@@ -626,6 +627,8 @@ float locustDensity(uint type) {
 // =================================================================================================
 const uint TREE_TRUNK = 18u;
 const uint TREE_LEAF = 19u;
+// Must match falling_sand.comp: the distance value a leaf carries once it has let go of its tree.
+const uint LEAF_DETACHED = 255u;
 
 const uint SUB_LOCUST = 0u;
 const uint SUB_TRUNK = 1u;
@@ -763,8 +766,16 @@ vec3 renderTrunk(ivec3 voxelPos, vec3 subCell, vec3 baseLighting) {
 // shows where one tree's crown ends and the next begins.
 vec3 renderLeaf(uint rawVoxel, ivec3 voxelPos, vec3 baseLighting) {
     float n = hash(vec3(voxelPos));
-    float depth = clamp(float((rawVoxel >> 24) & 0xFFu) / max(float(tuning.treeLeafReach), 1.0f), 0.0f, 1.0f);
+    uint dist = (rawVoxel >> 24) & 0xFFu;
 
+    // A leaf that has let go is dead, and looks it: browned off rather than green, so a canopy
+    // coming apart is legible as it happens instead of looking like the tree is simply shedding
+    // healthy foliage. The marker is already in the byte -- this just reads it.
+    if (dist == LEAF_DETACHED) {
+        return mix(vec3(0.34f, 0.22f, 0.07f), vec3(0.52f, 0.38f, 0.12f), n) * baseLighting;
+    }
+
+    float depth = clamp(float(dist) / max(float(tuning.treeLeafReach), 1.0f), 0.0f, 1.0f);
     vec3 inner = vec3(0.10f, 0.30f, 0.09f);
     vec3 outer = vec3(0.28f, 0.52f, 0.16f);
     vec3 leaf = mix(inner, outer, depth * 0.7f + n * 0.3f);

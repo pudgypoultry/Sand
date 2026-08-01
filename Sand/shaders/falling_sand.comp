@@ -130,7 +130,8 @@ layout(std140, binding = 2) uniform TuningParams {
     uint treeLeafReach;
     float treeLeafSpreadChance;
     float treeLeafTickChance;
-    float treeLeafDecayChance;
+    float treeLeafFallChance;
+    float treeTrunkBurnChance;
     float treeLeafBurnChance;
     uint treeTrunkColumns;
     float treeTrunkRadius;
@@ -436,6 +437,11 @@ uint locustArriveDir(ivec3 dest, uint nav) {
 // whether a leaf is still attached to anything -- a leaf with no closer neighbour has had its tree
 // taken out from under it and falls.
 // =================================================================================================
+// A detached leaf carries this in place of a distance. It sits outside every value an attached leaf
+// can hold -- treeLeafReach is clamped far below it -- so one byte does double duty as "how far from
+// the crown" and "no longer part of a tree" with no third state to keep in sync.
+const uint LEAF_DETACHED = 255u;
+
 // FUNCTION: isTree
 bool isTree(uint type) { return type == TREE_TRUNK || type == TREE_LEAF; }
 
@@ -1625,6 +1631,21 @@ void lavaInteract(ivec3 pos, inout uint coolness, float randVal) {
             // probabilistic burn would leave a lava flow perched on a roof of leaves it was slowly
             // negotiating with, instead of pouring through it.
             if (atomicCompSwap(grid[nIndex], nVal, 0u) == nVal) return;
+        } else if (nType == TREE_TRUNK) {
+            // Wood burns rather than vanishing. The trunk becomes an ordinary fire voxel, which then
+            // ages out and lights the rest of the tree through the normal fire rules -- so a flow
+            // that reaches one trunk of a stand can take the whole stand with it, without lava
+            // needing any idea that trees are connected.
+            if (atomicCompSwap(grid[nIndex], nVal, pack(5u, 0u, 0u, 0u)) == nVal) return;
+        } else if (nType == 3u) {
+            // Stone scorches to dark stone on contact. 255 rather than the solidify threshold, and
+            // that is forced rather than chosen: the DARK_STONE branch below draws a unit of
+            // coolness out of a neighbour on contact and re-melts it the moment it falls under the
+            // threshold, so scorched rock seeded AT the threshold would liquefy on the very next
+            // touch and lava would tunnel through stone indefinitely. Starting at the ceiling leaves
+            // the whole 255-to-threshold span to be drawn down first, and the lava solidifies long
+            // before it gets there.
+            if (atomicCompSwap(grid[nIndex], nVal, pack(DARK_STONE, 0u, 0u, 255u)) == nVal) return;
         } else if (nType == 1u || nType == 4u) {
             uint moisture = getAge(nVal);
             uint flora = getDir(nVal);
@@ -1958,6 +1979,25 @@ void updateTrunk(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
 void updateLeaf(ivec3 pos, uint currentIndex, uint rawValue, uint currentAge, float randVal) {
     if (fract(randVal * 7.0f) >= tuning.treeLeafTickChance) return;
 
+    // --- Already falling --------------------------------------------------------------------------
+    // A detached leaf is marked with LEAF_DETACHED, which is outside the range any attached leaf can
+    // hold (leafReach is clamped well below it). The marker is what lets a falling leaf skip the
+    // 26-neighbour support scan entirely -- it has no support by definition and is not looking for
+    // any -- and it also means a leaf cannot re-attach halfway down, so a canopy that has let go
+    // comes apart for good instead of catching itself on the way past its own trunk.
+    //
+    // It voids on landing rather than piling up. Leaf litter that stayed would slowly bury a forest
+    // floor in green, and it would be the only thing here that accumulates without ever clearing.
+    if (currentAge == LEAF_DETACHED) {
+        ivec3 belowPos = pos + ivec3(0, -1, 0);
+        if (treeInBounds(belowPos) && grid[getIndex(belowPos)] == 0u) {
+            if (tryMove(currentIndex, rawValue, getIndex(belowPos),
+                        pack(TREE_LEAF, 0u, 0u, LEAF_DETACHED))) return;
+        }
+        atomicCompSwap(grid[currentIndex], rawValue, 0u);
+        return;
+    }
+
     uint dist = currentAge;
     uint nearest = 255u;
     bool touchesTrunk = false;
@@ -1994,10 +2034,16 @@ void updateLeaf(ivec3 pos, uint currentIndex, uint rawValue, uint currentAge, fl
     // Recomputed every time rather than trusted, so a canopy re-roots itself onto whatever is still
     // holding it up. Cut the trunk out and the number climbs one ring per tick until it passes the
     // reach and the canopy comes down from the inside out.
-    uint supported = touchesTrunk ? 1u : (nearest == 255u ? 255u : nearest + 1u);
+    // A neighbour that is itself falling carries LEAF_DETACHED, which is 255 -- so it lands on the
+    // same "nothing found" branch as no neighbour at all and cannot prop anything up. That falls out
+    // of the sentinel rather than needing a test of its own, and it is what makes a detaching canopy
+    // unravel outward instead of the outer ring hanging off the inner one all the way down.
+    uint supported = touchesTrunk ? 1u : (nearest >= LEAF_DETACHED ? LEAF_DETACHED : nearest + 1u);
     if (supported > tuning.treeLeafReach) {
-        if (fract(randVal * 83.0f) < tuning.treeLeafDecayChance) {
-            atomicCompSwap(grid[currentIndex], rawValue, 0u);
+        // Let go rather than vanish. Rolled rather than immediate so a crown comes apart leaf by
+        // leaf and drifts down, instead of the whole canopy blinking out of existence in one tick.
+        if (fract(randVal * 83.0f) < tuning.treeLeafFallChance) {
+            atomicCompSwap(grid[currentIndex], rawValue, pack(TREE_LEAF, 0u, 0u, LEAF_DETACHED));
         }
         return;
     }
@@ -2244,20 +2290,23 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
         }
     }
 
-    // --- Leaves catch -------------------------------------------------------------------------
-    // A leaf next to a flame becomes a flame. That single substitution is all a canopy fire needs:
-    // the new flame is an ordinary fire voxel, so it ages out, lights ITS neighbours, and the burn
-    // walks the canopy on its own -- and because leaves bridge between trees, it walks from tree to
-    // tree the same way. Nothing here knows what a forest is.
+    // --- Trees catch --------------------------------------------------------------------------
+    // A leaf or a trunk next to a flame becomes a flame. That single substitution is all a forest
+    // fire needs: the new flame is an ordinary fire voxel, so it ages out, lights ITS neighbours,
+    // and the burn walks the tree on its own -- up the trunk, out through the crown, and across to
+    // the next tree over the leaves that bridge them. Nothing here knows what a forest is.
     //
-    // Checked over the 26 neighbours rather than the 6, so fire climbs a canopy diagonally instead
-    // of stalling wherever the leaves happen to only touch at a corner.
+    // Checked over the 26 neighbours rather than the 6, so fire climbs diagonally instead of
+    // stalling wherever two leaves happen to only touch at a corner.
     //
-    // The roll comes BEFORE the scan, not after finding a leaf. Both orderings give exactly the
-    // same rate -- chance times "is there a leaf" either way -- but this one skips 26 grid reads on
-    // the dispatches it was never going to act on, and a canopy fire is thousands of flames all
-    // running this at once.
-    if (fract(randVal * 47.0f) < tuning.treeLeafBurnChance) {
+    // Wood takes slower than foliage, and the two rates share one roll rather than costing two.
+    // Roll once against the higher of the pair to decide whether to look at all, then compare that
+    // SAME value against whichever rate the thing found actually wants: for r uniform, P(r < rate)
+    // is the rate, so each material burns at exactly its own chance and the scan still gets skipped
+    // on the dispatches nothing was going to happen anyway. A canopy fire is thousands of flames
+    // running this at once, and 26 reads apiece is not free.
+    float burnRoll = fract(randVal * 47.0f);
+    if (burnRoll < max(tuning.treeLeafBurnChance, tuning.treeTrunkBurnChance)) {
         int start = int(fract(randVal * 31.0f) * 26.0f);
         for (int i = 0; i < 26; i++) {
             ivec3 nPos = pos + tree26((start + i) % 26);
@@ -2265,9 +2314,13 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
 
             uint nIndex = getIndex(nPos);
             uint nVal = grid[nIndex];
-            if (getType(nVal) != TREE_LEAF) continue;
+            uint nType = getType(nVal);
+            if (nType != TREE_LEAF && nType != TREE_TRUNK) continue;
 
-            atomicCompSwap(grid[nIndex], nVal, pack(5u, 0u, 0u, 0u));
+            float need = (nType == TREE_LEAF) ? tuning.treeLeafBurnChance : tuning.treeTrunkBurnChance;
+            if (burnRoll < need) {
+                atomicCompSwap(grid[nIndex], nVal, pack(5u, 0u, 0u, 0u));
+            }
             break;
         }
     }

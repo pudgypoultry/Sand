@@ -207,6 +207,12 @@ lava.moisture_cool=2
 lava.rest_cool_chance=0.01
 lava.consume_chance=0.05
 lava.ignite_chance=0.2
+#   Contact conversions have no knob because they are not rates: lava voids an adjacent leaf, sets an
+#   adjacent trunk alight, and scorches adjacent stone to dark stone, each on contact. The stone one
+#   has a consequence worth knowing: dark stone participates in lava's coolness diffusion, so lava
+#   now chills against the rock it has scorched at the same rate it already chills against its own
+#   crust -- a flow poured into a stone basin will crust over in a few seconds rather than sitting
+#   molten. Raise lava.stage_size to give it longer.
 lava.dark_stone_dry_chance=0.002
 
 # --- Purge (the Clear Grid button) ---
@@ -347,7 +353,12 @@ tree.leaf_chance=0.15
 tree.leaf_reach=1
 tree.leaf_spread_chance=0.15
 tree.leaf_tick_chance=0.06
-tree.leaf_decay_chance=0.10
+#   leaf_fall_chance = how readily an unsupported leaf lets go. It does not vanish where it stands:
+#                  it detaches, drifts down a cell at a time and voids when it lands, so felling a
+#                  trunk brings its crown down as falling leaves rather than deleting it in place.
+#                  Rolled rather than immediate so a canopy comes apart leaf by leaf. Detached
+#                  leaves are drawn brown, and cannot re-attach to anything on the way down.
+tree.leaf_fall_chance=0.10
 #   Appearance. A trunk does not fill its voxel -- it is one or two slender stems with air around
 #   them, drawn by the same sub-voxel march the locusts use. The stem layout is seeded from the
 #   voxel's X and Z only, never its Y, so every voxel of a column produces the same stems and the
@@ -364,5 +375,19 @@ tree.leaf_decay_chance=0.10
 #                  outright on contact, with no roll, so a flow actually pours through a canopy
 #                  instead of perching on top of one it is slowly negotiating with.
 tree.leaf_burn_chance=0.15
+#   trunk_burn_chance = the same for wood. Fire reaching a trunk is how a ground fire gets into a
+#                  crown at all, and lava sets trunks alight the same way rather than voiding them --
+#                  leaves are voided so a flow can pour through a canopy, but a trunk burning is what
+#                  carries the damage into the rest of the stand.
+#
+#                  This wants to be higher than intuition suggests, and the reason is worth knowing
+#                  before you lower it. A bare trunk is one voxel wide, so a fire climbing it is a
+#                  single chain with one candidate per link, and it has only fire_lifetime ticks to
+#                  make each one. Measured over 200 runs on a bare column, the odds of the WHOLE
+#                  trunk burning rather than the fire dying partway up are: at 0.06, 42% for a
+#                  six-tall trunk and 8% for a sixteen-tall one; at 0.10, 78% and 52%; at 0.15, 94%
+#                  and 86%. Foliage never shows this because a canopy is many-neighboured and
+#                  retries constantly -- a trunk gets one shot per link.
+tree.trunk_burn_chance=0.15
 tree.trunk_columns=2
 tree.trunk_radius=0.17

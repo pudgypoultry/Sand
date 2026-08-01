@@ -247,7 +247,8 @@ struct TuningParams {
     uint32_t treeLeafReach = 1;          // how many leaves a canopy may chain from its crown
     float treeLeafSpreadChance = 0.15f;  // chance per leaf tick to extend the canopy
     float treeLeafTickChance = 0.06f;    // chance a leaf does anything at all this dispatch
-    float treeLeafDecayChance = 0.10f;   // chance per leaf tick for an unsupported leaf to fall
+    float treeLeafFallChance = 0.10f;    // chance per leaf tick for an unsupported leaf to let go
+    float treeTrunkBurnChance = 0.15f;   // chance per tick for fire to take an adjacent trunk
     float treeLeafBurnChance = 0.15f;    // chance per tick for fire to take an adjacent leaf
     uint32_t treeTrunkColumns = 2;       // upper bound on the little stems drawn inside a trunk
     float treeTrunkRadius = 0.17f;       // stem radius in voxel units
