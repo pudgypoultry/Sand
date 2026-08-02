@@ -2,6 +2,7 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
 
 // Values read from the config file that get uploaded into the shader-side TuningParams
 // uniform buffer (binding = 2, shared by falling_sand.comp and raymarch.frag).

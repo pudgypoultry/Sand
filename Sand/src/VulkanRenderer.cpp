@@ -1,4 +1,5 @@
 #include "VulkanRenderer.hpp"
+#include "ConfigSchema.hpp"
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -47,29 +48,7 @@ void VulkanRenderer::run() {
 void VulkanRenderer::initVulkan() {
     swapchain = std::make_unique<VulkanSwapchain>(context.get());
 
-    // Create SSBO Buffer via the new VulkanBuffer wrapper
-    // NOTE: sized as a flat array of uint32_t, matching the packed voxel representation
-    // actually read/written by falling_sand.comp and raymarch.frag (see pack()/getType()/etc).
-    VkDeviceSize bufferSize = sizeof(uint32_t) * voxelCount();
-    ssboBuffer = std::make_unique<VulkanBuffer>(
-        context.get(),
-        bufferSize,
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-    );
-
-    // Shared simulation stats: 9 cloud/water scalars (waterVoxelCount, waterHighMark,
-    // cloudWaterCount, rainPhase, rainPhaseTimeBits, rainTargetLevel, rainCandidateCount,
-    // rainCandidateEstimate, cloudChargeBits), then maxOccupiedY and the black hole table
-    // (blackHoleCount plus BLACK_HOLE_MAX slots), then the per-cloud placement cache. Must stay in
-    // sync with the SimStats block in falling_sand.comp and raymarch.frag.
-    // Bound at binding 1, shared by compute and fragment.
-    steamCounterBuffer = std::make_unique<VulkanBuffer>(
-        context.get(),
-        sizeof(uint32_t) * SIM_STATS_FIELDS,
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-    );
+    createWorldBuffers();
 
     // std140 rounds a uniform block up to a multiple of 16 bytes, so the bound range has to cover
     // that padded size even though only sizeof(TuningParams) bytes are ever written.
@@ -80,10 +59,7 @@ void VulkanRenderer::initVulkan() {
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
 
-    // Written exactly once -- config doesn't change at runtime given the edit-then-relaunch model
-    void* tuningData = tuningBuffer->mapMemory();
-    memcpy(tuningData, &config.tuning, sizeof(TuningParams));
-    tuningBuffer->unmapMemory();
+    uploadTuning();
 
     window->setWorldExtents((float)config.tuning.gridWidth,
                             (float)config.tuning.gridHeight,
@@ -138,6 +114,100 @@ void VulkanRenderer::initVulkan() {
         2,
         static_cast<uint32_t>(swapchain->getImageViews().size())
     );
+
+    // So the options screen opens showing what is actually running.
+    uiManager.setTuning(config.tuning);
+}
+
+// uploadTuning: pushes the current config into the UBO both shaders read.
+//
+// This used to be a one-off at startup, on the reasoning that config never changed at runtime. The
+// options screen is exactly that changing, and for all but one of the tunables it is the entire
+// cost of applying them -- the shaders read every value out of this buffer on the tick after it is
+// written, with nothing to rebuild.
+void VulkanRenderer::uploadTuning() {
+    void* tuningData = tuningBuffer->mapMemory();
+    memcpy(tuningData, &config.tuning, sizeof(TuningParams));
+    tuningBuffer->unmapMemory();
+}
+
+// applyOptions: takes the options screen's edited copy and makes it the config the simulation runs on.
+//
+// Almost everything here is free: the shaders read their tunables out of a uniform buffer every
+// tick, so rewriting it is the whole of the change. Grid size is the one exception, because it sizes
+// the two storage buffers -- and resizing those means new VkBuffer handles, a descriptor set that
+// still points at the old ones, and a world whose contents no longer describe a cube of the new
+// dimensions. That path therefore reallocates, re-points and reseeds, which is why it is the one
+// change that clears the world and why the screen warns before it does.
+void VulkanRenderer::applyOptions(const TuningParams& requested) {
+    // Everything below either destroys a buffer the GPU may still be reading or rewrites a
+    // descriptor pointing at one. Neither is safe while work is in flight.
+    vkDeviceWaitIdle(context->getDevice());
+
+    TuningParams next = requested;
+
+    // "Derive the march budget from the world size" is stored as a resolved number rather than as a
+    // flag, so a world that grows has to have it re-derived or the extra distance goes unrendered --
+    // the exact failure that used to crop the far half of a large world. If it still matches what
+    // the old size derived, the intent was auto, so re-derive it for the new one.
+    const bool wasAuto = (requested.marchMaxSteps == autoMarchSteps(config.tuning));
+    applyWorldShape(next, next.gridWidth);
+    if (wasAuto) next.marchMaxSteps = autoMarchSteps(next);
+
+    // The same bars a value read from the file has to clear. A slider cannot produce most of these
+    // violations, but Defaults-then-edit and a hand-edited file that was loaded earlier both can.
+    sanitizeTuning(next);
+
+    const bool shapeChanged = (next.gridWidth != config.tuning.gridWidth);
+    config.tuning = next;
+
+    if (shapeChanged) {
+        createWorldBuffers();   // the old buffers are freed by the unique_ptr assignment
+        writeDescriptorSet();   // ...which is exactly why the descriptors must be rewritten
+        seedParticles();
+        window->setWorldExtents((float)config.tuning.gridWidth,
+                                (float)config.tuning.gridHeight,
+                                (float)config.tuning.gridDepth);  // this also reframes the camera
+    }
+
+    uploadTuning();
+    saveConfig("config.txt", config);
+    uiManager.setTuning(config.tuning);
+
+    std::cout << "Options applied" << (shapeChanged ? " (world rebuilt at " : " (")
+              << (shapeChanged ? std::to_string(config.tuning.gridWidth) + "^3)" : "live)") << ".\n";
+}
+
+// createWorldBuffers: allocates the two buffers whose size depends on the world's dimensions.
+//
+// Split out of initVulkan because changing the grid size from the options screen has to redo exactly
+// this and nothing else. Anything that reproduced it by hand would be a second copy of the sizing
+// rules, and the two would drift.
+void VulkanRenderer::createWorldBuffers() {
+    // Grid: a flat array of uint32_t, matching the packed voxel representation.
+    // NOTE: sized as a flat array of uint32_t, matching the packed voxel representation
+    // actually read/written by falling_sand.comp and raymarch.frag (see pack()/getType()/etc).
+    VkDeviceSize bufferSize = sizeof(uint32_t) * voxelCount();
+    ssboBuffer = std::make_unique<VulkanBuffer>(
+        context.get(),
+        bufferSize,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+
+    // Shared simulation stats: 9 cloud/water scalars (waterVoxelCount, waterHighMark,
+    // cloudWaterCount, rainPhase, rainPhaseTimeBits, rainTargetLevel, rainCandidateCount,
+    // rainCandidateEstimate, cloudChargeBits), then maxOccupiedY and the black hole table
+    // (blackHoleCount plus BLACK_HOLE_MAX slots), then the per-cloud placement cache. Must stay in
+    // sync with the SimStats block in falling_sand.comp and raymarch.frag.
+    // Bound at binding 1, shared by compute and fragment.
+    steamCounterBuffer = std::make_unique<VulkanBuffer>(
+        context.get(),
+        sizeof(uint32_t) * SIM_STATS_FIELDS,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+
 }
 
 // mainLoop: Continues rendering frames until the window is closed
@@ -339,6 +409,15 @@ void VulkanRenderer::createDescriptorSet() {
         throw std::runtime_error("Failed to allocate descriptor set!");
     }
 
+    writeDescriptorSet();
+}
+
+// writeDescriptorSet: points the set at the buffers as they are right now.
+//
+// Separate from allocation because recreating a buffer gives it a new VkBuffer handle, and a
+// descriptor still holding the old one is a dangling reference the validation layers will not catch
+// until the shader reads garbage.
+void VulkanRenderer::writeDescriptorSet() {
     VkDescriptorBufferInfo bufferInfo{};
     bufferInfo.buffer = ssboBuffer->getBuffer();
     bufferInfo.offset = 0;
@@ -496,6 +575,12 @@ void VulkanRenderer::drawFrame() {
     // we can safely execute a memory wipe from the CPU before passing the SSBO back to the compute shader.
     if (uiManager.consumeResetRequest()) {
         beginPurge();
+    }
+
+    // Same point as the purge above, and for the same reason: the fence has confirmed the GPU is
+    // finished with the buffers, which is what makes it safe to touch them from here.
+    if (uiManager.consumeApplyOptions()) {
+        applyOptions(uiManager.pendingTuning());
     }
 
     if (uiManager.consumeCameraResetRequest()) {

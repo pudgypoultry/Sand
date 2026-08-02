@@ -60,8 +60,14 @@
     <ClCompile Include="src\Config.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="src\ConfigSchema.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\ConfigSchema.hpp">
+      <Filter>include</Filter>
+    </ClInclude>
     <ClInclude Include="include\VulkanRenderer.hpp">
       <Filter>include</Filter>
     </ClInclude>

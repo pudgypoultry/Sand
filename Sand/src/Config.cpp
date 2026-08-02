@@ -1,9 +1,13 @@
 // Config.cpp
 #include "Config.hpp"
+#include "ConfigSchema.hpp"
 #include <fstream>
 #include <unordered_map>
 #include <iostream>
 #include <algorithm>
+#include <sstream>
+#include <vector>
+#include <cstdlib>
 
 // FUNCTION: trim
 static std::string trim(const std::string& s) {
@@ -65,134 +69,88 @@ static float getFloat(const std::unordered_map<std::string, std::string>& values
     }
 }
 
-// FUNCTION: loadConfig
-Config loadConfig(const std::string& path) {
-    Config config; // struct defaults apply unless overridden below
-    auto values = parseKeyValueFile(path);
-
-    // World shape first: everything downstream is sized against it, including the raymarch budget.
-    uint32_t gridSize = getUint(values, "sim.grid_size", config.tuning.gridWidth);
-    if (gridSize < 8u) {
-        std::cout << "Config 'sim.grid_size' below the 8-voxel minimum; clamping to 8.\n";
-        gridSize = 8u;
+// FUNCTION: formatField
+// One field as it should appear on the right of an '=' in config.txt.
+//
+// march_max_steps is written back as 0 whenever it matches the derived value, and that is not
+// cosmetic. The loader turns 0 into W+H+D, so a naive round trip would replace "derive this" with
+// whatever number the current world size happened to produce -- and the next time the grid size
+// changed, that stale literal would silently crop the far half of the world. Writing 0 keeps the
+// intent rather than the answer.
+static std::string formatField(const TuningParams& t, const ConfigField& f) {
+    std::ostringstream out;
+    if (f.kind == FieldKind::UInt) {
+        uint32_t v = fieldUInt(t, f);
+        if (f.offset == offsetof(TuningParams, marchMaxSteps) && v == autoMarchSteps(t)) v = 0u;
+        out << v;
+    } else {
+        // The SHORTEST representation that still reads back as the same float, found by widening the
+        // precision until it round trips. Nine digits always round trips a float and was the obvious
+        // first answer, but it spells 0.2 as "0.200000003" and 0.05 as "0.0500000007" -- and this
+        // file is meant to be edited by hand, so turning every readable number into noise the first
+        // time someone touched a slider would be a poor trade for exactness nothing needs.
+        const float v = fieldFloat(t, f);
+        for (int precision = 1; precision <= 9; precision++) {
+            std::ostringstream candidate;
+            candidate.precision(precision);
+            candidate << v;
+            const std::string text = candidate.str();
+            // Skip scientific notation and keep widening. At one significant digit ostringstream
+            // renders 20 as "2e+01" and 20000 as "2e+04", which round trip perfectly and are still
+            // the wrong thing to put in a file a person reads.
+            if (text.find('e') != std::string::npos || text.find('E') != std::string::npos) continue;
+            if (std::strtof(text.c_str(), nullptr) == v) return text;
+        }
+        out.precision(9);
+        out << v;
     }
-    if (gridSize > 512u) {
-        std::cout << "Config 'sim.grid_size' above the 512-voxel maximum; clamping to 512.\n";
-        gridSize = 512u;
+    return out.str();
+}
+
+// FUNCTION: applyWorldShape / autoMarchSteps
+void applyWorldShape(TuningParams& t, uint32_t gridSize) {
+    t.gridWidth = t.gridHeight = t.gridDepth = std::clamp(gridSize, 8u, 512u);
+}
+
+uint32_t autoMarchSteps(const TuningParams& t) {
+    return t.gridWidth + t.gridHeight + t.gridDepth;
+}
+
+// FUNCTION: sanitizeTuning
+// Every constraint that is a property of the FORMAT rather than a matter of taste, applied in one
+// place because there are now two ways in: the config file and the options screen.
+//
+// This used to live at the tail of loadConfig, which was fine while the file was the only source.
+// It is not fine now -- a value typed into the UI has to clear exactly the same bars, and most of
+// these are not preferences at all. They are the sizes of the voxel fields the values are packed
+// into, and past them a number silently wraps and the material's behaviour goes strange rather than
+// merely wrong.
+void sanitizeTuning(TuningParams& t) {
+    // The schema's own bounds first: they are what the sliders enforce, so a hand-edited file that
+    // sits outside them should land in the same place a UI edit would.
+    for (size_t i = 0; i < kConfigFieldCount; i++) {
+        const ConfigField& f = kConfigFields[i];
+        if (f.kind == FieldKind::UInt) {
+            uint32_t& v = fieldUInt(t, f);
+            v = std::clamp(v, static_cast<uint32_t>(f.lo), static_cast<uint32_t>(f.hi));
+        } else {
+            float& v = fieldFloat(t, f);
+            v = std::clamp(v, static_cast<float>(f.lo), static_cast<float>(f.hi));
+        }
     }
-    config.tuning.gridWidth = gridSize;
-    config.tuning.gridHeight = gridSize;
-    config.tuning.gridDepth = gridSize;
 
-    // A DDA crossing the box visits at most W+H+D cells, so that is exactly the budget a ray needs
-    // to reach the far side. 0 means "derive it", which is the default precisely so the whole world
-    // stays visible when grid_size changes -- a literal here is what silently cropped the far half of
-    // a large world before. A non-zero value overrides, to trade distant geometry for frame time.
-    const uint32_t autoMarchSteps = config.tuning.gridWidth + config.tuning.gridHeight + config.tuning.gridDepth;
-    config.tuning.marchMaxSteps = getUint(values, "render.march_max_steps", 0u);
-    if (config.tuning.marchMaxSteps == 0u) config.tuning.marchMaxSteps = autoMarchSteps;
-    config.tuning.shadowMaxSteps = getUint(values, "render.shadow_max_steps", config.tuning.shadowMaxSteps);
+    // The world is a cube, so the three extents are one number wearing three hats.
+    applyWorldShape(t, t.gridWidth);
 
-    config.tuning.rainStartLayers = getUint(values, "rain.start_layers", config.tuning.rainStartLayers);
-    config.tuning.rainDropsPerTick = getUint(values, "rain.drops_per_tick", config.tuning.rainDropsPerTick);
-    config.tuning.rainOvershoot = getFloat(values, "rain.overshoot", config.tuning.rainOvershoot);
-    config.tuning.rainDarkenDelay = getFloat(values, "rain.darken_delay", config.tuning.rainDarkenDelay);
-    config.tuning.cloudCount = getUint(values, "cloud.count", config.tuning.cloudCount);
-    config.tuning.cloudDriftSpeed = getFloat(values, "cloud.drift_speed", config.tuning.cloudDriftSpeed);
-    config.tuning.cloudEdgeFadeDist = getFloat(values, "cloud.edge_fade_dist", config.tuning.cloudEdgeFadeDist);
-    config.tuning.cloudChargeSaturation = getFloat(values, "cloud.charge_saturation", config.tuning.cloudChargeSaturation);
-    config.tuning.cloudChargeEaseRate = getFloat(values, "cloud.charge_ease_rate", config.tuning.cloudChargeEaseRate);
-    config.tuning.cloudMinAlpha = getFloat(values, "cloud.min_alpha", config.tuning.cloudMinAlpha);
-    config.tuning.cloudMaxAlpha = getFloat(values, "cloud.max_alpha", config.tuning.cloudMaxAlpha);
-    config.tuning.cloudVoxelSize = getFloat(values, "cloud.voxel_size", config.tuning.cloudVoxelSize);
-    config.tuning.cloudEdgeThresholdMin = getFloat(values, "cloud.edge_threshold_min", config.tuning.cloudEdgeThresholdMin);
-    config.tuning.cloudEdgeThresholdMax = getFloat(values, "cloud.edge_threshold_max", config.tuning.cloudEdgeThresholdMax);
-    config.tuning.maxCloudSteps = getUint(values, "cloud.max_steps", config.tuning.maxCloudSteps);
-    config.tuning.sandMoistureCapacity = getUint(values, "physics.sand_moisture_capacity", config.tuning.sandMoistureCapacity);
-    config.tuning.dirtMoistureCapacity = getUint(values, "physics.dirt_moisture_capacity", config.tuning.dirtMoistureCapacity);
-    config.tuning.sandWaterAbsorbUnit = getUint(values, "physics.sand_water_absorb_unit", config.tuning.sandWaterAbsorbUnit);
-    config.tuning.sandClumpThreshold = getUint(values, "physics.sand_clump_threshold", config.tuning.sandClumpThreshold);
-    config.tuning.dirtClumpThreshold = getUint(values, "physics.dirt_clump_threshold", config.tuning.dirtClumpThreshold);
-    config.tuning.wakeSleepThreshold = getUint(values, "physics.wake_sleep_threshold", config.tuning.wakeSleepThreshold);
-    config.tuning.emptyBelowWakeCount = getUint(values, "physics.empty_below_wake_count", config.tuning.emptyBelowWakeCount);
-    config.tuning.waterSpreadRadius = getUint(values, "physics.water_spread_radius", config.tuning.waterSpreadRadius);
-    config.tuning.fireLifetime = getUint(values, "physics.fire_lifetime", config.tuning.fireLifetime);
-    config.tuning.fireDryRate = getUint(values, "physics.fire_dry_rate", config.tuning.fireDryRate);
-    config.tuning.grassGrowChance = getFloat(values, "physics.grass_grow_chance", config.tuning.grassGrowChance);
-    config.tuning.grassSubmergedDecayChance = getFloat(values, "physics.grass_submerged_decay_chance", config.tuning.grassSubmergedDecayChance);
-    config.tuning.fireBurnGrassChance = getFloat(values, "physics.fire_burn_grass_chance", config.tuning.fireBurnGrassChance);
-    config.tuning.fireSpreadChance = getFloat(values, "physics.fire_spread_chance", config.tuning.fireSpreadChance);
-    config.tuning.steamScatterChance = getFloat(values, "physics.steam_scatter_chance", config.tuning.steamScatterChance);
-    config.tuning.blackHoleHorizon = getUint(values, "blackhole.horizon", config.tuning.blackHoleHorizon);
-    config.tuning.blackHoleRadius = getUint(values, "blackhole.radius", config.tuning.blackHoleRadius);
-    config.tuning.blackHoleOrbitSpeed = getFloat(values, "blackhole.orbit_speed", config.tuning.blackHoleOrbitSpeed);
-    config.tuning.blackHoleInfall = getFloat(values, "blackhole.infall", config.tuning.blackHoleInfall);
-    config.tuning.blackHolePlaneGrip = getFloat(values, "blackhole.plane_grip", config.tuning.blackHolePlaneGrip);
-    config.tuning.blackHoleGlow = getFloat(values, "blackhole.glow", config.tuning.blackHoleGlow);
-    config.tuning.blackHoleOrbitPlanes = getUint(values, "blackhole.orbit_planes", config.tuning.blackHoleOrbitPlanes);
-    config.tuning.blackHoleGrowthCost = getFloat(values, "blackhole.growth_cost", config.tuning.blackHoleGrowthCost);
-    config.tuning.blackHoleMaxLevel = getUint(values, "blackhole.max_level", config.tuning.blackHoleMaxLevel);
-    config.tuning.blackHoleStarveGrace = getUint(values, "blackhole.starve_grace", config.tuning.blackHoleStarveGrace);
-    config.tuning.blackHoleDecayRate = getUint(values, "blackhole.decay_rate", config.tuning.blackHoleDecayRate);
-    config.tuning.purgeLevel = getUint(values, "purge.level", config.tuning.purgeLevel);
-    config.tuning.purgeMass = getUint(values, "purge.mass", config.tuning.purgeMass);
-    config.tuning.purgeStarveGrace = getUint(values, "purge.starve_grace", config.tuning.purgeStarveGrace);
-    config.tuning.purgeDecayRate = getUint(values, "purge.decay_rate", config.tuning.purgeDecayRate);
-    config.tuning.purgeOrbitSpeed = getFloat(values, "purge.orbit_speed", config.tuning.purgeOrbitSpeed);
-    config.tuning.purgeInfall = getFloat(values, "purge.infall", config.tuning.purgeInfall);
-    config.tuning.waterShadowTransmit = getFloat(values, "water.shadow_transmit", config.tuning.waterShadowTransmit);
-    config.tuning.waterWaveStrength = getFloat(values, "water.wave_strength", config.tuning.waterWaveStrength);
-    config.tuning.waterWaveScale = getFloat(values, "water.wave_scale", config.tuning.waterWaveScale);
-    config.tuning.waterWaveSpeed = getFloat(values, "water.wave_speed", config.tuning.waterWaveSpeed);
-    config.tuning.lavaStageSize = getUint(values, "lava.stage_size", config.tuning.lavaStageSize);
-    config.tuning.lavaViscosity = getFloat(values, "lava.viscosity", config.tuning.lavaViscosity);
-    config.tuning.lavaSpreadRadius = getUint(values, "lava.spread_radius", config.tuning.lavaSpreadRadius);
-    config.tuning.lavaWaterCool = getUint(values, "lava.water_cool", config.tuning.lavaWaterCool);
-    config.tuning.lavaMoistureCool = getUint(values, "lava.moisture_cool", config.tuning.lavaMoistureCool);
-    config.tuning.lavaRestCoolChance = getFloat(values, "lava.rest_cool_chance", config.tuning.lavaRestCoolChance);
-    config.tuning.lavaConsumeChance = getFloat(values, "lava.consume_chance", config.tuning.lavaConsumeChance);
-    config.tuning.lavaIgniteChance = getFloat(values, "lava.ignite_chance", config.tuning.lavaIgniteChance);
-    config.tuning.darkStoneDryChance = getFloat(values, "lava.dark_stone_dry_chance", config.tuning.darkStoneDryChance);
-    config.tuning.locustTickDispatches = getUint(values, "locust.tick_dispatches", config.tuning.locustTickDispatches);
-    config.tuning.locustStageSize = getUint(values, "locust.stage_size", config.tuning.locustStageSize);
-    config.tuning.locustSpawnSize = getUint(values, "locust.spawn_size", config.tuning.locustSpawnSize);
-    config.tuning.locustMaxSize = getUint(values, "locust.max_size", config.tuning.locustMaxSize);
-    config.tuning.locustBudSize = getUint(values, "locust.bud_size", config.tuning.locustBudSize);
-    config.tuning.locustEatGain = getUint(values, "locust.eat_gain", config.tuning.locustEatGain);
-    config.tuning.locustEatTicksMin = getUint(values, "locust.eat_ticks_min", config.tuning.locustEatTicksMin);
-    config.tuning.locustEatTicksMax = getUint(values, "locust.eat_ticks_max", config.tuning.locustEatTicksMax);
-    config.tuning.locustRunLength = getUint(values, "locust.run_length", config.tuning.locustRunLength);
-    config.tuning.locustClimbChance = getFloat(values, "locust.climb_chance", config.tuning.locustClimbChance);
-    config.tuning.locustDensityMin = getFloat(values, "locust.density_min", config.tuning.locustDensityMin);
-    config.tuning.locustDensityMax = getFloat(values, "locust.density_max", config.tuning.locustDensityMax);
-    config.tuning.locustSubdivision = getUint(values, "locust.subdivision", config.tuning.locustSubdivision);
-    config.tuning.locustCrawlRate = getFloat(values, "locust.crawl_rate", config.tuning.locustCrawlRate);
-
-    config.tuning.treeBloomChance = getFloat(values, "tree.bloom_chance", config.tuning.treeBloomChance);
-    config.tuning.treeMaxHeight = getUint(values, "tree.max_height", config.tuning.treeMaxHeight);
-    config.tuning.treeSoilReserve = getUint(values, "tree.soil_reserve", config.tuning.treeSoilReserve);
-    config.tuning.treeWaterMax = getUint(values, "tree.water_max", config.tuning.treeWaterMax);
-    config.tuning.treeDrinkChance = getFloat(values, "tree.drink_chance", config.tuning.treeDrinkChance);
-    config.tuning.treeFlowChance = getFloat(values, "tree.flow_chance", config.tuning.treeFlowChance);
-    config.tuning.treeGrowCost = getUint(values, "tree.grow_cost", config.tuning.treeGrowCost);
-    config.tuning.treeLeafCost = getUint(values, "tree.leaf_cost", config.tuning.treeLeafCost);
-    config.tuning.treeSpreadCost = getUint(values, "tree.spread_cost", config.tuning.treeSpreadCost);
-    config.tuning.treeSpreadChance = getFloat(values, "tree.spread_chance", config.tuning.treeSpreadChance);
-    config.tuning.treeLeafChance = getFloat(values, "tree.leaf_chance", config.tuning.treeLeafChance);
-    config.tuning.treeLeafReach = getUint(values, "tree.leaf_reach", config.tuning.treeLeafReach);
-    config.tuning.treeLeafSpreadChance = getFloat(values, "tree.leaf_spread_chance", config.tuning.treeLeafSpreadChance);
-    config.tuning.treeLeafTickChance = getFloat(values, "tree.leaf_tick_chance", config.tuning.treeLeafTickChance);
-    config.tuning.treeLeafFallChance = getFloat(values, "tree.leaf_fall_chance", config.tuning.treeLeafFallChance);
-    config.tuning.treeTrunkBurnChance = getFloat(values, "tree.trunk_burn_chance", config.tuning.treeTrunkBurnChance);
-    config.tuning.treeLeafBurnChance = getFloat(values, "tree.leaf_burn_chance", config.tuning.treeLeafBurnChance);
-    config.tuning.treeTrunkColumns = getUint(values, "tree.trunk_columns", config.tuning.treeTrunkColumns);
-    config.tuning.treeTrunkRadius = getFloat(values, "tree.trunk_radius", config.tuning.treeTrunkRadius);
+    // 0 means "derive it" wherever it comes from, including a slider dragged to the bottom. Leaving
+    // a literal 0 in place would give every ray a budget of no steps and blank the world.
+    if (t.marchMaxSteps == 0u) t.marchMaxSteps = autoMarchSteps(t);
 
     // The trunk's height counter and the leaf's distance counter are each one byte, and a max height
     // of 0 would leave a sapling unable to ever be a crown -- so it would never put out a leaf.
-    config.tuning.treeMaxHeight = std::clamp(config.tuning.treeMaxHeight, 1u, 255u);
-    config.tuning.treeLeafReach = std::clamp(config.tuning.treeLeafReach, 1u, 200u);
-    config.tuning.treeWaterMax = std::clamp(config.tuning.treeWaterMax, 1u, 255u);
+    t.treeMaxHeight = std::clamp(t.treeMaxHeight, 1u, 255u);
+    t.treeLeafReach = std::clamp(t.treeLeafReach, 1u, 200u);
+    t.treeWaterMax = std::clamp(t.treeWaterMax, 1u, 255u);
 
     // Every locust field below shares a voxel's three spare bytes, so each has a hard ceiling that
     // is a property of the packing rather than a taste call -- past it the value silently wraps and
@@ -200,19 +158,99 @@ Config loadConfig(const std::string& path) {
     //
     // The tick phase lives in the sleep byte and is compared against this, so an interval it can
     // never reach freezes every swarm in the world; 0 does the same from the other end.
-    config.tuning.locustTickDispatches = std::clamp(config.tuning.locustTickDispatches, 1u, 255u);
+    t.locustTickDispatches = std::clamp(t.locustTickDispatches, 1u, 255u);
     // The eat timer lives in the dir byte and counts up to this.
-    config.tuning.locustEatTicksMax = std::clamp(config.tuning.locustEatTicksMax, 1u, 255u);
-    config.tuning.locustEatTicksMin = std::clamp(config.tuning.locustEatTicksMin, 1u, config.tuning.locustEatTicksMax);
+    t.locustEatTicksMax = std::clamp(t.locustEatTicksMax, 1u, 255u);
+    t.locustEatTicksMin = std::clamp(t.locustEatTicksMin, 1u, t.locustEatTicksMax);
     // Steps left in a run get 3 bits alongside the heading's 3.
-    config.tuning.locustRunLength = std::clamp(config.tuning.locustRunLength, 1u, 7u);
+    t.locustRunLength = std::clamp(t.locustRunLength, 1u, 7u);
     // The stage table is exactly 5 wide, so the cap has to be reachable within 5 bands or the top
     // stages would be unreachable and the head count could outrun its own type.
-    if (config.tuning.locustStageSize == 0u) config.tuning.locustStageSize = 1u;
-    config.tuning.locustMaxSize = std::min(config.tuning.locustMaxSize, config.tuning.locustStageSize * 5u);
-    config.tuning.locustMaxSize = std::max(config.tuning.locustMaxSize, 1u);
+    if (t.locustStageSize == 0u) t.locustStageSize = 1u;
+    t.locustMaxSize = std::min(t.locustMaxSize, t.locustStageSize * 5u);
+    t.locustMaxSize = std::max(t.locustMaxSize, 1u);
     // The head count shares an 8-bit field with nothing, but it is still one byte.
-    config.tuning.locustMaxSize = std::min(config.tuning.locustMaxSize, 255u);
+    t.locustMaxSize = std::min(t.locustMaxSize, 255u);
+}
 
+// FUNCTION: loadConfig
+Config loadConfig(const std::string& path) {
+    Config config; // struct defaults apply unless overridden below
+    auto values = parseKeyValueFile(path);
+
+    // One pass over the schema replaces what used to be ninety-odd hand-written lines, each of which
+    // had to name its field twice and its key once. Every one of those was a chance for a key to be
+    // read into the wrong field, or for a field to quietly have no key at all.
+    for (size_t i = 0; i < kConfigFieldCount; i++) {
+        const ConfigField& f = kConfigFields[i];
+        if (f.kind == FieldKind::UInt) {
+            fieldUInt(config.tuning, f) = getUint(values, f.key, fieldUInt(config.tuning, f));
+        } else {
+            fieldFloat(config.tuning, f) = getFloat(values, f.key, fieldFloat(config.tuning, f));
+        }
+    }
+
+    // sim.grid_size was read into gridWidth by the loop above; fan it out before anything derived
+    // from the world's size is computed.
+    applyWorldShape(config.tuning, config.tuning.gridWidth);
+
+    // 0 means "derive it", and that is the default precisely so the whole world stays visible when
+    // the grid size changes -- a literal here is what silently cropped the far half of a large world
+    // before. A non-zero value overrides, to trade distant geometry for frame time.
+    if (config.tuning.marchMaxSteps == 0u) config.tuning.marchMaxSteps = autoMarchSteps(config.tuning);
+
+    sanitizeTuning(config.tuning);
     return config;
+}
+
+// FUNCTION: saveConfig
+// Rewrites values in place, leaving every comment, blank line and section heading exactly where it
+// was. That is the whole point: config.txt is mostly prose explaining WHY each number is what it is,
+// and a writer that regenerated the file would throw all of it away the first time someone nudged a
+// slider. Only lines that are already "key=value" for a key the schema knows are touched; anything
+// the schema has no line for is appended at the end so it cannot be silently dropped.
+bool saveConfig(const std::string& path, const Config& config) {
+    std::vector<std::string> lines;
+    {
+        std::ifstream in(path);
+        std::string line;
+        while (std::getline(in, line)) lines.push_back(line);
+    }
+
+    std::vector<bool> written(kConfigFieldCount, false);
+
+    for (std::string& line : lines) {
+        std::string trimmed = trim(line);
+        if (trimmed.empty() || trimmed[0] == '#') continue;
+
+        size_t eq = trimmed.find('=');
+        if (eq == std::string::npos) continue;
+
+        std::string key = trim(trimmed.substr(0, eq));
+        for (size_t i = 0; i < kConfigFieldCount; i++) {
+            if (key != kConfigFields[i].key) continue;
+            line = std::string(kConfigFields[i].key) + "=" + formatField(config.tuning, kConfigFields[i]);
+            written[i] = true;
+            break;
+        }
+    }
+
+    std::vector<std::string> missing;
+    for (size_t i = 0; i < kConfigFieldCount; i++) {
+        if (!written[i]) {
+            missing.push_back(std::string(kConfigFields[i].key) + "=" + formatField(config.tuning, kConfigFields[i]));
+        }
+    }
+
+    std::ofstream out(path, std::ios::trunc);
+    if (!out.is_open()) {
+        std::cout << "Could not write '" << path << "'; the new options are live but will not survive a restart.\n";
+        return false;
+    }
+    for (const std::string& line : lines) out << line << "\n";
+    if (!missing.empty()) {
+        out << "\n# Added automatically: these had no line in the file when it was last written.\n";
+        for (const std::string& line : missing) out << line << "\n";
+    }
+    return true;
 }

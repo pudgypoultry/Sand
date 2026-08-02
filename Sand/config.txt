@@ -1,3 +1,11 @@
+# Simulation tuning. Every key below is also on the in-game options screen (Options... on the
+# controls panel), grouped into the same sections you see here -- editing this file and using that
+# screen are two doors into the same values.
+#
+# Applying from the screen writes this file back, preserving every comment in it. A value only ever
+# needs to exist in one place: Sand/src/ConfigSchema.cpp lists the key, its bounds and its label, and
+# the reader, the writer and the options screen all walk that one list.
+#
 # config.txt -- loaded once at startup, changes require relaunching the app
 
 # --- World shape ---

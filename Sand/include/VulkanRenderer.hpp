@@ -27,6 +27,10 @@ private:
     size_t voxelCount() const;
     void createFramebuffers();
     void createDescriptorSet();
+    void createWorldBuffers();
+    void writeDescriptorSet();
+    void applyOptions(const TuningParams& requested);
+    void uploadTuning();
     void createCommandPoolAndBuffer();
     void createSyncObjects();
     void createTimestampPool();

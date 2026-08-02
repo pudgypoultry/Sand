@@ -20,6 +20,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\Config.cpp" />
+    <ClCompile Include="src\ConfigSchema.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\VulkanContext.cpp" />
     <ClCompile Include="src\VulkanBuffer.cpp" />
@@ -36,6 +37,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="include\Config.hpp" />
+    <ClInclude Include="include\ConfigSchema.hpp" />
     <ClInclude Include="include\Particle.hpp" />
     <ClInclude Include="include\UIManager.hpp" />
     <ClInclude Include="include\VulkanBuffer.hpp" />

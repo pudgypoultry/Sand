@@ -9,6 +9,9 @@
 #include <string>
 #include <cfloat>
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include "ConfigSchema.hpp"
 
 struct GLFWwindow;
 
@@ -184,7 +187,10 @@ public:
 
         ImGui::Separator();
         ImGui::Checkbox("Show Profiler", &m_showProfiler);
+        if (ImGui::Button("Options...")) m_showOptions = true;
         ImGui::End();
+
+        if (m_showOptions) buildOptions();
 
         // Advanced whether or not the panel is open. The cursor is shared with the breakdown series
         // the renderer writes into, so freezing it while the profiler is hidden would leave those
@@ -258,6 +264,17 @@ public:
         return requested;
     }
 
+    // Called once at startup and again after every apply, so the screen always opens showing what
+    // the simulation is actually running rather than what it was running when the process started.
+    void setTuning(const TuningParams& t) { m_pendingTuning = t; m_liveTuning = t; }
+    const TuningParams& pendingTuning() const { return m_pendingTuning; }
+
+    bool consumeApplyOptions() {
+        bool requested = m_applyOptions;
+        m_applyOptions = false;
+        return requested;
+    }
+
     bool wantsCaptureMouse() const { return ImGui::GetIO().WantCaptureMouse; }
     bool wantsCaptureKeyboard() const { return ImGui::GetIO().WantCaptureKeyboard; }
 
@@ -298,7 +315,16 @@ private:
     float m_fovDistance = 1.2f; // matches the original hardcoded raymarch FOV distance
     float m_perspectiveBlend = 1.0f; // 1.0 = perspective (original behavior), 0.0 = orthographic
     bool m_showProfiler = true;
+    bool m_showOptions = false;
     bool m_firstFrame = true; // drives the one-shot startup window placement in buildUI
+
+    // The options screen edits a COPY and hands it over only when Apply is pressed. Editing the live
+    // values would mean every intermediate position of every slider was a config the simulation
+    // briefly ran on -- dragging the grid size from 128 to 256 would rebuild the world at every
+    // width in between.
+    TuningParams m_pendingTuning{};
+    TuningParams m_liveTuning{};
+    bool m_applyOptions = false;
 
     // One minute of history at 60fps. All four series share m_historyIdx so a given index refers to
     // the same frame in each -- which is what lets them be drawn on one set of axes.
@@ -426,6 +452,97 @@ private:
                 "overlaps the previous frame's GPU work, and under vsync the\n"
                 "remainder is spent waiting on the display.");
         }
+    }
+
+    // FUNCTION: drawOptionField
+    // One tunable, rendered from its schema entry. Nothing here knows what the field MEANS -- the
+    // label, the bounds and the tooltip all come out of the table -- which is what keeps adding a
+    // tunable to one line in one file instead of a widget here as well.
+    void drawOptionField(const ConfigField& f) {
+        // "label##key" so the visible text stays readable while the widget's identity is the key.
+        // Several sections have a field called "Spread chance"; without a unique id ImGui would
+        // treat them as the same widget and dragging one would move the other.
+        char id[160];
+        std::snprintf(id, sizeof(id), "%s##%s", f.label, f.key);
+
+        // Input IS allowed here, unlike the main panel's sliders. There it is suppressed because
+        // Tab used to land on a slider and turn it into a text box by accident; here typing an exact
+        // number is the entire point of the screen, and anything typed is clamped to the field's
+        // bounds by ImGui and again by sanitizeTuning before it reaches the simulation.
+        //
+        // Probability fields get a logarithmic scale. Their interesting values live near zero --
+        // grass grows at 0.001 -- and on a linear 0..1 bar every one of them is the same pixel.
+        if (f.kind == FieldKind::UInt) {
+            int v = static_cast<int>(fieldUInt(m_pendingTuning, f));
+            if (ImGui::SliderInt(id, &v, static_cast<int>(f.lo), static_cast<int>(f.hi))) {
+                fieldUInt(m_pendingTuning, f) = static_cast<uint32_t>(std::max(0, v));
+            }
+        } else {
+            float v = fieldFloat(m_pendingTuning, f);
+            const bool fine = (f.hi <= 1.0);
+            ImGuiSliderFlags flags = fine ? ImGuiSliderFlags_Logarithmic : 0;
+            if (ImGui::SliderFloat(id, &v, static_cast<float>(f.lo), static_cast<float>(f.hi),
+                                   fine ? "%.4f" : "%.3f", flags)) {
+                fieldFloat(m_pendingTuning, f) = v;
+            }
+        }
+
+        if (f.help && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", f.help);
+    }
+
+    // FUNCTION: buildOptions
+    // The options screen: every tunable the config file has, grouped the way the file groups them.
+    //
+    // The tabs are not a hand-written list. The schema is ordered by section and each section is one
+    // contiguous run, so walking the array and starting a tab whenever the section name changes
+    // reproduces the file's own structure for free -- and a new section appears here the moment one
+    // appears in the table, with nothing to keep in step.
+    void buildOptions() {
+        ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 34.0f, ImGui::GetFontSize() * 30.0f),
+                                 ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Options", &m_showOptions)) { ImGui::End(); return; }
+
+        const float footer = ImGui::GetFrameHeightWithSpacing() * 2.4f;
+        ImGui::BeginChild("##optionScroll", ImVec2(0.0f, -footer));
+        ImGui::PushItemWidth(ImGui::GetFontSize() * 9.0f);
+
+        if (ImGui::BeginTabBar("##optionTabs")) {
+            size_t i = 0;
+            while (i < kConfigFieldCount) {
+                const char* section = kConfigFields[i].section;
+                size_t end = i;
+                while (end < kConfigFieldCount && std::strcmp(kConfigFields[end].section, section) == 0) end++;
+
+                if (ImGui::BeginTabItem(section)) {
+                    for (size_t j = i; j < end; j++) drawOptionField(kConfigFields[j]);
+                    ImGui::EndTabItem();
+                }
+                i = end;
+            }
+            ImGui::EndTabBar();
+        }
+
+        ImGui::PopItemWidth();
+        ImGui::EndChild();
+
+        ImGui::Separator();
+
+        // Pinned below the scroll region, so Apply is reachable without scrolling to the end of
+        // whichever tab happens to be open.
+        if (ImGui::Button("Apply and Reload")) m_applyOptions = true;
+        ImGui::SameLine();
+        if (ImGui::Button("Revert")) m_pendingTuning = m_liveTuning;
+        ImGui::SameLine();
+        if (ImGui::Button("Defaults")) m_pendingTuning = TuningParams{};
+
+        if (m_pendingTuning.gridWidth != m_liveTuning.gridWidth) {
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
+                               "Grid size changed: applying rebuilds the world and clears it.");
+        } else {
+            ImGui::TextDisabled("Applying also writes config.txt.");
+        }
+
+        ImGui::End();
     }
 
     void handleShortcuts() {
