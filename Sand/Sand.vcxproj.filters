@@ -61,9 +61,15 @@
     <ClCompile Include="src\ConfigSchema.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="src\AssetPaths.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\Config.hpp">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\AssetPaths.hpp">
       <Filter>include</Filter>
     </ClInclude>
     <ClInclude Include="include\ConfigSchema.hpp">

@@ -1,5 +1,6 @@
 #include "VulkanRenderer.hpp"
 #include "ConfigSchema.hpp"
+#include "AssetPaths.hpp"
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -32,7 +33,11 @@ static constexpr uint32_t BH_INDEX_MASK = 0x3FFFFFFFu;
 
 // Constructor: Initializes the managed architecture instances
 VulkanRenderer::VulkanRenderer() {
-    config = loadConfig("config.txt");
+    // Resolved once and kept, so a later save cannot pick a different file from the one that was
+    // loaded -- reading the copy beside the executable and writing one into the working directory
+    // would look exactly like settings silently failing to stick.
+    configPath = resolveAssetPath("config.txt");
+    config = loadConfig(configPath);
     window = std::make_unique<Window>(1600, 1200, "3D Falling Sand Compute");
     context = std::make_unique<VulkanContext>(window.get());
 }
@@ -188,7 +193,7 @@ void VulkanRenderer::applyOptions(const TuningParams& requested) {
     window->resetCamera();
 
     uploadTuning();
-    saveConfig("config.txt", config);
+    saveConfig(configPath, config);
     uiManager.setTuning(config.tuning);
 
     std::cout << "Options applied; world cleared at " << config.tuning.gridWidth << "^3"

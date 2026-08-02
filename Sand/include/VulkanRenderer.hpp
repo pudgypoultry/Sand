@@ -80,4 +80,6 @@ private:
     UIManager uiManager;
 
     Config config;
+    // Where config.txt was actually found, so the options screen writes back to the same file.
+    std::string configPath;
 };

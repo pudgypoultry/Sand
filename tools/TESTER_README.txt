@@ -18,8 +18,8 @@ Two things, both free, both one-time:
    You very likely already have it; if the program exits immediately with a message about a missing
    DLL, this is why.
 
-If Sand.exe opens a console window and closes again, the console text says what failed. Run it from
-a terminal (cd to the folder, then .\Sand.exe) to read it.
+If something goes wrong at startup, the console says what and waits for you to press Enter before
+closing, so there is time to read it.
 
 
 CONTROLS

@@ -45,12 +45,17 @@ A pre-build step compiles `shaders/*.comp|vert|frag` into `shaders/*.spv`. The c
 are committed, so a build failure at that step leaves you running *last commit's* shaders rather
 than none — if a shader edit appears to do nothing, check that step actually ran.
 
-### Running from Visual Studio
+### Where it looks for shaders and config.txt
 
-The program opens `shaders/falling_sand.spv` and `config.txt` by paths relative to the working
-directory, and Visual Studio defaults that to the project directory, where both live. That is why
-F5 works and why double-clicking `Sand.exe` in `x64\Release` does not — the executable is not next
-to its assets there.
+The working directory first, then the directory holding the executable. Visual Studio sets the
+working directory to the project folder, so F5 uses the project's own shaders and `config.txt` and
+an edit to either takes effect without copying anything.
+
+A post-build step also copies the compiled shaders and `config.txt` next to the built executable, so
+`x64\Release\Sand.exe` runs on its own. It did not, once: the paths were resolved against the
+working directory only, which for a double-clicked exe is the output folder, so it threw on the
+first missing shader and the console it printed to was destroyed with the process. What that looked
+like from outside was a window opening and closing for no reason.
 
 ## If the link fails with missing Config symbols
 
