@@ -64,9 +64,11 @@ GLFWwindow* Window::getGLFWwindow() const {
 void Window::resetCamera() {
     camPitch = -0.4f;
     camYaw = 0.0f;
-    camX = 64.0f;
-    camY = 140.0f;
-    camZ = -120.0f;
+    // Framed against the world rather than a fixed 128 cube: centred on X, a little above the top,
+    // and backed off by roughly a world-width so the whole thing fits whatever size it is.
+    camX = worldW * 0.5f;
+    camY = worldH * 1.1f;
+    camZ = -worldW * 0.94f;
     scrollYOffset = 0.0;
 }
 

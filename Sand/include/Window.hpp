@@ -39,6 +39,11 @@ public:
     // Restores the camera pitch, yaw, and coordinates to their default starting values
     void resetCamera();
 
+    // The default camera pose is expressed in world units, so it has to know how big the world is --
+    // the old constants framed a 128 cube and would have left a small grid a speck and a large one
+    // off screen.
+    void setWorldExtents(float w, float h, float d) { worldW = w; worldH = h; worldD = d; resetCamera(); }
+
     // Accessors for camera state
     float getPitch() const { return camPitch; }
     float getYaw() const { return camYaw; }
@@ -104,6 +109,7 @@ private:
     float camX = 64.0f;
     float camY = 140.0f;
     float camZ = -120.0f;
+    float worldW = 128.0f, worldH = 128.0f, worldD = 128.0f;
 
     double currentMouseX = 0.0;
     double currentMouseY = 0.0;

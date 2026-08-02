@@ -6,10 +6,17 @@ layout(std430, binding = 0) buffer VoxelGrid {
     uint grid[];
 };
 
+// Black holes are the one thing in the sim that acts at a distance, so unlike every other
+// material they cannot be discovered by looking at neighbouring voxels. They live in a tiny fixed
+// table instead, which every captured particle scans in full -- 8 entries is cheap enough to read
+// per voxel per dispatch, and it means the orbit field is exact rather than sampled.
+const int BLACK_HOLE_MAX = 8;
+const int CLOUD_MAX = 64;
+
 // The per-slot reveal/footprint arrays are gone: the cloud field is now a fixed drifting
 // population whose layout is a pure function of (index, time), so there is nothing per-cloud
 // left to store. See the CLOUD FIELD section below.
-layout(std430, binding = 1) buffer CloudStats {
+layout(std430, binding = 1) buffer SimStats {
     uint waterVoxelCount;
     uint waterHighMark;          // peak water level ever observed -- the target rain restores to
     uint cloudWaterCount;        // steam banked since the last storm; drives how charged the sky looks
@@ -19,9 +26,22 @@ layout(std430, binding = 1) buffer CloudStats {
     uint rainCandidateCount;     // census of rainable columns, rebuilt every dispatch
     uint rainCandidateEstimate;  // last dispatch's census -- the divisor that sets drop odds
     uint cloudChargeBits;        // float bits: eased 0..1 group-wide cloud opacity/greyness
+    uint blackHoleCount;         // live table entries; 0 lets every voxel skip the scan entirely
+    uint maxOccupiedY;           // ceiling on where matter can be; lets the renderer skip empty sky
+    uint blackHoles[BLACK_HOLE_MAX];      // 0 = free slot, else BH_ACTIVE | linear voxel index
+    uint blackHoleMass[BLACK_HOLE_MAX];   // voxels swallowed; the hole's body size is derived from it
+    uint blackHoleStarve[BLACK_HOLE_MAX]; // dispatches since it last had anything captured
+    // Cloud placement, computed once per dispatch instead of re-derived by every reader. Seven floats
+    // per cloud: centre xyz, radius xyz, edge fade.
+    float cloudCache[CLOUD_MAX * 7];
 };
 
 layout(std140, binding = 2) uniform TuningParams {
+    uint gridWidth;
+    uint gridHeight;
+    uint gridDepth;
+    uint marchMaxSteps;
+    uint shadowMaxSteps;
     uint rainStartLayers;
     uint rainDropsPerTick;
     float rainOvershoot;
@@ -44,6 +64,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint dirtClumpThreshold;
     uint wakeSleepThreshold;
     uint emptyBelowWakeCount;
+    uint waterSpreadRadius;
     uint fireLifetime;
     uint fireDryRate;
     float grassGrowChance;
@@ -51,9 +72,73 @@ layout(std140, binding = 2) uniform TuningParams {
     float fireBurnGrassChance;
     float fireSpreadChance;
     float steamScatterChance;
+    uint blackHoleHorizon;
+    uint blackHoleRadius;
+    float blackHoleOrbitSpeed;
+    float blackHoleInfall;
+    float blackHolePlaneGrip;
+    float blackHoleGlow;
+    uint blackHoleOrbitPlanes;
+    float blackHoleGrowthCost;
+    uint blackHoleMaxLevel;
+    uint blackHoleStarveGrace;
+    uint blackHoleDecayRate;
+    uint purgeLevel;
+    uint purgeMass;
+    uint purgeStarveGrace;
+    uint purgeDecayRate;
+    float purgeOrbitSpeed;
+    float purgeInfall;
+    float waterShadowTransmit;
+    float waterWaveStrength; // render-only; declared here to keep the shared UBO layouts identical
+    float waterWaveScale;
+    float waterWaveSpeed;
+    uint lavaStageSize;
+    float lavaViscosity;
+    uint lavaSpreadRadius;
+    uint lavaWaterCool;
+    uint lavaMoistureCool;
+    float lavaRestCoolChance;
+    float lavaConsumeChance;
+    float lavaIgniteChance;
+    float darkStoneDryChance;
+    float lavaChurnRate;
+    uint locustTickDispatches;
+    uint locustStageSize;
+    uint locustSpawnSize;
+    uint locustMaxSize;
+    uint locustBudSize;
+    uint locustEatGain;
+    uint locustEatTicksMin;
+    uint locustEatTicksMax;
+    uint locustRunLength;
+    float locustClimbChance;
+    float locustDensityMin;
+    float locustDensityMax;
+    uint locustSubdivision;
+    float locustCrawlRate;
+    float treeBloomChance;
+    uint treeMaxHeight;
+    uint treeSoilReserve;
+    uint treeWaterMax;
+    float treeDrinkChance;
+    float treeFlowChance;
+    uint treeGrowCost;
+    uint treeLeafCost;
+    uint treeSpreadCost;
+    float treeSpreadChance;
+    float treeLeafChance;
+    uint treeLeafReach;
+    float treeLeafSpreadChance;
+    float treeLeafTickChance;
+    float treeLeafFallChance;
+    float treeTrunkBurnChance;
+    float treeLeafBurnChance;
+    uint treeTrunkColumns;
+    float treeTrunkRadius;
 } tuning;
 
-const uint LAYER_SIZE = 128u * 128u; // 16384 — one layer
+#define LAYER_SIZE (uint(WIDTH) * uint(HEIGHT)) // one layer of the world
 
 layout(push_constant) uniform Constants {
     float time;
@@ -70,11 +155,15 @@ layout(push_constant) uniform Constants {
     int spawnSize;
     float fovDistance;
     float perspectiveBlend;
+    int spawnShape; // 0 = cube, 1 = sphere
 } pc;
 
-const int WIDTH = 128;
-const int HEIGHT = 128;
-const int DEPTH = 128;
+// World extents. Macros rather than constants because they come from the UBO now -- every use below
+// is unchanged, it just reads a uniform where it used to read an immediate.
+#define WIDTH  int(tuning.gridWidth)
+#define HEIGHT int(tuning.gridHeight)
+#define DEPTH  int(tuning.gridDepth)
+
 
 // FUNCTION: getHDir
 ivec3 getHDir(int d) {
@@ -133,6 +222,243 @@ float hash(vec3 p) {
     return fract(sin(dot(p, vec3(12.9898f, 78.233f, 45.164f))) * 43758.5453f);
 }
 
+// =================================================================================================
+// LAVA
+//
+// Four voxel types, hottest to coldest, plus dark stone. The stage is NOT independent state: lava
+// stores a single 8-bit "coolness" in its age byte and the type is a denormalised view of it, so
+// the two can never contradict each other. Everything that should cool lava feeds that one number --
+// water flashed to steam, moisture boiled out of soil, and time spent sitting still -- which is what
+// lets "cooled because it drank" and "cooled because it settled" be the same rule rather than two
+// clocks that could disagree.
+//
+// Dark stone keeps the same number, high. That is the whole trick behind the sharing rules: lava
+// meeting lava and lava meeting dark stone are one diffusion step in whichever direction the
+// gradient runs, and stone re-melts exactly when contact drags it back under the solidify point.
+// =================================================================================================
+const uint LAVA_HOTTEST = 8u;
+const uint LAVA_COLDEST = 11u;
+const uint DARK_STONE = 12u;
+
+// Declared up here with the other material ids rather than down in the TREES block, because the
+// things that eat, burn and melt a tree are all defined before it -- locusts graze on leaves, fire
+// takes them and lava voids them outright, so the id has to exist before any of those can name it.
+const uint TREE_TRUNK = 18u;
+const uint TREE_LEAF = 19u;
+
+// FUNCTION: isLava
+bool isLava(uint type) { return type >= LAVA_HOTTEST && type <= LAVA_COLDEST; }
+
+// FUNCTION: lavaSolidifyCoolness
+// Coolness at which lava becomes dark stone: one stage past the coldest, so the four stages divide
+// the run-up evenly and the last one is not a dead band.
+uint lavaSolidifyCoolness() { return min(max(tuning.lavaStageSize, 1u) * 4u, 255u); }
+
+// FUNCTION: lavaTypeFor
+uint lavaTypeFor(uint coolness) {
+    return LAVA_HOTTEST + min(coolness / max(tuning.lavaStageSize, 1u), 3u);
+}
+
+// FUNCTION: lavaSpawnCoolness
+// Seed value for a stage placed straight from the material dropdown. Without it a hand-placed
+// stage-3 voxel would carry coolness 0 and be retyped back to stage 0 on its very first update.
+uint lavaSpawnCoolness(uint type) {
+    if (type == DARK_STONE) return lavaSolidifyCoolness();
+    if (isLava(type)) return (type - LAVA_HOTTEST) * max(tuning.lavaStageSize, 1u);
+    return 0u;
+}
+
+// =================================================================================================
+// LOCUSTS
+//
+// Five voxel types, sparsest to densest, over one 8-bit head count in the age byte. Exactly the lava
+// arrangement: the stage is a denormalised view of the number, not independent state, so a swarm's
+// look and its size can never contradict each other.
+//
+// The other two bytes are shared rather than dedicated, because a swarm is only ever doing one of
+// two things and they need different state:
+//
+//   age   -- head count, 1..locustMaxSize. Zero is death, so it is never stored.
+//   sleep -- position within the current locust tick. NOT the engine's sleep/wake counter; a swarm
+//            is never dormant, it is starving on a clock, so the byte is free for the clock itself.
+//   dir   -- the eat timer when standing on grass, and packed heading+steps when not. Which one it
+//            means is read off the grid (is there grass under me?) rather than stored, so there is
+//            no third state to keep consistent. The one hazard is a swarm STEPPING onto grass with
+//            navigation bits still in the byte, which would read as a meal already part-eaten --
+//            locustArriveDir exists solely to clear it at the moment of arrival.
+// =================================================================================================
+const uint LOCUST_SPARSEST = 13u;
+const uint LOCUST_DENSEST = 17u;
+
+// FUNCTION: isLocust
+bool isLocust(uint type) { return type >= LOCUST_SPARSEST && type <= LOCUST_DENSEST; }
+
+// FUNCTION: locustMaxCount
+uint locustMaxCount() { return max(tuning.locustMaxSize, 1u); }
+
+// FUNCTION: locustStage
+uint locustStage() { return max(tuning.locustStageSize, 1u); }
+
+// FUNCTION: locustTypeFor
+// Head count to visual stage. Bands are [1..s], [s+1..2s], ... so a count sitting exactly on a band
+// edge belongs to the lower band -- which is what makes locustSpawnCount's round trip exact.
+uint locustTypeFor(uint count) {
+    uint stage = (count == 0u) ? 0u : (count - 1u) / locustStage();
+    return LOCUST_SPARSEST + min(stage, 4u);
+}
+
+// FUNCTION: locustSpawnCount
+// Seed head count for a stage placed straight from the material dropdown, the same job
+// lavaSpawnCoolness does. Returns the TOP of the stage's band, which is why the placeable stage
+// starts at exactly locustSpawnSize with no special case: at the default stage size of 10 the third
+// band tops out at 30, and locustTypeFor(30) lands back on that same third band.
+uint locustSpawnCount(uint type) {
+    if (!isLocust(type)) return 0u;
+    return min((type - LOCUST_SPARSEST + 1u) * locustStage(), locustMaxCount());
+}
+
+// FUNCTION: locustEatTicks
+// How many locust ticks a swarm needs to strip one grass block. Interpolated across the whole live
+// range so a bigger swarm eats faster: the cap takes locustEatTicksMin, a swarm down to its last
+// stage takes locustEatTicksMax, and everything between is linear.
+uint locustEatTicks(uint count) {
+    uint fast = tuning.locustEatTicksMin;
+    uint slow = tuning.locustEatTicksMax;
+    uint cap = locustMaxCount();
+    uint floorCount = min(locustStage(), cap);
+
+    if (count >= cap) return fast;
+    if (count <= floorCount || cap == floorCount) return slow;
+
+    float t = float(count - floorCount) / float(cap - floorCount);
+    return uint(round(mix(float(slow), float(fast), t)));
+}
+
+// FUNCTION: locustInBounds
+// The interior test, matching the one main() applies to the invocation itself -- the outer shell is
+// walled off, so a swarm must never be written into it.
+bool locustInBounds(ivec3 p) {
+    return p.x > 0 && p.x < WIDTH - 1 && p.y > 0 && p.y < HEIGHT - 1 && p.z > 0 && p.z < DEPTH - 1;
+}
+
+// FUNCTION: isGrassBlock / grassAt
+// Grass is a range on dirt's flora byte, not a type: 1..10 is bare soil warming up, 11..100 is
+// visible grass, and past 100 it is drowning. Only the middle band counts as grass -- it is what
+// locusts eat and what a tree will seed a sapling onto.
+bool isGrassBlock(uint value) {
+    uint flora = (value >> 8) & 0xFFu;
+    return getType(value) == 4u && flora > 10u && flora <= 100u;
+}
+
+// FUNCTION: isLocustFood
+// What a swarm will stand on and eat. Grass, and the leaves of a tree.
+//
+// Leaves need no special case anywhere else because they are already solid: a swarm walks onto a
+// canopy exactly as it walks onto the ground, and "the block under me is food" is then the same
+// test it always was. Eating one drops the swarm through the hole it just made, which is precisely
+// what a swarm stripping a canopy should look like.
+bool isLocustFood(uint value) {
+    return isGrassBlock(value) || getType(value) == TREE_LEAF;
+}
+
+// FUNCTION: locustFoodAt
+bool locustFoodAt(ivec3 p) {
+    if (p.x < 0 || p.x >= WIDTH || p.y < 0 || p.y >= HEIGHT || p.z < 0 || p.z >= DEPTH) return false;
+    return isLocustFood(grid[getIndex(p)]);
+}
+
+// FUNCTION: locustPackNav / locustHeading / locustSteps
+// Heading in the low 3 bits, steps left in the run in the next 3. Two bits spare.
+uint locustPackNav(uint heading, uint steps) { return (heading & 7u) | ((min(steps, 7u)) << 3); }
+uint locustHeading(uint dirByte) { return dirByte & 7u; }
+uint locustSteps(uint dirByte) { return (dirByte >> 3) & 7u; }
+
+// FUNCTION: locustRunSteps
+uint locustRunSteps() { return clamp(tuning.locustRunLength, 1u, 7u); }
+
+// FUNCTION: locustReverse
+// The about-face for each of getHDir's eight headings. Used for the cliff rule, which turns a swarm
+// back rather than letting it walk off an edge.
+uint locustReverse(uint d) {
+    if (d == 0u) return 1u;
+    if (d == 1u) return 0u;
+    if (d == 2u) return 3u;
+    if (d == 3u) return 2u;
+    if (d == 4u) return 7u;
+    if (d == 5u) return 6u;
+    if (d == 6u) return 5u;
+    return 4u;
+}
+
+// FUNCTION: locustHasGrip
+// Is there anything at this level for a swarm to hold on to? True if any of the eight horizontal
+// neighbours is solid.
+//
+// This is what makes the climb rule work at all. Gravity and the upward step are applied in the same
+// tick, so without it every climb is undone the instant it is made: a swarm steps up the face of a
+// wall, finds nothing beneath it next tick, and drops straight back down. It can then only ever
+// mount an obstacle exactly one block tall -- anything higher and it oscillates at the foot of it
+// forever, which is not "prefer to go upward" in any useful sense.
+//
+// Clinging is also the honest reading of what a locust is. Insects hold on to vertical surfaces;
+// falling off the moment they leave the floor is sand behaviour, not swarm behaviour.
+bool locustHasGrip(ivec3 pos) {
+    for (int d = 0; d < 8; d++) {
+        ivec3 n = pos + getHDir(d);
+        if (n.x <= 0 || n.x >= WIDTH - 1 || n.z <= 0 || n.z >= DEPTH - 1) continue;
+        if (grid[getIndex(n)] != 0u) return true;
+    }
+    return false;
+}
+
+// FUNCTION: locustArriveDir
+// The dir byte a swarm should carry into `dest`. Zero when it is landing on grass, because there the
+// byte is the eat timer and navigation bits left in it would read as a meal already part eaten --
+// a swarm could finish a block it had only just stepped onto.
+uint locustArriveDir(ivec3 dest, uint nav) {
+    return locustFoodAt(dest + ivec3(0, -1, 0)) ? 0u : nav;
+}
+
+// =================================================================================================
+// TREES
+//
+// Two types over one idea each. A TRUNK holds drawn-up water in its age byte and its height above
+// the soil in dir; a LEAF holds its distance from the nearest trunk in its age byte, and nothing
+// else. Both are pure functions of the grid around them, so neither needs a growth plan stored
+// anywhere -- a forest is emergent rather than authored.
+//
+// Water only ever enters at the bottom, out of soil moisture, and is passed up the column one voxel
+// at a time. That is what keeps a tree honest: its height, its canopy and its ability to seed the
+// grass beside it are all paid for out of the ground it is standing in, and it will not drink the
+// soil below treeSoilReserve -- the moisture grass itself needs to grow. A forest therefore thins
+// itself out on dry ground and thickens after rain without any rule saying so.
+//
+// The leaf distance is doing more work than it looks. It bounds the canopy, it makes two trees whose
+// crowns overlap merge into one continuous roof rather than two balls, and it is the test for
+// whether a leaf is still attached to anything -- a leaf with no closer neighbour has had its tree
+// taken out from under it and falls.
+// =================================================================================================
+// A detached leaf carries this in place of a distance. It sits outside every value an attached leaf
+// can hold -- treeLeafReach is clamped far below it -- so one byte does double duty as "how far from
+// the crown" and "no longer part of a tree" with no third state to keep in sync.
+const uint LEAF_DETACHED = 255u;
+
+// FUNCTION: isTree
+bool isTree(uint type) { return type == TREE_TRUNK || type == TREE_LEAF; }
+
+// FUNCTION: treeInBounds
+bool treeInBounds(ivec3 p) {
+    return p.x > 0 && p.x < WIDTH - 1 && p.y > 0 && p.y < HEIGHT - 1 && p.z > 0 && p.z < DEPTH - 1;
+}
+
+// FUNCTION: tree26
+// The 26 surrounding offsets, centre skipped. Index 13 of a 3x3x3 walk IS the centre, so stepping
+// the index past it is all the skipping that is needed.
+ivec3 tree26(int i) {
+    int j = (i >= 13) ? i + 1 : i;
+    return ivec3(j % 3, (j / 3) % 3, j / 9) - ivec3(1);
+}
+
 // FUNCTION: incWater / decWater
 // waterVoxelCount tracks exactly one thing: how many type-2 water voxels currently exist in
 // the grid. Not "water in the system" -- water stored as soil moisture or as airborne steam is
@@ -146,10 +472,185 @@ float hash(vec3 p) {
 void incWater() { atomicAdd(waterVoxelCount, 1u); }
 void decWater() { atomicAdd(waterVoxelCount, 0xFFFFFFFFu); }
 
+// FUNCTION: decWaterHighMark
+// Saturating decrement of the rain target, used whenever water leaves the world for good.
+//
+// It has to saturate. atomicAdd has no signed form so the idiom is to add -1 under modular
+// arithmetic, and that silently turns 0 into four billion -- a high mark the level can never reach,
+// read as a permanent enormous deficit that the sky would then chase forever. Undoing the borrow
+// when it happens is cheaper than a CAS loop and is itself race-safe, since every invocation that
+// observes the underflow applies the same correction.
+void decWaterHighMark() {
+    if (atomicAdd(waterHighMark, 0xFFFFFFFFu) == 0u) atomicAdd(waterHighMark, 1u);
+}
+
 // FUNCTION: getRainThreshold
 // Was a compile-time `const` before its input moved into the TuningParams UBO; GLSL const
 // initializers can't reference a uniform, so it's computed on demand here instead.
 uint getRainThreshold() { return tuning.rainStartLayers * LAYER_SIZE; }
+
+// =================================================================================================
+// BLACK HOLE TABLE
+//
+// A slot holds a black hole's voxel index with the top bit set, so 0 is unambiguously "free" even
+// though voxel index 0 is a real (if unreachable) address. 128^3 needs 21 bits, leaving bit 31
+// free for the flag.
+// =================================================================================================
+const uint BH_ACTIVE = 0x80000000u;
+// The index occupies bits 0..29, which covers any world up to 1024^3 -- comfortably past the 512
+// config ceiling -- leaving bit 30 for the purge flag and bit 31 for "slot in use". BH_PURGE marks the one enormous hole the Clear Grid button drops: same voxel, same
+// orbit and void code, but unlimited reach, a size taken straight from its mass, and a much shorter
+// fuse before it gives up and shrinks away.
+const uint BH_INDEX_MASK = 0x3FFFFFFFu;
+const uint BH_PURGE = 0x40000000u;
+
+// FUNCTION: bhDecode
+ivec3 bhDecode(uint code) {
+    uint i = code & BH_INDEX_MASK;
+    return ivec3(int(i % uint(WIDTH)), int((i / uint(WIDTH)) % uint(HEIGHT)), int(i / uint(WIDTH * HEIGHT)));
+}
+
+// FUNCTION: bhIsPurge
+bool bhIsPurge(uint code) { return (code & BH_PURGE) != 0u; }
+
+// FUNCTION: bhRegister
+// Claims a slot for a new hole, or reports failure when the table is full -- the caller must not
+// place the voxel unless this succeeds, or the grid would hold a black cube that pulls on nothing.
+bool bhRegister(ivec3 p) {
+    uint code = BH_ACTIVE | getIndex(p);
+    for (int i = 0; i < BLACK_HOLE_MAX; i++) {
+        if (atomicCompSwap(blackHoles[i], 0u, code) == 0u) {
+            blackHoleMass[i] = 0u;   // a fresh hole starts at level 0, whatever the last tenant ate
+            blackHoleStarve[i] = 0u; // and gets a full grace period before it can evaporate
+            return true;
+        }
+    }
+    return false;
+}
+
+// FUNCTION: bhRelease
+void bhRelease(ivec3 p) {
+    uint code = BH_ACTIVE | getIndex(p);
+    for (int i = 0; i < BLACK_HOLE_MAX; i++) {
+        atomicCompSwap(blackHoles[i], code, 0u);
+    }
+}
+
+// FUNCTION: bhBodyRadius
+// The hole's body is a ball, so its diameter runs 1, 3, 5, ... voxels as it grows.
+float bhBodyRadius(uint level) { return float(level) + 0.5f; }
+
+// FUNCTION: bhLevel
+// Size of the hole's body. It advances a level once it has swallowed as many voxels as the next size
+// would itself occupy, so its body ends up about as big as what it ate.
+//
+// Derived from the swallowed count rather than stored alongside it. There is deliberately no
+// separate "current size" field to keep in step: the drawn body and the eaten total cannot disagree
+// if only one of them exists, and the growth threshold can be retuned in the config without
+// stranding holes at a size they could no longer justify.
+//
+// DUPLICATED IN raymarch.frag -- the renderer sizes the body from the same count, so if you change
+// the curve here you MUST change it there or the drawn body will stop matching the one that eats.
+uint bhLevel(uint mass) {
+    uint level = 0u;
+    for (uint l = 1u; l <= min(tuning.blackHoleMaxLevel, 16u); l++) {
+        float r = bhBodyRadius(l);
+        float volume = 4.18879f * r * r * r; // 4/3 pi r^3
+        if (float(mass) < tuning.blackHoleGrowthCost * volume) break;
+        level = l;
+    }
+    return level;
+}
+
+// FUNCTION: bhLevelFor
+// Body size for a table slot. Normal holes derive it from the growth curve; the purge hole ramps
+// linearly from its starting mass instead, so it melts away smoothly rather than stepping down
+// through the growth stages backwards -- and neither shader has to re-derive a volume formula to
+// know how big it should be drawn.
+uint bhLevelFor(uint code, uint mass) {
+    if (bhIsPurge(code)) {
+        return uint(float(tuning.purgeLevel) * clamp(float(mass) / float(max(tuning.purgeMass, 1u)), 0.0f, 1.0f));
+    }
+    return bhLevel(mass);
+}
+
+// FUNCTION: bhPlaneNormal
+// One candidate orbital plane out of the hole's fan, as its normal.
+//
+// Spread over a HEMISPHERE, not a full sphere: n and -n describe the same plane, so sampling the
+// whole sphere would produce pairs of near-identical candidates for a particle to flip between.
+// z is uniform in (0,1), which is uniform by area on a hemisphere, and the golden angle keeps
+// successive normals from clumping into a stripe. `seed` rotates the whole fan per hole so two
+// holes side by side don't share inclinations.
+vec3 bhPlaneNormal(int k, int planeCount, float seed) {
+    float z = (float(k) + 0.5f) / float(planeCount);
+    float r = sqrt(max(0.0f, 1.0f - z * z));
+    float a = 2.399963f * float(k) + seed; // golden angle
+    return vec3(r * cos(a), z, r * sin(a));
+}
+
+// FUNCTION: bhOrbitAxis
+// The axis of the orbit this particle is on -- the signed normal of its own plane.
+//
+// A great circle through the centre lies in a plane that CONTAINS the particle's position, and that
+// is what makes a purely geometric choice self-sustaining: the particle takes whichever candidate
+// most nearly contains it right now, and because its orbit then keeps it inside that plane, the same
+// candidate keeps winning on every later tick. Each plane's "winning region" is the band around its
+// own great circle, so an orbit never wanders out of the region that selected it.
+//
+// Hashing a plane per particle instead cannot work here. Nothing identifies a particle across ticks
+// -- there is no id to hash, only a position, and a position-seeded plane would re-roll the instant
+// the particle moved, producing a random walk rather than an orbit.
+//
+// The circulation sense is hashed per plane index, which is stable because the index is, so roughly
+// half the fan runs retrograde and the shell doesn't read as all-one-way swirl.
+vec3 bhOrbitAxis(ivec3 center, ivec3 pos) {
+    vec3 radial = normalize(vec3(pos - center));
+    int planeCount = int(clamp(tuning.blackHoleOrbitPlanes, 1u, 32u));
+    float seed = hash(vec3(center) + vec3(29.0f, 3.0f, 71.0f)) * 6.28318f;
+
+    vec3 best = vec3(0.0f, 1.0f, 0.0f);
+    float bestAlign = 2.0f;
+    int bestK = 0;
+
+    for (int k = 0; k < planeCount; k++) {
+        vec3 n = bhPlaneNormal(k, planeCount, seed);
+        float align = abs(dot(n, radial)); // 0 when the plane contains the particle exactly
+        if (align < bestAlign) {
+            bestAlign = align;
+            best = n;
+            bestK = k;
+        }
+    }
+
+    float sense = (hash(vec3(center) + vec3(float(bestK) * 13.0f, 101.0f, 47.0f)) < 0.5f) ? -1.0f : 1.0f;
+    return best * sense;
+}
+
+// FUNCTION: inBrush
+// The set of voxels the spawn brush writes. Cube bounds are tested first because they are cheap and
+// are exactly the region the box cursor draws; the sphere test then carves the round brush out of
+// that.
+//
+// The sphere test is done entirely in world coordinates -- voxel CENTRES against a centre derived
+// from the same bounds the renderer's outline uses -- because a voxel's integer position is its min
+// corner, and testing corners instead would place the sphere half a voxel off the one drawn.
+bool inBrush(ivec3 pos) {
+    int halfMin = pc.spawnSize / 2;
+    int halfMax = (pc.spawnSize - 1) / 2;
+
+    if (pos.x < pc.spawnX - halfMin || pos.x > pc.spawnX + halfMax) return false;
+    if (pos.y < pc.spawnY - halfMin || pos.y > pc.spawnY + halfMax) return false;
+
+    if (pos.z < pc.spawnZ - halfMin || pos.z > pc.spawnZ + halfMax) return false;
+
+    if (pc.spawnShape != 1) return true;
+
+    vec3 center = vec3(pc.spawnX, pc.spawnY, pc.spawnZ) + vec3(float(halfMax - halfMin + 1) * 0.5f);
+    vec3 d = (vec3(pos) + 0.5f) - center;
+    float radius = float(pc.spawnSize) * 0.5f;
+    return dot(d, d) <= radius * radius;
+}
 
 // =================================================================================================
 // CLOUD FIELD -- shared placement math. THIS BLOCK IS DUPLICATED VERBATIM IN raymarch.frag.
@@ -162,11 +663,17 @@ uint getRainThreshold() { return tuning.rainStartLayers * LAYER_SIZE; }
 //
 // The population is fixed: clouds scroll along +X and wrap, so one drifts out of the far border
 // exactly as another drifts in at the near one. Nothing is ever "revealed" or "retired".
+//
+// The placement maths below is now evaluated ONCE per dispatch, by the first CLOUD_MAX invocations,
+// into cloudCache. It used to be re-derived by every reader, and the readers are the whole top layer
+// of the grid and every pixel on screen -- six sin() calls per cloud, so 32 clouds cost 192
+// transcendentals to answer a question with one answer per frame. Caching also retires the hazard
+// that the comment above used to warn about: the fragment shader no longer carries its own copy of
+// this maths, so the two stages cannot drift apart and rain cannot fall from a clear sky.
 // =================================================================================================
-const int CLOUD_MAX = 64;
 
-// FUNCTION: cloudRadii
-vec3 cloudRadii(int i) {
+// FUNCTION: cloudRadiiSource
+vec3 cloudRadiiSource(int i) {
     float h4 = hash(vec3(float(i), 211.0f, 5.0f));
     float h5 = hash(vec3(float(i), 71.0f, 61.0f));
     float h6 = hash(vec3(float(i), 19.0f, 173.0f));
@@ -174,14 +681,14 @@ vec3 cloudRadii(int i) {
     return vec3(rxz, 4.0f + h5 * 6.0f, rxz * (0.7f + h6 * 0.6f));
 }
 
-// FUNCTION: cloudCenterXZ
-vec2 cloudCenterXZ(int i, float t) {
+// FUNCTION: cloudCenterXZSource
+vec2 cloudCenterXZSource(int i, float t) {
     float h1 = hash(vec3(float(i), 11.0f, 3.0f));
     float h2 = hash(vec3(float(i), 47.0f, 91.0f));
     float phase = hash(vec3(float(i), 91.0f, 250.0f)) * 6.28318f;
 
-    float x = mod(h1 * 128.0f + t * tuning.cloudDriftSpeed, 128.0f);
-    float z = mod(h2 * 128.0f + sin(t * 0.12f + phase) * 3.0f, 128.0f);
+    float x = mod(h1 * float(WIDTH) + t * tuning.cloudDriftSpeed, float(WIDTH));
+    float z = mod(h2 * float(DEPTH) + sin(t * 0.12f + phase) * 3.0f, float(DEPTH));
     return vec2(x, z);
 }
 
@@ -190,11 +697,53 @@ vec2 cloudCenterXZ(int i, float t) {
 // footprint because the renderer already hard-clips clouds to the cube's XZ column -- fading
 // outside it would be invisible and clouds would still pop at the boundary. This is what makes a
 // cloud dissolve as it reaches the border and re-emerge on the opposite side.
+//
+// Only updateCloudCache calls this; every consumer reads the cached result. It depends on nothing
+// but the cloud's own centre, so like the placement maths it has exactly one answer per frame.
 float cloudEdgeFade(vec2 c) {
     float d = max(tuning.cloudEdgeFadeDist, 0.001f);
-    float fx = smoothstep(0.0f, d, c.x) * smoothstep(0.0f, d, 128.0f - c.x);
-    float fz = smoothstep(0.0f, d, c.y) * smoothstep(0.0f, d, 128.0f - c.y);
+    float fx = smoothstep(0.0f, d, c.x) * smoothstep(0.0f, d, float(WIDTH) - c.x);
+    float fz = smoothstep(0.0f, d, c.y) * smoothstep(0.0f, d, float(DEPTH) - c.y);
     return fx * fz;
+}
+
+// FUNCTION: cloudCenter / cloudRadii / cloudFade
+// Cache readers. Every consumer goes through these; only updateCloudCache touches the maths.
+vec3  cloudCenter(int i) { return vec3(cloudCache[i * 7 + 0], cloudCache[i * 7 + 1], cloudCache[i * 7 + 2]); }
+vec3  cloudRadii(int i)  { return vec3(cloudCache[i * 7 + 3], cloudCache[i * 7 + 4], cloudCache[i * 7 + 5]); }
+float cloudFade(int i)   { return cloudCache[i * 7 + 6]; }
+
+// FUNCTION: updateCloudCache
+// One invocation per cloud, taken from the first row of the dispatch. Those voxels sit in the border
+// the simulation walls off and return early anyway, so the work is close to free.
+//
+// Everything a consumer could want about a cloud is derived here, including the vertical centre and
+// the edge fade. Both used to be re-derived per pixel by the renderer -- the vertical centre carried
+// a hash() of its own, which is a sine per cloud per pixel, and the fade is four smoothsteps. Neither
+// depends on anything but the cloud index and the frame time.
+//
+// Readers may see the previous dispatch's values, which is deliberate and matches how the rain
+// census already rotates: clouds drift a fraction of a voxel per tick, so a one-dispatch-old position
+// is invisible, and the alternative would be a barrier for no visible gain.
+void updateCloudCache() {
+    if (gl_GlobalInvocationID.y != 0u || gl_GlobalInvocationID.z != 0u) return;
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uint(CLOUD_MAX)) return;
+
+    vec2 c = cloudCenterXZSource(int(i), pc.time);
+    vec3 r = cloudRadiiSource(int(i));
+
+    // Bottom edge sits at the world's top, with 0-4 units of gap.
+    float h3 = hash(vec3(float(i), 133.0f, 7.0f));
+    float cy = float(HEIGHT) + r.y + h3 * 4.0f;
+
+    cloudCache[i * 7u + 0u] = c.x;
+    cloudCache[i * 7u + 1u] = cy;
+    cloudCache[i * 7u + 2u] = c.y;
+    cloudCache[i * 7u + 3u] = r.x;
+    cloudCache[i * 7u + 4u] = r.y;
+    cloudCache[i * 7u + 5u] = r.z;
+    cloudCache[i * 7u + 6u] = cloudEdgeFade(c);
 }
 
 // FUNCTION: getWaterDeficit
@@ -251,6 +800,223 @@ bool tryDisplace(uint currentIndex, uint currentValue, uint targetIndex, uint ta
 }
 
 
+// FUNCTION: orbitStep
+// Moves a captured particle one cell along `stepDir`, into empty space only. Orbiting matter
+// deliberately does NOT get the displacement rules the falling materials have: two particles
+// arriving at the same cell should queue up behind each other, because that queueing is what gives
+// the shell visible density instead of letting everything pass through everything else.
+bool orbitStep(ivec3 pos, uint currentIndex, uint rawValue, ivec3 stepDir) {
+    if (stepDir == ivec3(0)) return false;
+
+    ivec3 target = pos + stepDir;
+    if (target.x < 1 || target.x >= WIDTH - 1 ||
+        target.y < 1 || target.y >= HEIGHT - 1 ||
+        target.z < 1 || target.z >= DEPTH - 1) return false;
+
+    uint targetIndex = getIndex(target);
+    if (getType(grid[targetIndex]) != 0u) return false;
+
+    return tryMove(currentIndex, rawValue, targetIndex,
+                   pack(getType(rawValue), getDir(rawValue), 0u, getAge(rawValue)));
+}
+
+// FUNCTION: dominantAxis
+// Collapses a continuous direction onto the 26 lattice steps: the largest component always steps,
+// and the others join in when they are within 55% of it, which is what produces diagonal moves.
+ivec3 dominantAxis(vec3 dir, float relative) {
+    vec3 a = abs(dir);
+    float m = max(a.x, max(a.y, a.z));
+    if (m <= 0.0f) return ivec3(0);
+    return ivec3(greaterThanEqual(a, vec3(m * relative))) * ivec3(sign(dir));
+}
+
+// FUNCTION: updateOrbital
+// One tick of a particle held by a black hole. This replaces the particle's own material update
+// outright -- captured matter is on an orbit, not falling -- which is the whole reason the shell
+// stays up instead of raining down onto the hole.
+//
+// There is no force, acceleration or velocity anywhere in here, and nowhere to put one: a voxel has
+// three spare bytes, all of them already spoken for by the materials. So a "gravity well" is instead
+// a direction field sampled fresh every tick, plus two probabilities. The direction is purely
+// sideways -- tangent to the particle's own orbital plane (see bhOrbitAxis), corrected back toward
+// that plane -- and the two rolls supply everything a magnitude normally would:
+//
+//   speed  -- how OFTEN a step is taken, ~speed/sqrt(distance), reproducing the Keplerian shear
+//             that makes inner orbits visibly outrun outer ones.
+//   infall -- how often that step spirals inward instead of continuing around, which is what makes
+//             the orbit decay over many revolutions rather than in one.
+//
+// Both are probabilities for the same reason: a move is exactly one voxel, so a step has no room to
+// carry a magnitude. Encoding either as a vector weight instead fails in a way that looks like it
+// works -- see the note on the infall roll below.
+void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, int slot, uint level, bool purge, float dist, float randVal) {
+    uint type = getType(rawValue);
+    uint sleep = getSleep(rawValue);
+
+    // Something is captured, so the hole is not starving -- reset the clock before anything else,
+    // including before the swallow test, so a hole with matter merely orbiting it stays alive rather
+    // than having to actually eat to survive. A plain store rather than an atomic: every captured
+    // particle writes the same constant, so racing writes all agree, and the counter only ever feeds
+    // a coarse "has this hole seen anything lately" decision.
+    blackHoleStarve[slot] = 0u;
+
+    // A hole voids a spherical shell around itself, not just the voxels its body occupies:
+    // everything within body radius + horizon. The horizon is an offset PAST the body rather than an
+    // absolute distance, so the cleared region stays tied to the size the hole is drawn at as it
+    // grows, and the hole never sits flush against whatever it is eating.
+    if (dist <= bhBodyRadius(level) + float(tuning.blackHoleHorizon)) {
+        if (atomicCompSwap(grid[currentIndex], rawValue, 0u) == rawValue) {
+            // Credited only on a successful swap, so two invocations racing the same voxel can
+            // never both bill it -- the hole's size is a running total and would drift permanently.
+            //
+            // The purge hole is not credited at all. Its size is a fixed ramp off its starting mass,
+            // and letting it grow on a whole world's worth of matter would leave it enormous with a
+            // correspondingly long shrink, turning a quick flourish into a wait.
+            if (!bhIsPurge(blackHoles[slot])) atomicAdd(blackHoleMass[slot], 1u);
+
+            if (type == 2u) {
+                decWater();
+                // A hole keeps what it swallows, so this water can never be rained back. The high
+                // mark has to come down with it, or the sky would open a storm it can never finish.
+                decWaterHighMark();
+            }
+        }
+        return;
+    }
+
+    // Held but not moving this tick. Sleep is still cleared: the particle skipped its material
+    // update, and a stale sleep counter would leave it frozen once it drifts back out of range.
+    // The purge hole pulls on its own terms -- see the note in Config.hpp; the normal figures would
+    // make clearing the grid a 35 second wait.
+    float orbitSpeed = purge ? tuning.purgeOrbitSpeed : tuning.blackHoleOrbitSpeed;
+    float infallChance = purge ? tuning.purgeInfall : tuning.blackHoleInfall;
+
+    if (randVal > clamp(orbitSpeed / sqrt(max(dist, 1.0f)), 0.0f, 1.0f)) {
+        if (sleep != 0u) {
+            atomicCompSwap(grid[currentIndex], rawValue, pack(type, getDir(rawValue), 0u, getAge(rawValue)));
+        }
+        return;
+    }
+
+    vec3 inward = normalize(vec3(center - pos));
+    vec3 axis = bhOrbitAxis(center, pos);
+
+    vec3 tangent = cross(axis, inward);
+    float tangentLen = length(tangent);
+    if (tangentLen < 0.05f) {
+        // The chosen plane nearly contains the particle, so this is rare -- but a particle sitting
+        // on its own axis has no direction to travel. Any perpendicular gets it moving, after which
+        // the field takes over.
+        tangent = normalize(cross(axis, vec3(0.577f, 0.577f, 0.577f)));
+    } else {
+        tangent /= tangentLen;
+    }
+
+    // Cancel whatever drift has accumulated along the plane's normal. Without this the orbit is
+    // free to wander off its plane and the whole shell degenerates into a formless cloud.
+    float axial = dot(vec3(pos - center), axis);
+    vec3 grip = -axis * clamp(axial * 0.5f, -1.0f, 1.0f) * tuning.blackHolePlaneGrip;
+
+    // Direction to travel along the orbit. Safe to normalize: tangent is a unit vector orthogonal
+    // to grip, so the sum can never cancel to zero however grip is weighted. Infall is deliberately
+    // NOT blended in here -- see the roll below.
+    vec3 along = normalize(tangent + grip);
+
+    // Infall has to be a PROBABILITY rather than a component of the direction, and the reason is not
+    // obvious: blending it into the direction looks like it works and then quietly stops.
+    //
+    // A one-voxel move quantises direction to the 26 lattice neighbours. A small inward term does
+    // bend some of those steps inward, so the orbit really does decay at first -- but only down to a
+    // radius fixed by the infall weight, where the orbit locks into a closed lattice loop whose
+    // rounding error exactly cancels the inward bias. That loop is a stable attractor, not a
+    // coincidence: at the 0.16 default a particle released anywhere between r=10 and r=28 settles
+    // onto the SAME r~6.7 cycle, 36 steps around, and orbits it forever without ever reaching the
+    // horizon. Matter parked in mid-air near a hole is this.
+    //
+    // Rolling for infall removes the attractor, because there is no longer a fixed direction field
+    // to lock into: decay becomes reliable at every radius, and a particle from r=28 reaches the
+    // horizon in ~460 steps. It also mirrors how orbital SPEED is handled a few lines up, for the
+    // same underlying reason -- a one-voxel step has no room to carry a magnitude.
+    bool pullIn = fract(randVal * 61.0f) < clamp(infallChance, 0.0f, 1.0f);
+
+    // Still mostly sideways when it does fall, so infall reads as the spiral tightening rather than
+    // the particle abruptly dropping out of its orbit.
+    vec3 spiral = normalize(inward + tangent * 0.6f);
+
+    if (pullIn && orbitStep(pos, currentIndex, rawValue, dominantAxis(spiral, 0.55f))) return;
+
+    if (orbitStep(pos, currentIndex, rawValue, dominantAxis(along, 0.55f))) return;
+    if (orbitStep(pos, currentIndex, rawValue, dominantAxis(along, 1.0f))) return;
+    // Blocked in the direction it wants, so slide along the ring instead. A jammed orbit is
+    // traffic that clears as the particles ahead move on -- never a reason to drop out of the orbit.
+    if (orbitStep(pos, currentIndex, rawValue, dominantAxis(tangent, 1.0f))) return;
+
+    // Last resort: inward. Captured matter packs tight enough to gridlock -- every particle wanting
+    // a tangential cell that another captured particle already occupies -- and with no inward option
+    // that jam never breaks, which is the second way matter ends up hanging in space. Dropping
+    // inward when the ring is blocked lets a clump drain from its inner edge, where the horizon is
+    // already eating it.
+    if (orbitStep(pos, currentIndex, rawValue, dominantAxis(inward, 0.55f))) return;
+    if (orbitStep(pos, currentIndex, rawValue, dominantAxis(inward, 1.0f))) return;
+
+    if (sleep != 0u) {
+        atomicCompSwap(grid[currentIndex], rawValue, pack(type, getDir(rawValue), 0u, getAge(rawValue)));
+    }
+}
+
+// FUNCTION: captureByBlackHole
+// Scans the table and hands the particle to the nearest hole whose influence it is inside.
+// Returns false for the overwhelmingly common case of a particle nowhere near one.
+bool captureByBlackHole(ivec3 pos, uint currentIndex, uint rawValue, float randVal) {
+    if (blackHoleCount == 0u) return false;
+
+    float bestDistSq = 3.0e9f;
+    ivec3 bestCenter = ivec3(0);
+    int bestSlot = -1;
+    uint bestLevel = 0u;
+    bool bestPurge = false;
+
+    // Widest reach any hole could possibly have. Every solid voxel in the grid runs this loop every
+    // dispatch, so the distance test has to come BEFORE bhLevel -- deriving a level per slot per
+    // voxel would put a growth-threshold search on the hot path for the whole grid, to answer a
+    // question that only matters for voxels already near a hole.
+    float maxRadius = float(tuning.blackHoleRadius + min(tuning.blackHoleMaxLevel, 16u));
+    float maxRadiusSq = maxRadius * maxRadius;
+
+    for (int i = 0; i < BLACK_HOLE_MAX; i++) {
+        uint code = blackHoles[i];
+        if (code == 0u) continue;
+
+        ivec3 center = bhDecode(code);
+        vec3 d = vec3(center - pos);
+        float distSq = dot(d, d);
+
+        // The purge hole is exempt from the cheap pre-reject: its whole job is to reach every voxel
+        // in the grid at once, so there is no radius to reject against.
+        bool purge = bhIsPurge(code);
+        if (!purge && (distSq > maxRadiusSq)) continue;
+        if (distSq >= bestDistSq) continue;
+
+        // Reach grows with the body, one voxel per level, so a hole that has eaten a dune pulls on
+        // a wider field than the pinprick it started as.
+        uint level = bhLevelFor(code, blackHoleMass[i]);
+        float radius = purge ? 1.0e9f : float(tuning.blackHoleRadius + level);
+
+        if (distSq <= radius * radius) {
+            bestDistSq = distSq;
+            bestCenter = center;
+            bestSlot = i;
+            bestLevel = level;
+            bestPurge = purge;
+        }
+    }
+
+    if (bestSlot < 0) return false;
+
+    updateOrbital(pos, currentIndex, rawValue, bestCenter, bestSlot, bestLevel, bestPurge, sqrt(bestDistSq), randVal);
+    return true;
+}
+
 // FUNCTION: getRainDropChance
 // Rain's rate control, expressed as a per-column probability rather than a shared allowance.
 //
@@ -273,6 +1039,31 @@ float getRainDropChance(uint candidates, uint remaining) {
     return clamp(float(want) / float(candidates), 0.0f, 1.0f);
 }
 
+
+// FUNCTION: grainCanMove
+// Cheap precondition for a grain's entire falling path: five reads answering "is there anywhere at
+// all for this to go".
+//
+// A grain buried in a settled dune answers no, and that lets everything below be skipped -- most
+// importantly the 3x3x3 cohesion scan, which is 27 reads spent deciding whether a grain that has
+// nowhere to go should stick. Wet settled sand was paying 47 reads a tick forever to reach that
+// conclusion; dry sand escaped it only because the cohesion test is gated on moisture, which is why
+// this never showed up until it rained.
+//
+// Behaviour-preserving rather than a trade: cohesion only ever gates a move, so when no move is
+// possible its value cannot be observed.
+bool grainCanMove(ivec3 pos) {
+    if (pos.y <= 1) return false;
+
+    for (int i = 0; i < 5; i++) {
+        ivec3 target = pos + ivec3((i == 1) ? 1 : ((i == 2) ? -1 : 0), -1,
+                                   (i == 3) ? 1 : ((i == 4) ? -1 : 0));
+        if (target.x <= 0 || target.x >= WIDTH - 1 || target.z <= 0 || target.z >= DEPTH - 1) continue;
+        uint t = getType(grid[getIndex(target)]);
+        if (t == 0u || t == 2u) return true; // empty to fall into, or water to displace
+    }
+    return false;
+}
 
 // FUNCTION: updateSand
 void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, uint currentAge, float randVal) {
@@ -341,8 +1132,12 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
 
     if (moistureModified) return;
 
+    // Nowhere to go: skip the cohesion scan and the move attempts alike, and just age the sleep
+    // counter. This is the difference between a settled dune costing ~11 reads a tick and ~47.
+    bool canMove = grainCanMove(pos);
+
     bool isClumped = false;
-    if (moisture > 0u && currentSleep > tuning.wakeSleepThreshold) {
+    if (canMove && moisture > 0u && currentSleep > tuning.wakeSleepThreshold) {
         int emptyBelowCount = 0;
         if (pos.y > 1) {
             for (int x = -1; x <= 1; x++) {
@@ -376,7 +1171,7 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
         }
     }
 
-    if (!isClumped) {
+    if (canMove && !isClumped) {
         if (pos.y > 1) {
             ivec3 belowPos = pos + ivec3(0, -1, 0);
             if (getType(grid[getIndex(belowPos)]) == 0u) {
@@ -505,8 +1300,10 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
 
     if (moistureModified) return;
 
+    bool canMove = grainCanMove(pos);
+
     bool isClumped = false;
-    if (currentSleep > tuning.wakeSleepThreshold) {
+    if (canMove && currentSleep > tuning.wakeSleepThreshold) {
         int emptyBelowCount = 0;
         if (pos.y > 1) {
             for (int x = -1; x <= 1; x++) {
@@ -540,7 +1337,7 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
         }
     }
 
-    if (!isClumped) {
+    if (canMove && !isClumped) {
         if (pos.y > 1) {
             ivec3 belowPos = pos + ivec3(0, -1, 0);
             if (getType(grid[getIndex(belowPos)]) == 0u) {
@@ -620,11 +1417,27 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
     
     if (isClumped || currentSleep > tuning.wakeSleepThreshold) {
         ivec3 abovePos = pos + ivec3(0, 1, 0);
-        uint aboveType = (abovePos.y < HEIGHT - 1) ? getType(grid[getIndex(abovePos)]) : 0u;
+        bool aboveInside = (abovePos.y < HEIGHT - 1);
+        uint aboveIndex = getIndex(abovePos);
+        uint aboveType = aboveInside ? getType(grid[aboveIndex]) : 0u;
 
-        if (aboveType == 0u) {
+        // A trunk counts as open sky here, not as something resting on top. A tree grows OUT of its
+        // grass rather than over it -- the block keeps its turf, and keeps growing it back if it is
+        // burnt or eaten away, exactly as it would with nothing standing there.
+        if (aboveType == 0u || aboveType == TREE_TRUNK) {
             if (moisture >= 5u && floraState < 100u) {
-                if (fract(randVal * 55.0f) < tuning.grassGrowChance) floraState++;
+                if (fract(randVal * 55.0f) < tuning.grassGrowChance) {
+                    floraState++;
+
+                    // The bloom. Rolled at the single moment the turf finishes growing in, rather
+                    // than every tick it is grass: a per-tick roll would turn every field into
+                    // forest given long enough, because each block would keep rolling until it hit.
+                    // Once per block per time it greens over is what "one in a thousand" means.
+                    if (floraState == 100u && aboveType == 0u && aboveInside &&
+                        fract(randVal * 97.0f) < tuning.treeBloomChance) {
+                        atomicCompSwap(grid[aboveIndex], 0u, pack(TREE_TRUNK, 0u, 0u, 0u));
+                    }
+                }
             }
             if (floraState > 100u) floraState = 100u;
         } else if (aboveType == 2u) {
@@ -633,7 +1446,11 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
                 if (fract(randVal * 66.0f) < tuning.grassSubmergedDecayChance) floraState++;
                 if (floraState >= 200u) floraState = 0u;
             }
-        } else if (aboveType != 5u) {
+        } else if (aboveType != 5u && !isLocust(aboveType)) {
+            // Anything else resting on top smothers the grass at once. Fire is excepted because it
+            // burns grass down over time instead, and locusts for the same reason -- a swarm eats a
+            // block over 10 to 30 of its own ticks, and smothering would delete the meal on the
+            // first dispatch after it arrived, so a swarm could never actually be fed.
             floraState = 0u;
         }
     }
@@ -720,7 +1537,12 @@ void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
     uint blockedMask = 0u;
     int startDir = int(fract(randVal * 8.0f) * 8.0f);
 
-    for (int r = 1; r <= 128; r++) {
+    // The most expensive loop in the simulation: 8 directions x waterSpreadRadius reads per awake
+    // water voxel per dispatch. Measured against the Simulation Speed slider, this is effectively the
+    // only compute cost that scales -- every other material sleeps or is inert.
+    int waterReach = int(clamp(tuning.waterSpreadRadius, 1u, uint(max(WIDTH, HEIGHT))));
+
+    for (int r = 1; r <= waterReach; r++) {
         if (blockedMask == 255u) break;
 
         for (int i = 0; i < 8; i++) {
@@ -779,6 +1601,676 @@ void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
     atomicCompSwap(grid[currentIndex], rawValue, sleepValue);
 }
 
+// FUNCTION: lavaInteract
+// One pass over the six orthogonal neighbours, acting on the first thing worth acting on and then
+// stopping. Bounded at six reads, and the start direction is randomised so every neighbour gets its
+// turn across a handful of ticks -- the same trick updateSand uses for moisture transfer.
+void lavaInteract(ivec3 pos, inout uint coolness, float randVal) {
+    int startDir = int(fract(randVal * 17.0f) * 6.0f);
+
+    for (int i = 0; i < 6; i++) {
+        int d = (startDir + i) % 6;
+        ivec3 nPos = pos + getOrthoDir(d);
+        if (nPos.x <= 0 || nPos.x >= WIDTH - 1 ||
+            nPos.y <= 0 || nPos.y >= HEIGHT - 1 ||
+            nPos.z <= 0 || nPos.z >= DEPTH - 1) continue;
+
+        uint nIndex = getIndex(nPos);
+        uint nVal = grid[nIndex];
+        uint nType = getType(nVal);
+
+        if (nType == 2u) {
+            // Water flashes straight to steam, and what it cost to boil lands on the lava.
+            if (atomicCompSwap(grid[nIndex], nVal, pack(6u, 0u, 0u, 0u)) == nVal) {
+                decWater();
+                coolness = min(coolness + tuning.lavaWaterCool, 255u);
+                return;
+            }
+        } else if (nType == TREE_LEAF) {
+            // Leaves are simply gone, with no roll and no cooling paid for them. Grass gets fire set
+            // in the air above it and left to the fire rules, but a canopy has to actually open: a
+            // probabilistic burn would leave a lava flow perched on a roof of leaves it was slowly
+            // negotiating with, instead of pouring through it.
+            if (atomicCompSwap(grid[nIndex], nVal, 0u) == nVal) return;
+        } else if (nType == TREE_TRUNK) {
+            // Wood burns rather than vanishing. The trunk becomes an ordinary fire voxel, which then
+            // ages out and lights the rest of the tree through the normal fire rules -- so a flow
+            // that reaches one trunk of a stand can take the whole stand with it, without lava
+            // needing any idea that trees are connected.
+            if (atomicCompSwap(grid[nIndex], nVal, pack(5u, 0u, 0u, 0u)) == nVal) return;
+        } else if (nType == 3u) {
+            // Stone scorches to dark stone on contact. 255 rather than the solidify threshold, and
+            // that is forced rather than chosen: the DARK_STONE branch below draws a unit of
+            // coolness out of a neighbour on contact and re-melts it the moment it falls under the
+            // threshold, so scorched rock seeded AT the threshold would liquefy on the very next
+            // touch and lava would tunnel through stone indefinitely. Starting at the ceiling leaves
+            // the whole 255-to-threshold span to be drawn down first, and the lava solidifies long
+            // before it gets there.
+            if (atomicCompSwap(grid[nIndex], nVal, pack(DARK_STONE, 0u, 0u, 255u)) == nVal) return;
+        } else if (nType == 1u || nType == 4u) {
+            uint moisture = getAge(nVal);
+            uint flora = getDir(nVal);
+
+            // Grass goes before the soil does. Fire is placed in the air above it rather than the
+            // grass being burned directly, so the existing fire rules carry it from there and lava
+            // does not need its own copy of how burning works.
+            if (nType == 4u && flora > 10u && flora <= 100u) {
+                ivec3 abovePos = nPos + ivec3(0, 1, 0);
+                if (abovePos.y < HEIGHT - 1 && getType(grid[getIndex(abovePos)]) == 0u &&
+                    fract(randVal * 41.0f) < tuning.lavaIgniteChance) {
+                    if (atomicCompSwap(grid[getIndex(abovePos)], 0u, pack(5u, 0u, 0u, 0u)) == 0u) return;
+                }
+            } else if (moisture > 0u) {
+                // Boil it dry before eating it, so waterlogged ground visibly resists for a while.
+                if (atomicCompSwap(grid[nIndex], nVal, pack(nType, flora, 0u, moisture - 1u)) == nVal) {
+                    coolness = min(coolness + tuning.lavaMoistureCool, 255u);
+                    return;
+                }
+            } else if (fract(randVal * 53.0f) < tuning.lavaConsumeChance) {
+                // Dry now, so it goes. Cleared rather than converted: turning it to lava would let
+                // a single voxel eat a dune and multiply itself doing it.
+                if (atomicCompSwap(grid[nIndex], nVal, 0u) == nVal) return;
+            }
+        } else if (isLava(nType)) {
+            // Equalise by moving ONE unit down the gradient rather than assigning both sides the
+            // mean. Both voxels run this independently, and a mean written from two invocations at
+            // once double-counts; a one-way step is monotone, so a race costs a tick rather than
+            // correctness, and repeated steps converge on the mean anyway.
+            uint nCool = getAge(nVal);
+            if (coolness > nCool + 1u) {
+                uint raised = nCool + 1u;
+                uint raisedType = (raised >= lavaSolidifyCoolness()) ? DARK_STONE : lavaTypeFor(raised);
+                if (atomicCompSwap(grid[nIndex], nVal, pack(raisedType, getDir(nVal), 0u, raised)) == nVal) {
+                    coolness -= 1u;
+                    return;
+                }
+            }
+        } else if (nType == DARK_STONE) {
+            // Stone holds a HIGH coolness, so the identical diffusion step simply runs the other way
+            // and lava draws water out of it. The re-melt test lives here, on contact, and not in
+            // the stone's own update: drying alone must never bring a slab back, or an isolated one
+            // would eventually cross the threshold and turn itself into lava unprompted.
+            uint nCool = getAge(nVal);
+            bool draws = (nCool > coolness + 1u);
+            uint lowered = draws ? nCool - 1u : nCool;
+            bool melts = (lowered < lavaSolidifyCoolness());
+
+            if (draws || melts) {
+                uint newType = melts ? lavaTypeFor(lowered) : DARK_STONE;
+                if (atomicCompSwap(grid[nIndex], nVal, pack(newType, 0u, 0u, lowered)) == nVal) {
+                    if (draws) coolness = min(coolness + 1u, 255u);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// FUNCTION: updateLava
+// Water's shape of movement, throttled, wrapped around a cooling life cycle.
+//
+// Unlike water this never sleeps out of its own update. A settled pool still has to keep crusting
+// over, and neighbours still have to keep equalising, so a lava voxel runs every tick until it
+// solidifies. That is self-limiting rather than open-ended: what it is counting down to is becoming
+// dark stone, whose update is almost free.
+void updateLava(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentSleep, uint currentAge, float randVal) {
+    uint coolness = currentAge;
+
+    lavaInteract(pos, coolness, randVal);
+
+    // Time at rest cools it as well, read off the settle counter the movement code already keeps, so
+    // "has stopped moving" and "has begun to crust over" are one fact instead of two clocks.
+    if (currentSleep > tuning.wakeSleepThreshold && fract(randVal * 71.0f) < tuning.lavaRestCoolChance) {
+        coolness = min(coolness + 1u, 255u);
+    }
+
+    if (coolness >= lavaSolidifyCoolness()) {
+        atomicCompSwap(grid[currentIndex], rawValue, pack(DARK_STONE, 0u, 0u, coolness));
+        return;
+    }
+
+    uint newType = lavaTypeFor(coolness);
+
+    // Viscosity is a chance to attempt a move at all, not a shorter move: a step is exactly one
+    // voxel and has no room to carry a rate, so the rate has to live in how often it is taken. Same
+    // reasoning as orbital speed in updateOrbital.
+    if (fract(randVal * 89.0f) < tuning.lavaViscosity) {
+        if (pos.y > 1) {
+            ivec3 belowPos = pos + ivec3(0, -1, 0);
+            if (getType(grid[getIndex(belowPos)]) == 0u) {
+                if (tryMove(currentIndex, rawValue, getIndex(belowPos), pack(newType, currentDir, 0u, coolness))) return;
+            }
+        }
+
+        if (pos.y > 1) {
+            int slideDir = (fract(randVal * 10.0f) > 0.5f) ? 1 : -1;
+            ivec3 slide[2];
+            if (fract(randVal * 100.0f) > 0.5f) {
+                slide[0] = pos + ivec3(slideDir, -1, 0); slide[1] = pos + ivec3(0, -1, slideDir);
+            } else {
+                slide[0] = pos + ivec3(0, -1, slideDir); slide[1] = pos + ivec3(slideDir, -1, 0);
+            }
+            for (int s = 0; s < 2; s++) {
+                ivec3 sPos = slide[s];
+                if (sPos.x > 0 && sPos.x < WIDTH - 1 && sPos.z > 0 && sPos.z < DEPTH - 1) {
+                    if (getType(grid[getIndex(sPos)]) == 0u) {
+                        if (tryMove(currentIndex, rawValue, getIndex(sPos), pack(newType, currentDir, 0u, coolness))) return;
+                    }
+                }
+            }
+        }
+
+        if (currentSleep <= tuning.wakeSleepThreshold) {
+            // Look sideways for somewhere to fall, but only a few cells out. Water searches up to
+            // 128, which is exactly what lets it cross a basin in a single tick; capping the reach
+            // is most of what makes lava read as thick rather than merely slow.
+            uint blockedMask = 0u;
+            int searchStart = int(fract(randVal * 8.0f) * 8.0f);
+            int reach = int(max(tuning.lavaSpreadRadius, 1u));
+
+            for (int r = 1; r <= reach; r++) {
+                if (blockedMask == 255u) break;
+                for (int i = 0; i < 8; i++) {
+                    int d = (searchStart + i) % 8;
+                    if ((blockedMask & (1u << d)) != 0u) continue;
+
+                    ivec3 c = pos + getHDir(d) * r;
+                    if (c.x <= 0 || c.x >= WIDTH - 1 || c.z <= 0 || c.z >= DEPTH - 1 ||
+                        getType(grid[getIndex(c)]) != 0u) {
+                        blockedMask |= (1u << d);
+                    } else if (c.y > 1 && getType(grid[getIndex(c + ivec3(0, -1, 0))]) == 0u) {
+                        if (tryMove(currentIndex, rawValue, getIndex(c), pack(newType, 0u, 0u, coolness))) return;
+                        blockedMask |= (1u << d);
+                    }
+                }
+            }
+
+            // Nowhere to fall, so level out under pressure -- the same condition water settles by,
+            // which is what lets a lava pool find a flat top before it freezes in place.
+            bool hasPressure = (pos.y < HEIGHT - 2) ? (getType(grid[getIndex(pos + ivec3(0, 1, 0))]) != 0u) : false;
+            bool stackedOnLava = (pos.y > 1) ? isLava(getType(grid[getIndex(pos + ivec3(0, -1, 0))])) : false;
+
+            if (hasPressure || stackedOnLava) {
+                int spreadStart = int(fract(randVal * 8.0f) * 8.0f);
+                for (int i = 0; i < 8; i++) {
+                    int d = (spreadStart + i) % 8;
+                    ivec3 targetPos = pos + getHDir(d);
+                    if (targetPos.x > 0 && targetPos.x < WIDTH - 1 && targetPos.z > 0 && targetPos.z < DEPTH - 1) {
+                        if (getType(grid[getIndex(targetPos)]) == 0u) {
+                            if (tryMove(currentIndex, rawValue, getIndex(targetPos), pack(newType, uint(d + 1), 0u, coolness))) return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    uint newSleep = min(currentSleep + 1u, 255u);
+    atomicCompSwap(grid[currentIndex], rawValue, pack(newType, currentDir, newSleep, coolness));
+}
+
+// FUNCTION: updateDarkStone
+// Cooled lava. It falls straight down and, once landed, does nothing but shed the water it trapped,
+// very slowly.
+//
+// Falling is strictly vertical -- no diagonal slide, no spreading. That is what separates it from
+// sand: a solidified flow should drop out from under itself if you dig beneath it and otherwise hold
+// its shape exactly, including overhangs and ledges, rather than slumping into a pile.
+//
+// It deliberately cannot re-melt itself. Drying only lowers the bar for adjacent lava to reclaim it
+// (see the DARK_STONE branch of lavaInteract). Were the melt test here instead, an isolated slab
+// would dry past the threshold on its own and turn back into lava with nothing having melted it.
+void updateDarkStone(ivec3 pos, uint currentIndex, uint rawValue, uint currentAge, float randVal) {
+    if (pos.y > 1) {
+        ivec3 belowPos = pos + ivec3(0, -1, 0);
+        if (getType(grid[getIndex(belowPos)]) == 0u) {
+            // Age carries the trapped water across the move -- a falling slab must not forget how
+            // close it is to being reclaimed just because the ground moved out from under it.
+            if (tryMove(currentIndex, rawValue, getIndex(belowPos), pack(DARK_STONE, 0u, 0u, currentAge))) return;
+        }
+    }
+
+    if (currentAge > 0u && fract(randVal * 23.0f) < tuning.darkStoneDryChance) {
+        atomicCompSwap(grid[currentIndex], rawValue, pack(DARK_STONE, 0u, 0u, currentAge - 1u));
+    }
+}
+
+// FUNCTION: updateTrunk
+// One trunk voxel. Four jobs, in the order a tree actually does them: drink, pass water up, spend it
+// on height or leaves, and -- only once it is well watered -- seed the grass beside it.
+void updateTrunk(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentAge, float randVal) {
+    uint height = currentDir;
+    uint water = currentAge;
+    bool changed = false;
+
+    // --- Drink ----------------------------------------------------------------------------------
+    // From the soil directly below and the eight beside it, which in practice means the base of the
+    // column: everything above it is surrounded by air.
+    //
+    // The reserve is the important part. Grass needs moisture 5 to grow, so a tree that could drink
+    // a block dry would kill the grass under itself and every neighbour it was about to seed into --
+    // it would strip the ground it depends on. Leaving that floor alone makes trees and grass share
+    // the water table instead of competing to extinction.
+    // The reachable soil is the 3x3 patch UNDER the trunk -- the block below and the eight around
+    // it -- plus the eight at its own level. The diagonals-below are the ones that matter and were
+    // the easy thing to leave out: a trunk standing on the ground has nothing but air beside it, so
+    // limiting "adjacent" to its own level leaves it drinking from exactly one block. Simulated that
+    // way, a tree drained its single root block to the reserve within seconds and then spent the
+    // rest of its life rate-limited by rainfall on one square metre -- it took 3000 ticks to reach
+    // full height with the world's soil sitting unused at three times the moisture it needed.
+    if (water < tuning.treeWaterMax && fract(randVal * 13.0f) < tuning.treeDrinkChance) {
+        int start = int(fract(randVal * 101.0f) * 17.0f);
+        for (int k = 0; k < 17; k++) {
+            int i = (start + k) % 17;
+            ivec3 c = (i == 0) ? (pos + ivec3(0, -1, 0))
+                    : (i < 9)  ? (pos + getHDir(i - 1) + ivec3(0, -1, 0))
+                               : (pos + getHDir(i - 9));
+            if (!treeInBounds(c)) continue;
+
+            uint idx = getIndex(c);
+            uint v = grid[idx];
+            if (getType(v) != 4u) continue;
+
+            uint moisture = getAge(v);
+            if (moisture <= tuning.treeSoilReserve) continue;
+
+            if (atomicCompSwap(grid[idx], v, pack(4u, getDir(v), getSleep(v), moisture - 1u)) == v) {
+                water += 1u;
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    // --- Pump water up ----------------------------------------------------------------------------
+    // Unconditionally toward the trunk above, not as a diffusion step toward whichever side holds
+    // less. That distinction is the difference between a tree and a stump.
+    //
+    // Diffusion was the obvious first answer and it is quietly fatal here: water arrives at one unit
+    // per drink and levels out across the column faster than it comes in, so every voxel converges
+    // on the same small amount and NONE of them ever reaches the cost of a growth step. Simulated,
+    // a tree sat at three voxels tall holding 15, 15, 16 against a cost of 20, forever.
+    //
+    // Growth and leaves both happen at the tip, so the tip is where the water has to end up. A real
+    // tree pumps to its growing point for the same reason. The tip has no trunk above it, so it is
+    // the one voxel that keeps what it is given.
+    ivec3 upPos = pos + ivec3(0, 1, 0);
+    bool upIsTrunk = false;
+    uint upValue = 0u;
+    uint upIndex = 0u;
+    if (treeInBounds(upPos)) {
+        upIndex = getIndex(upPos);
+        upValue = grid[upIndex];
+        upIsTrunk = (getType(upValue) == TREE_TRUNK);
+    }
+
+    if (upIsTrunk && water > 0u && getAge(upValue) < 255u && fract(randVal * 29.0f) < tuning.treeFlowChance) {
+        uint lifted = pack(TREE_TRUNK, getDir(upValue), 0u, getAge(upValue) + 1u);
+        if (atomicCompSwap(grid[upIndex], upValue, lifted) == upValue) {
+            water -= 1u;
+            changed = true;
+        }
+    }
+
+    // --- Grow, or crown ---------------------------------------------------------------------------
+    if (height + 1u < tuning.treeMaxHeight) {
+        // Still a sapling: put the water into height. Growing into a leaf is allowed and wanted --
+        // a crown put out early would otherwise cap the tree at whatever height it first branched.
+        if (water >= tuning.treeGrowCost && treeInBounds(upPos)) {
+            uint upType = getType(upValue);
+            if (upType == 0u || upType == TREE_LEAF) {
+                uint sapling = pack(TREE_TRUNK, height + 1u, 0u, 0u);
+                if (atomicCompSwap(grid[upIndex], upValue, sapling) == upValue) {
+                    water -= tuning.treeGrowCost;
+                    changed = true;
+                }
+            }
+        }
+    } else if (water >= tuning.treeLeafCost && fract(randVal * 37.0f) < tuning.treeLeafChance) {
+        // Full height: this is the crown, and it is the only thing that seeds leaves. Everything
+        // further out is a leaf spreading from a leaf, which is what bounds the canopy.
+        int start = int(fract(randVal * 43.0f) * 26.0f);
+        for (int i = 0; i < 26; i++) {
+            ivec3 c = pos + tree26((start + i) % 26);
+            if (!treeInBounds(c)) continue;
+
+            uint idx = getIndex(c);
+            if (grid[idx] != 0u) continue;
+            if (atomicCompSwap(grid[idx], 0u, pack(TREE_LEAF, 0u, 0u, 1u)) == 0u) {
+                water -= tuning.treeLeafCost;
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    // --- Seed the neighbours ----------------------------------------------------------------------
+    // A well watered trunk puts a sapling on the grass beside it. The geometry does the filtering by
+    // itself: the target must be an empty cell with grass-topped soil directly under it, which only
+    // ever describes ground level, so this needs no height test of its own.
+    if (water >= tuning.treeSpreadCost && fract(randVal * 59.0f) < tuning.treeSpreadChance) {
+        int start = int(fract(randVal * 61.0f) * 8.0f);
+        for (int i = 0; i < 8; i++) {
+            ivec3 c = pos + getHDir((start + i) % 8);
+            if (!treeInBounds(c)) continue;
+
+            uint idx = getIndex(c);
+            if (grid[idx] != 0u) continue;
+            if (!isGrassBlock(grid[getIndex(c + ivec3(0, -1, 0))])) continue;
+
+            if (atomicCompSwap(grid[idx], 0u, pack(TREE_TRUNK, 0u, 0u, 0u)) == 0u) {
+                water -= tuning.treeSpreadCost;
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    if (changed) {
+        atomicCompSwap(grid[currentIndex], rawValue, pack(TREE_TRUNK, height, 0u, water));
+    }
+}
+
+// FUNCTION: updateLeaf
+// One leaf. Its whole life is the number it carries: how many leaves it is from a trunk.
+//
+// Gated on a roll before it does anything, because leaves are far and away the most numerous voxel
+// in a forest and the support scan below reads 26 neighbours. At the default that is about 1.6 reads
+// per leaf per dispatch amortised rather than 26, and "slowly" is the specified behaviour anyway.
+void updateLeaf(ivec3 pos, uint currentIndex, uint rawValue, uint currentAge, float randVal) {
+    if (fract(randVal * 7.0f) >= tuning.treeLeafTickChance) return;
+
+    // --- Already falling --------------------------------------------------------------------------
+    // A detached leaf is marked with LEAF_DETACHED, which is outside the range any attached leaf can
+    // hold (leafReach is clamped well below it). The marker is what lets a falling leaf skip the
+    // 26-neighbour support scan entirely -- it has no support by definition and is not looking for
+    // any -- and it also means a leaf cannot re-attach halfway down, so a canopy that has let go
+    // comes apart for good instead of catching itself on the way past its own trunk.
+    //
+    // It voids on landing rather than piling up. Leaf litter that stayed would slowly bury a forest
+    // floor in green, and it would be the only thing here that accumulates without ever clearing.
+    if (currentAge == LEAF_DETACHED) {
+        ivec3 belowPos = pos + ivec3(0, -1, 0);
+        if (treeInBounds(belowPos) && grid[getIndex(belowPos)] == 0u) {
+            if (tryMove(currentIndex, rawValue, getIndex(belowPos),
+                        pack(TREE_LEAF, 0u, 0u, LEAF_DETACHED))) return;
+        }
+        atomicCompSwap(grid[currentIndex], rawValue, 0u);
+        return;
+    }
+
+    uint dist = currentAge;
+    uint nearest = 255u;
+    bool touchesTrunk = false;
+
+    // One pass answers both questions -- what is the closest thing to a trunk around me, and where
+    // could I put a new leaf -- so the 26 reads are paid for once rather than twice.
+    int start = int(fract(randVal * 71.0f) * 26.0f);
+    bool haveSpot = false;
+    ivec3 spot = pos;
+
+    for (int i = 0; i < 26; i++) {
+        ivec3 c = pos + tree26((start + i) % 26);
+        if (!treeInBounds(c)) continue;
+
+        uint v = grid[getIndex(c)];
+        uint t = getType(v);
+
+        // Only the CROWN anchors a canopy, not any trunk voxel. Letting the whole column anchor is
+        // the obvious reading and it does not make a tree: leaves take root against every voxel of
+        // the trunk, spread their full reach outward from all of them, and the result is a solid
+        // rectangular hedge running from the soil to the tip with a pole buried in it. Anchoring
+        // only at the top gives a canopy centred where a canopy belongs.
+        if (t == TREE_TRUNK && getDir(v) + 1u >= tuning.treeMaxHeight) {
+            touchesTrunk = true;
+        } else if (t == TREE_LEAF) {
+            nearest = min(nearest, getAge(v));
+        } else if (v == 0u && !haveSpot) {
+            haveSpot = true;
+            spot = c;
+        }
+    }
+
+    // --- Support ----------------------------------------------------------------------------------
+    // Recomputed every time rather than trusted, so a canopy re-roots itself onto whatever is still
+    // holding it up. Cut the trunk out and the number climbs one ring per tick until it passes the
+    // reach and the canopy comes down from the inside out.
+    // A neighbour that is itself falling carries LEAF_DETACHED, which is 255 -- so it lands on the
+    // same "nothing found" branch as no neighbour at all and cannot prop anything up. That falls out
+    // of the sentinel rather than needing a test of its own, and it is what makes a detaching canopy
+    // unravel outward instead of the outer ring hanging off the inner one all the way down.
+    uint supported = touchesTrunk ? 1u : (nearest >= LEAF_DETACHED ? LEAF_DETACHED : nearest + 1u);
+    if (supported > tuning.treeLeafReach) {
+        // Let go rather than vanish. Rolled rather than immediate so a crown comes apart leaf by
+        // leaf and drifts down, instead of the whole canopy blinking out of existence in one tick.
+        if (fract(randVal * 83.0f) < tuning.treeLeafFallChance) {
+            atomicCompSwap(grid[currentIndex], rawValue, pack(TREE_LEAF, 0u, 0u, LEAF_DETACHED));
+        }
+        return;
+    }
+
+    // --- Spread ------------------------------------------------------------------------------------
+    // A leaf can only ever put out one further from the trunk than itself, which is what makes the
+    // canopy stop -- and what makes two trees standing close enough grow into one roof instead of
+    // two, since the leaves between them are in reach of both.
+    if (supported < tuning.treeLeafReach && haveSpot &&
+        fract(randVal * 89.0f) < tuning.treeLeafSpreadChance) {
+        atomicCompSwap(grid[getIndex(spot)], 0u, pack(TREE_LEAF, 0u, 0u, supported + 1u));
+    }
+
+    if (supported != dist) {
+        atomicCompSwap(grid[currentIndex], rawValue, pack(TREE_LEAF, 0u, 0u, supported));
+    }
+}
+
+// FUNCTION: locustBud
+// Drops a child swarm in a random direction, trying the other seven if that cell is taken. Called
+// only when a meal pushes a swarm past its cap, so the overflow becomes another swarm rather than
+// being thrown away.
+void locustBud(ivec3 pos, float randVal) {
+    uint bud = clamp(tuning.locustBudSize, 1u, locustMaxCount());
+    int start = int(fract(randVal * 31.0f) * 8.0f);
+
+    for (int i = 0; i < 8; i++) {
+        int d = (start + i) % 8;
+        ivec3 c = pos + getHDir(d);
+        if (!locustInBounds(c)) continue;
+
+        uint idx = getIndex(c);
+        if (grid[idx] != 0u) continue;
+        if (atomicCompSwap(grid[idx], 0u, pack(locustTypeFor(bud), 0u, 0u, bud)) == 0u) return;
+    }
+}
+
+// FUNCTION: updateLocust
+// One swarm, one dispatch. Most dispatches do nothing but advance the clock.
+//
+// The clock is the whole reason this reads as a creature rather than a particle. Every other
+// material here is happy to act on every dispatch, because their rates are probabilities and a
+// probability is scale-free. A locust's rules are counted, not rolled -- "loses one per tick",
+// "eats for 10 to 30 ticks" -- and a dispatch is far too short a unit for counted rules: at sim
+// speed 1 a fresh swarm of 30 would starve to death in half a second. So a locust tick is
+// locustTickDispatches dispatches, counted per voxel in its own sleep byte, and every number in
+// the rules is expressed in those.
+void updateLocust(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentSleep, uint currentAge, float randVal) {
+    uint type = getType(rawValue);
+
+    // --- The clock ------------------------------------------------------------------------------
+    uint phase = currentSleep + 1u;
+    if (phase < tuning.locustTickDispatches) {
+        atomicCompSwap(grid[currentIndex], rawValue, pack(type, currentDir, phase, currentAge));
+        return;
+    }
+
+    uint count = currentAge;
+    ivec3 belowPos = pos + ivec3(0, -1, 0);
+    uint belowIndex = getIndex(belowPos);
+    uint belowValue = grid[belowIndex];
+
+    // --- Grazing --------------------------------------------------------------------------------
+    // Standing on grass is the whole of the feeding rule: no stored "am I eating" flag, just the
+    // block underneath. A swarm that is fed does not starve this tick, which is what makes a patch
+    // of grassland somewhere a swarm can survive instead of merely somewhere it dies more slowly.
+    if (isLocustFood(belowValue)) {
+        bool onLeaf = (getType(belowValue) == TREE_LEAF);
+        uint need = locustEatTicks(count);
+        uint progress = currentDir + 1u; // dir is the eat timer while grazing
+
+        if (progress < need) {
+            // Thin the grass as the meal goes on, so a swarm at work is visible from outside --
+            // but never below 11, the bottom of the grass band. Letting it fall out of that band
+            // early would end the meal from underneath and the swarm would walk off unfed.
+            //
+            // A leaf has no equivalent to thin: it is eaten or it is not. It simply keeps its shape
+            // until the swarm finishes and then goes.
+            if (!onLeaf) {
+                uint flora = (belowValue >> 8) & 0xFFu;
+                uint bite = max(90u / max(need, 1u), 1u);
+                uint thinned = (flora > 11u + bite) ? (flora - bite) : 11u;
+                atomicCompSwap(grid[belowIndex], belowValue,
+                               pack(4u, thinned, getSleep(belowValue), getAge(belowValue)));
+            }
+            atomicCompSwap(grid[currentIndex], rawValue, pack(type, progress, 0u, count));
+            return;
+        }
+
+        // Meal finished. The food goes first: if that CAS loses, another swarm ate this block and
+        // this one must not be paid for it. Grass is stripped back to bare soil; a leaf is removed
+        // outright, which drops the swarm through the hole it just opened in the canopy.
+        uint stripped = onLeaf ? 0u : pack(4u, 0u, getSleep(belowValue), getAge(belowValue));
+        if (atomicCompSwap(grid[belowIndex], belowValue, stripped) != belowValue) return;
+
+        uint grown = count + tuning.locustEatGain;
+        if (grown > locustMaxCount()) {
+            locustBud(pos, randVal);
+            grown = locustMaxCount();
+        }
+        atomicCompSwap(grid[currentIndex], rawValue, pack(locustTypeFor(grown), 0u, 0u, grown));
+        return;
+    }
+
+    // --- Starvation -----------------------------------------------------------------------------
+    if (count <= 1u) {
+        atomicCompSwap(grid[currentIndex], rawValue, 0u);
+        return;
+    }
+    count -= 1u;
+    uint newType = locustTypeFor(count);
+
+    // --- Gravity --------------------------------------------------------------------------------
+    // Not in the rules, and deliberately added: swarms walk on surfaces, so nothing else would ever
+    // bring one down, and a swarm whose ground was eaten or dug out from under it would hang in the
+    // air permanently.
+    //
+    // Skipped when the swarm has something to hold on to -- see locustHasGrip. A swarm on a wall is
+    // climbing it, not falling off it, and applying gravity there cancels the climb rule outright.
+    //
+    // locustInBounds, not just "is it empty": the outer shell is walled off and main() returns
+    // early for anything in it, so a swarm dropped onto y=0 would never be updated again -- it
+    // would sit there permanently, immortal and inert.
+    if (getType(belowValue) == 0u && locustInBounds(belowPos) && !locustHasGrip(pos)) {
+        if (tryMove(currentIndex, rawValue, belowIndex,
+                    pack(newType, locustArriveDir(belowPos, currentDir), 0u, count))) return;
+    }
+
+    uint heading = locustHeading(currentDir);
+    uint steps = locustSteps(currentDir);
+
+    // --- End of a run: look for grass ------------------------------------------------------------
+    // Gated on the run being over rather than checked every tick, which is the rule as written --
+    // commit to a heading, move three times, then look again. Checked every tick instead, a swarm
+    // would lock onto the nearest grass from the moment it was in range and never wander at all.
+    if (steps == 0u) {
+        int start = int(fract(randVal * 17.0f) * 8.0f);
+        for (int i = 0; i < 8; i++) {
+            int d = (start + i) % 8;
+            ivec3 c = pos + getHDir(d);
+
+            // Level, then up one, then down one: ground that steps should still be followable.
+            for (int rise = 0; rise < 3; rise++) {
+                ivec3 t = c + ivec3(0, (rise == 1) ? 1 : ((rise == 2) ? -1 : 0), 0);
+                if (!locustInBounds(t)) continue;
+                if (grid[getIndex(t)] != 0u) continue;
+                if (!locustFoodAt(t + ivec3(0, -1, 0))) continue;
+                // Arrives with a zeroed dir byte because it is landing on grass: the meal starts now.
+                if (tryMove(currentIndex, rawValue, getIndex(t), pack(newType, 0u, 0u, count))) return;
+            }
+        }
+
+        heading = uint(fract(randVal * 23.0f) * 8.0f) & 7u;
+        steps = locustRunSteps();
+    }
+
+    // --- Advance along the heading ----------------------------------------------------------------
+    ivec3 target = pos + getHDir(int(heading));
+    bool blocked = !locustInBounds(target) || grid[getIndex(target)] != 0u;
+
+    if (!blocked) {
+        // Cliff rule: a clear cell with nothing under it is a drop, and a swarm turns back rather
+        // than take it. Only the grass search above is allowed to step down, and only by one.
+        //
+        // The bounds test makes the world's own floor count as ground rather than as a bottomless
+        // drop. Without it a swarm walking at y=1 reads every direction as a cliff, turns on the
+        // spot until it starves, and the bottom layer of the world becomes quietly lethal.
+        ivec3 footing = target + ivec3(0, -1, 0);
+        if (locustInBounds(footing) && grid[getIndex(footing)] == 0u) {
+            // "Prefer to turn around" is a preference, not a reflex, and it has to be written as one.
+            // Reversing unconditionally makes a swarm on a ledge flip between the same two headings
+            // forever: both are cliffs, each turn produces the other, and it never rolls one of the
+            // other six -- so it never reaches the blocked branch below, where climbing lives. A
+            // swarm clinging to the side of a plateau would starve inches beneath the top of it.
+            //
+            // So: take the about-face when the about-face is actually walkable, and otherwise pick
+            // a fresh heading and start a new run.
+            uint back = locustReverse(heading);
+            ivec3 backPos = pos + getHDir(int(back));
+            ivec3 backFoot = backPos + ivec3(0, -1, 0);
+            bool backOpen = locustInBounds(backPos) && grid[getIndex(backPos)] == 0u &&
+                            !(locustInBounds(backFoot) && grid[getIndex(backFoot)] == 0u);
+
+            uint turnedNav = backOpen
+                ? locustPackNav(back, steps)
+                : locustPackNav(uint(fract(randVal * 71.0f) * 8.0f) & 7u, locustRunSteps());
+
+            atomicCompSwap(grid[currentIndex], rawValue, pack(newType, turnedNav, 0u, count));
+            return;
+        }
+
+        uint nav = locustPackNav(heading, steps - 1u);
+        if (tryMove(currentIndex, rawValue, getIndex(target),
+                    pack(newType, locustArriveDir(target, nav), 0u, count))) return;
+    } else {
+        // Something in the way: climb it or turn, decided by a roll.
+        if (fract(randVal * 41.0f) < tuning.locustClimbChance) {
+            // Onto the top of the obstacle first, straight up only as a fallback. Mounting the
+            // obstacle keeps the swarm travelling in the direction it was already going -- it is a
+            // step of the run and is counted as one -- where climbing a wall face is not progress
+            // along anything and leaves the run where it was.
+            ivec3 overTop = target + ivec3(0, 1, 0);
+            if (locustInBounds(overTop) && grid[getIndex(overTop)] == 0u) {
+                uint nav = locustPackNav(heading, steps - 1u);
+                if (tryMove(currentIndex, rawValue, getIndex(overTop),
+                            pack(newType, locustArriveDir(overTop, nav), 0u, count))) return;
+            }
+
+            ivec3 up = pos + ivec3(0, 1, 0);
+            if (locustInBounds(up) && grid[getIndex(up)] == 0u) {
+                uint nav = locustPackNav(heading, steps);
+                if (tryMove(currentIndex, rawValue, getIndex(up),
+                            pack(newType, locustArriveDir(up, nav), 0u, count))) return;
+            }
+        }
+
+        heading = uint(fract(randVal * 53.0f) * 8.0f) & 7u;
+        steps = locustRunSteps();
+    }
+
+    // Reached when the swarm turned instead of moving, or when a move lost its CAS. The write still
+    // has to happen: this tick's starvation and heading change are real whether or not it stepped.
+    atomicCompSwap(grid[currentIndex], rawValue,
+                   pack(newType, locustPackNav(heading, steps), 0u, count));
+}
+
 // FUNCTION: updateFire
 void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentSleep, uint currentAge, float randVal) {
     uint newAge = currentAge + 1u;
@@ -796,6 +2288,41 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
                     return;
                 }
             }
+        }
+    }
+
+    // --- Trees catch --------------------------------------------------------------------------
+    // A leaf or a trunk next to a flame becomes a flame. That single substitution is all a forest
+    // fire needs: the new flame is an ordinary fire voxel, so it ages out, lights ITS neighbours,
+    // and the burn walks the tree on its own -- up the trunk, out through the crown, and across to
+    // the next tree over the leaves that bridge them. Nothing here knows what a forest is.
+    //
+    // Checked over the 26 neighbours rather than the 6, so fire climbs diagonally instead of
+    // stalling wherever two leaves happen to only touch at a corner.
+    //
+    // Wood takes slower than foliage, and the two rates share one roll rather than costing two.
+    // Roll once against the higher of the pair to decide whether to look at all, then compare that
+    // SAME value against whichever rate the thing found actually wants: for r uniform, P(r < rate)
+    // is the rate, so each material burns at exactly its own chance and the scan still gets skipped
+    // on the dispatches nothing was going to happen anyway. A canopy fire is thousands of flames
+    // running this at once, and 26 reads apiece is not free.
+    float burnRoll = fract(randVal * 47.0f);
+    if (burnRoll < max(tuning.treeLeafBurnChance, tuning.treeTrunkBurnChance)) {
+        int start = int(fract(randVal * 31.0f) * 26.0f);
+        for (int i = 0; i < 26; i++) {
+            ivec3 nPos = pos + tree26((start + i) % 26);
+            if (!treeInBounds(nPos)) continue;
+
+            uint nIndex = getIndex(nPos);
+            uint nVal = grid[nIndex];
+            uint nType = getType(nVal);
+            if (nType != TREE_LEAF && nType != TREE_TRUNK) continue;
+
+            float need = (nType == TREE_LEAF) ? tuning.treeLeafBurnChance : tuning.treeTrunkBurnChance;
+            if (burnRoll < need) {
+                atomicCompSwap(grid[nIndex], nVal, pack(5u, 0u, 0u, 0u));
+            }
+            break;
         }
     }
 
@@ -862,14 +2389,63 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
 }
 
 
-// FUNCTION: updateRainPhase
+// FUNCTION: updateSimState
 // Drives the rain state machine: 0 = accumulating (white), 1 = darkening (waiting to rain),
-// 2 = raining (draining). Only invocation (0,0,0) performs transitions and eases the cloud
-// charge, keeping those single-writer rather than having every voxel in the grid contend on the
-// same atomics. Other invocations may observe a transition up to one dispatch late, which is
-// invisible at this timescale.
-void updateRainPhase() {
+// 2 = raining (draining), and sweeps the black hole table. Only invocation (0,0,0) performs
+// transitions and eases the cloud charge, keeping those single-writer rather than having every
+// voxel in the grid contend on the same atomics. Other invocations may observe a transition up to
+// one dispatch late, which is invisible at this timescale.
+void updateSimState() {
     if (gl_GlobalInvocationID.x != 0u || gl_GlobalInvocationID.y != 0u || gl_GlobalInvocationID.z != 0u) return;
+
+    // --- Black hole table sweep ------------------------------------------------------------------
+    // Slots are validated here, once, rather than by each captured particle. Every mobile voxel in
+    // the grid reads this table every dispatch, so a per-particle "is that voxel still a hole?"
+    // check would multiply one cheap confirmation into millions. Recomputing the count from scratch
+    // also means it can never drift: a hole erased by the void brush frees its slot immediately,
+    // and one erased any other way is reaped on the next dispatch.
+    uint live = 0u;
+    for (int i = 0; i < BLACK_HOLE_MAX; i++) {
+        uint code = blackHoles[i];
+        if (code == 0u) continue;
+
+        uint voxel = code & BH_INDEX_MASK;
+        if (getType(grid[voxel]) != 7u) {
+            blackHoles[i] = 0u;
+            continue;
+        }
+
+        // --- Starvation ----------------------------------------------------------------------
+        // Advanced here, and zeroed by any captured particle in updateOrbital. Incrementing from
+        // the single-writer sweep rather than having holes time themselves means the clock ticks
+        // once per dispatch no matter how much matter is in flight, which is what makes the grace
+        // period a predictable duration instead of something that depends on the scene.
+        uint starve = blackHoleStarve[i] + 1u;
+        blackHoleStarve[i] = starve;
+
+        // The purge hole runs the identical starve-shrink-vanish path, just far faster. That path is
+        // already exactly "once there is nothing left to catch, shrink and disappear", so the purge
+        // needed no ending of its own -- only a shorter fuse and a bigger burn.
+        bool purge = bhIsPurge(code);
+        uint grace = purge ? tuning.purgeStarveGrace : tuning.blackHoleStarveGrace;
+        uint decay = purge ? tuning.purgeDecayRate : tuning.blackHoleDecayRate;
+
+        if (starve > grace) {
+            uint mass = blackHoleMass[i];
+            if (mass == 0u) {
+                // Nothing left to shed and nothing coming in: the hole evaporates. Clearing the
+                // voxel and the slot together is what keeps this from leaving an untracked black
+                // voxel behind -- and doing it from the sweep means it happens exactly once.
+                grid[voxel] = 0u;
+                blackHoles[i] = 0u;
+                continue;
+            }
+            blackHoleMass[i] = mass - min(mass, decay);
+        }
+
+        live++;
+    }
+    blackHoleCount = live;
 
     // The peak water level is the target a storm restores to. Only tracked while no storm is in
     // progress: a storm deliberately overshoots past the old peak, and letting the mark chase
@@ -878,6 +2454,21 @@ void updateRainPhase() {
     if (rainPhase == 0u && waterVoxelCount > waterHighMark) waterHighMark = waterVoxelCount;
 
     uint deficit = getWaterDeficit();
+
+    // --- Occupied-height ceiling ---------------------------------------------------------------
+    // maxOccupiedY is a running high-water mark for "how high does matter reach", and the renderer
+    // uses it to avoid marching the empty sky above the world's contents. It has to be cheap and it
+    // has to never under-report, and those two pull against each other: a per-dispatch reset would
+    // let the value be rebuilt from scratch, but nothing can order a clear ahead of the atomicMaxes
+    // in the same dispatch, so a racing voxel's contribution would be lost and its matter would
+    // vanish from the screen for a frame.
+    //
+    // So it decays instead of resetting: one unit per dispatch from here, re-asserted by any voxel
+    // that sits above it (see main). atomicAdd composes with those atomicMaxes in either order, so
+    // the published value is never more than 1 below the truth -- which is why the renderer's clip
+    // adds 2 rather than trusting it exactly. When the world empties, the mark walks down at one
+    // voxel per dispatch and costs only a little extra marching on the way.
+    if (maxOccupiedY > 0u) atomicAdd(maxOccupiedY, 0xFFFFFFFFu); // -1, without risking wrap at 0
 
     // Rotate the rainable-column census: last dispatch's tally becomes this dispatch's divisor,
     // and a fresh tally starts. Columns racing this swap land in one bucket or the other, which
@@ -1006,32 +2597,57 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
 void main() {
     ivec3 pos = ivec3(gl_GlobalInvocationID.xyz);
 
-    updateRainPhase();
+    // The dispatch rounds up to whole 8-voxel workgroups, so with a grid size that is not a multiple
+    // of 8 some invocations land outside the world. They must leave before anything indexes the grid
+    // -- the spawn block below runs ahead of the usual interior-bounds test and would write out of
+    // bounds. Invocation (0,0,0) is always inside, so the single-writer sweep is unaffected.
+    if (pos.x >= WIDTH || pos.y >= HEIGHT || pos.z >= DEPTH) return;
 
-    if (pc.spawnActive == 1) {
-        int halfDistMin = pc.spawnSize / 2;
-        int halfDistMax = (pc.spawnSize - 1) / 2;
-    
-        if (pos.x >= pc.spawnX - halfDistMin && pos.x <= pc.spawnX + halfDistMax && 
-            pos.y >= pc.spawnY - halfDistMin && pos.y <= pc.spawnY + halfDistMax && 
-            pos.z >= pc.spawnZ - halfDistMin && pos.z <= pc.spawnZ + halfDistMax) {
-            uint oldType = getType(grid[getIndex(pos)]);
-            uint newType = uint(pc.spawnType);
+    updateSimState();
+    updateCloudCache();
+
+    if (pc.spawnActive == 1 && inBrush(pos)) {
+        uint spawnIndex = getIndex(pos);
+        uint oldType = getType(grid[spawnIndex]);
+        uint newType = uint(pc.spawnType);
+
+        // Clicking an existing black hole is the one no-op: re-placing it would burn a second table
+        // slot on a voxel that already has one.
+        if (newType != 7u || oldType != 7u) {
             if (oldType != newType) {
                 if (oldType == 2u) {
                     decWater();
                     // Lower the target too: erasing water by hand is intentional, so it must not
                     // register as a deficit that the sky then spends a storm trying to refill.
-                    atomicAdd(waterHighMark, 0xFFFFFFFFu);
+                    decWaterHighMark();
                 }
+                if (oldType == 7u) bhRelease(pos);
                 if (newType == 2u) incWater();
             }
-            grid[getIndex(pos)] = pack(newType, 0u, 0u, 0u); 
+
+            // Lava stages, dark stone and locust swarms are all views of a number in the age byte,
+            // so a hand-placed voxel has to be seeded with one. Without it a stage-3 lava dropped
+            // from the dropdown would carry coolness 0 and be retyped straight back to stage 0 on
+            // its first update, and a placed swarm would be a swarm of nobody and die immediately.
+            uint seedAge = isLocust(newType) ? locustSpawnCount(newType) : lavaSpawnCoolness(newType);
+            grid[spawnIndex] = pack(newType, 0u, 0u, seedAge);
+
+            if (newType == 7u) {
+                // The voxel is published BEFORE the slot is claimed, and the barrier is what makes
+                // that ordering real. This dispatch's table sweep may run at any point relative to
+                // this code, and it frees any slot whose voxel is not a hole -- so a slot becoming
+                // visible ahead of its voxel would get reaped instantly, leaving a black cube that
+                // pulls on nothing.
+                memoryBarrierBuffer();
+                if (!bhRegister(pos)) {
+                    grid[spawnIndex] = 0u; // table full: roll back rather than leave an inert hole
+                }
+            }
         }
     }
 
-    if (pos.x < 1 || pos.x >= WIDTH - 1 || 
-        pos.y < 1 || pos.y >= HEIGHT - 1 || 
+    if (pos.x < 1 || pos.x >= WIDTH - 1 ||
+        pos.y < 1 || pos.y >= HEIGHT - 1 ||
         pos.z < 1 || pos.z >= DEPTH - 1) {
         return;
     }
@@ -1053,10 +2669,10 @@ void main() {
         bool underCloud = false;
         int cloudN = int(min(tuning.cloudCount, uint(CLOUD_MAX)));
         for (int ci = 0; ci < cloudN; ci++) {
-            vec2 c = cloudCenterXZ(ci, pc.time);
-            if (cloudEdgeFade(c) <= 0.01f) continue;
+            if (cloudFade(ci) <= 0.01f) continue;
+            vec3 c = cloudCenter(ci);
             vec3 r = cloudRadii(ci);
-            vec2 d = (vec2(float(pos.x), float(pos.z)) - c) / vec2(r.x, r.z);
+            vec2 d = (vec2(float(pos.x), float(pos.z)) - c.xz) / vec2(r.x, r.z);
             if (dot(d, d) <= 1.0f) { underCloud = true; break; }
         }
 
@@ -1077,6 +2693,10 @@ void main() {
                 if (rainRandVal < dropChance) {
                     if (atomicCompSwap(grid[currentIndex], rawValue, pack(2u, 0u, 0u, 0u)) == rawValue) {
                         incWater();
+                        // This path returns before main's occupied-height report, and a fresh drop
+                        // is by definition the highest thing in the world, so it has to publish its
+                        // own height or it would be clipped away for the dispatch it spawns on.
+                        if (uint(pos.y) > maxOccupiedY) atomicMax(maxOccupiedY, uint(pos.y));
                         return;
                     }
                 }
@@ -1084,12 +2704,28 @@ void main() {
         }
     }
     
-    if (currentType == 0u || currentType == 3u) return; 
-    
+    if (currentType == 0u) return;
+
+    // Raise the occupied-height ceiling if this voxel sits above it. The read-then-atomic shape is
+    // what keeps this affordable: the plain read is uniform across the dispatch and costs a cached
+    // load, and the atomic only fires for the thin layer of voxels above the current mark -- so in a
+    // settled world it fires only on the dispatches where the decay above dropped the mark by one.
+    // Reached after the brush write (rawValue is re-read below it), so hand-placed matter publishes
+    // its own height on the dispatch it appears.
+    if (uint(pos.y) > maxOccupiedY) atomicMax(maxOccupiedY, uint(pos.y));
+
+    float randVal = hash(vec3(pos) + vec3(pc.time));
+
+    // Checked ahead of the stone early-out on purpose: a black hole tears a stone wall apart the
+    // same as anything else, and a hole buried inside one should not be walled off from its own
+    // orbit field.
+    if (currentType != 7u && captureByBlackHole(pos, currentIndex, rawValue, randVal)) return;
+
+    if (currentType == 3u || currentType == 7u) return;
+
     uint currentDir = getDir(rawValue);
     uint currentSleep = getSleep(rawValue);
     uint currentAge = getAge(rawValue);
-    float randVal = hash(vec3(pos) + vec3(pc.time));
 
     switch (currentType) {
         case 1u:
@@ -1106,6 +2742,28 @@ void main() {
             break;
         case 6u:
             updateSteam(pos, currentIndex, rawValue, currentSleep, currentAge, randVal);
+            break;
+        case 8u:
+        case 9u:
+        case 10u:
+        case 11u:
+            updateLava(pos, currentIndex, rawValue, currentDir, currentSleep, currentAge, randVal);
+            break;
+        case 12u:
+            updateDarkStone(pos, currentIndex, rawValue, currentAge, randVal);
+            break;
+        case 13u:
+        case 14u:
+        case 15u:
+        case 16u:
+        case 17u:
+            updateLocust(pos, currentIndex, rawValue, currentDir, currentSleep, currentAge, randVal);
+            break;
+        case 18u:
+            updateTrunk(pos, currentIndex, rawValue, currentDir, currentAge, randVal);
+            break;
+        case 19u:
+            updateLeaf(pos, currentIndex, rawValue, currentAge, randVal);
             break;
         default:
             break;

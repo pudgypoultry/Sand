@@ -21,6 +21,7 @@ struct PushConstants {
     int spawnSize;
     float fovDistance;
     float perspectiveBlend;
+    int spawnShape; // 0 = cube, 1 = sphere
 };
 
 class VulkanPipeline {

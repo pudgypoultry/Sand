@@ -1,4 +1,6 @@
 #include "VulkanRenderer.hpp"
+#include "ConfigSchema.hpp"
+#include "AssetPaths.hpp"
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -6,9 +8,36 @@
 #include <cstring>
 #include <cfloat>
 
+// Size of the SimStats SSBO at binding 1, in uint32_t fields: 9 cloud/water scalars, then
+// blackHoleCount and maxOccupiedY, then three BLACK_HOLE_MAX-sized arrays (table slots,
+// swallowed-voxel counts, starvation clocks). Must match the SimStats block declared in
+// falling_sand.comp and raymarch.frag.
+static constexpr uint32_t BLACK_HOLE_MAX = 8;
+static constexpr uint32_t SIM_STATS_CLOUD_FIELDS = 9;               // waterVoxelCount .. cloudChargeBits
+static constexpr uint32_t SIM_STATS_COUNT = SIM_STATS_CLOUD_FIELDS; // blackHoleCount
+static constexpr uint32_t SIM_STATS_MAX_Y = SIM_STATS_COUNT + 1;    // maxOccupiedY
+static constexpr uint32_t SIM_STATS_HOLES = SIM_STATS_MAX_Y + 1;    // blackHoles[]
+static constexpr uint32_t SIM_STATS_MASS = SIM_STATS_HOLES + BLACK_HOLE_MAX;
+static constexpr uint32_t SIM_STATS_STARVE = SIM_STATS_MASS + BLACK_HOLE_MAX;
+static constexpr uint32_t SIM_STATS_STARVE_END = SIM_STATS_STARVE + BLACK_HOLE_MAX;
+// Cloud placement, cached once per dispatch instead of re-derived by every voxel and every pixel.
+// Seven floats per cloud (centre xyz, radius xyz, edge fade); must match the cloudCache array in
+// both shaders.
+static constexpr uint32_t CLOUD_MAX = 64;
+static constexpr uint32_t SIM_STATS_FIELDS = SIM_STATS_STARVE_END + CLOUD_MAX * 7;
+
+// Black hole table slot encoding. Must match the constants in falling_sand.comp.
+static constexpr uint32_t BH_ACTIVE = 0x80000000u;
+static constexpr uint32_t BH_PURGE = 0x40000000u;
+static constexpr uint32_t BH_INDEX_MASK = 0x3FFFFFFFu;
+
 // Constructor: Initializes the managed architecture instances
 VulkanRenderer::VulkanRenderer() {
-    config = loadConfig("config.txt");
+    // Resolved once and kept, so a later save cannot pick a different file from the one that was
+    // loaded -- reading the copy beside the executable and writing one into the working directory
+    // would look exactly like settings silently failing to stick.
+    configPath = resolveAssetPath("config.txt");
+    config = loadConfig(configPath);
     window = std::make_unique<Window>(1600, 1200, "3D Falling Sand Compute");
     context = std::make_unique<VulkanContext>(window.get());
 }
@@ -24,41 +53,22 @@ void VulkanRenderer::run() {
 void VulkanRenderer::initVulkan() {
     swapchain = std::make_unique<VulkanSwapchain>(context.get());
 
-    // Create SSBO Buffer via the new VulkanBuffer wrapper
-    // NOTE: sized as a flat array of uint32_t, matching the packed voxel representation
-    // actually read/written by falling_sand.comp and raymarch.frag (see pack()/getType()/etc).
-    VkDeviceSize bufferSize = sizeof(uint32_t) * GRID_SIZE * GRID_SIZE * GRID_SIZE;
-    ssboBuffer = std::make_unique<VulkanBuffer>(
-        context.get(),
-        bufferSize,
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-    );
+    createWorldBuffers();
 
-    // Cloud/water tracking stats buffer: 9 scalar fields (waterVoxelCount, waterHighMark,
-    // cloudWaterCount, rainPhase, rainPhaseTimeBits, rainTargetLevel, rainCandidateCount,
-    // rainCandidateEstimate, cloudChargeBits). The per-slot cloud arrays are gone -- layout is a
-    // function of (index, time) computed identically in both shaders, so there is nothing
-    // per-cloud left to store. Must stay in sync with the CloudStats block in
-    // falling_sand.comp and raymarch.frag. Bound at binding 1, shared by compute and fragment.
-    steamCounterBuffer = std::make_unique<VulkanBuffer>(
-        context.get(),
-        sizeof(uint32_t) * 9,
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-    );
-
+    // std140 rounds a uniform block up to a multiple of 16 bytes, so the bound range has to cover
+    // that padded size even though only sizeof(TuningParams) bytes are ever written.
     tuningBuffer = std::make_unique<VulkanBuffer>(
         context.get(),
-        sizeof(TuningParams),
+        (sizeof(TuningParams) + 15) & ~static_cast<VkDeviceSize>(15),
         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
 
-    // Written exactly once -- config doesn't change at runtime given the edit-then-relaunch model
-    void* tuningData = tuningBuffer->mapMemory();
-    memcpy(tuningData, &config.tuning, sizeof(TuningParams));
-    tuningBuffer->unmapMemory();
+    uploadTuning();
+
+    window->setWorldExtents((float)config.tuning.gridWidth,
+                            (float)config.tuning.gridHeight,
+                            (float)config.tuning.gridDepth);
 
     seedParticles();
 
@@ -70,6 +80,7 @@ void VulkanRenderer::initVulkan() {
     createDescriptorSet();
     createCommandPoolAndBuffer();
     createSyncObjects();
+    createTimestampPool();
 
     VkDescriptorPoolSize pool_sizes[] = {
         { VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
@@ -108,11 +119,127 @@ void VulkanRenderer::initVulkan() {
         2,
         static_cast<uint32_t>(swapchain->getImageViews().size())
     );
+
+    // So the options screen opens showing what is actually running.
+    uiManager.setTuning(config.tuning);
+}
+
+// uploadTuning: pushes the current config into the UBO both shaders read.
+//
+// This used to be a one-off at startup, on the reasoning that config never changed at runtime. The
+// options screen is exactly that changing, and for all but one of the tunables it is the entire
+// cost of applying them -- the shaders read every value out of this buffer on the tick after it is
+// written, with nothing to rebuild.
+void VulkanRenderer::uploadTuning() {
+    void* tuningData = tuningBuffer->mapMemory();
+    memcpy(tuningData, &config.tuning, sizeof(TuningParams));
+    tuningBuffer->unmapMemory();
+}
+
+// applyOptions: takes the options screen's edited copy and makes it the config the simulation runs on.
+//
+// This is a reload, not a live patch, and it always ends with an empty world and the camera back at
+// its framing pose. Most tunables would not strictly need that -- the shaders read them out of a
+// uniform buffer every tick, so rewriting it is the whole of the change -- but a world that is
+// halfway through running under the OLD numbers is not a fair test of the new ones. Soil that was
+// wet because rain used to be heavier, or a forest grown at a spread rate you have just halved, both
+// keep answering the old question. Clearing makes the change mean what it says.
+//
+// The wipe is the direct one seedParticles does, not the purge black hole the Clear Grid button
+// drops. The purge is a spectacle that takes seconds to swallow the world; applying settings should
+// simply have applied them by the time the button comes back up.
+//
+// Grid size is still the one change that goes further, because it sizes the two storage buffers --
+// and resizing those means new VkBuffer handles and a descriptor set still pointing at the old ones.
+void VulkanRenderer::applyOptions(const TuningParams& requested) {
+    // Everything below either destroys a buffer the GPU may still be reading or rewrites a
+    // descriptor pointing at one. Neither is safe while work is in flight.
+    vkDeviceWaitIdle(context->getDevice());
+
+    TuningParams next = requested;
+
+    // "Derive the march budget from the world size" is stored as a resolved number rather than as a
+    // flag, so a world that grows has to have it re-derived or the extra distance goes unrendered --
+    // the exact failure that used to crop the far half of a large world. If it still matches what
+    // the old size derived, the intent was auto, so re-derive it for the new one.
+    const bool wasAuto = (requested.marchMaxSteps == autoMarchSteps(config.tuning));
+    applyWorldShape(next, next.gridWidth);
+    if (wasAuto) next.marchMaxSteps = autoMarchSteps(next);
+
+    // The same bars a value read from the file has to clear. A slider cannot produce most of these
+    // violations, but Defaults-then-edit and a hand-edited file that was loaded earlier both can.
+    sanitizeTuning(next);
+
+    const bool shapeChanged = (next.gridWidth != config.tuning.gridWidth);
+    config.tuning = next;
+
+    if (shapeChanged) {
+        createWorldBuffers();   // the old buffers are freed by the unique_ptr assignment
+        writeDescriptorSet();   // ...which is exactly why the descriptors must be rewritten
+
+        // Tells the camera how big the world is now. It reframes as a side effect, which the
+        // unconditional reset below would do anyway -- but the extents themselves have to be set
+        // here or the default pose would still be framed against the old size.
+        window->setWorldExtents((float)config.tuning.gridWidth,
+                                (float)config.tuning.gridHeight,
+                                (float)config.tuning.gridDepth);
+    }
+
+    // The hard reset, on every apply rather than only on a resize. seedParticles zeroes the grid and
+    // the whole stats block with it, so the water level, the rain state machine, the cloud charge and
+    // the black hole table all start from nothing too -- none of which would be true of a world that
+    // had merely had its tunables swapped underneath it.
+    seedParticles();
+    window->resetCamera();
+
+    uploadTuning();
+    saveConfig(configPath, config);
+    uiManager.setTuning(config.tuning);
+
+    std::cout << "Options applied; world cleared at " << config.tuning.gridWidth << "^3"
+              << (shapeChanged ? " (buffers reallocated).\n" : ".\n");
+}
+
+// createWorldBuffers: allocates the two buffers whose size depends on the world's dimensions.
+//
+// Split out of initVulkan because changing the grid size from the options screen has to redo exactly
+// this and nothing else. Anything that reproduced it by hand would be a second copy of the sizing
+// rules, and the two would drift.
+void VulkanRenderer::createWorldBuffers() {
+    // Grid: a flat array of uint32_t, matching the packed voxel representation.
+    // NOTE: sized as a flat array of uint32_t, matching the packed voxel representation
+    // actually read/written by falling_sand.comp and raymarch.frag (see pack()/getType()/etc).
+    VkDeviceSize bufferSize = sizeof(uint32_t) * voxelCount();
+    ssboBuffer = std::make_unique<VulkanBuffer>(
+        context.get(),
+        bufferSize,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+
+    // Shared simulation stats: 9 cloud/water scalars (waterVoxelCount, waterHighMark,
+    // cloudWaterCount, rainPhase, rainPhaseTimeBits, rainTargetLevel, rainCandidateCount,
+    // rainCandidateEstimate, cloudChargeBits), then maxOccupiedY and the black hole table
+    // (blackHoleCount plus BLACK_HOLE_MAX slots), then the per-cloud placement cache. Must stay in
+    // sync with the SimStats block in falling_sand.comp and raymarch.frag.
+    // Bound at binding 1, shared by compute and fragment.
+    steamCounterBuffer = std::make_unique<VulkanBuffer>(
+        context.get(),
+        sizeof(uint32_t) * SIM_STATS_FIELDS,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+
 }
 
 // mainLoop: Continues rendering frames until the window is closed
 void VulkanRenderer::mainLoop() {
     while (!window->shouldClose()) {
+        // Everything between here and the end of drawFrame is one frame's CPU work: event polling,
+        // building the UI, the mouse raycast, and recording the command buffer. drawFrame reports
+        // back how much of that span it spent blocked on the GPU, which is subtracted below.
+        const auto frameStart = std::chrono::high_resolution_clock::now();
+
         window->pollEvents();
 
         uiManager.buildUI();
@@ -123,6 +250,16 @@ void VulkanRenderer::mainLoop() {
         window->processInput(captureMouse, captureKeyboard);
 
         drawFrame();
+
+        const double wallMs = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - frameStart).count();
+
+        // buildUI runs at the TOP of the loop, so the figures it draws are the previous frame's.
+        // That is one frame of lag on a graph of the last minute, and the alternative -- reordering
+        // the loop so the UI is built after the work it describes -- would push the UI's own vertex
+        // upload a frame out of step with the command buffer that draws it.
+        uiManager.setFrameTimings(float(std::max(0.0, wallMs - gpuBlockedMs)),
+                                  lastComputeMs, lastRaymarchMs, timestampsSupported);
     }
     vkDeviceWaitIdle(context->getDevice());
 }
@@ -146,6 +283,8 @@ void VulkanRenderer::cleanup() {
     pipeline.reset();
     swapchain.reset();
 
+    if (timestampPool != VK_NULL_HANDLE) vkDestroyQueryPool(context->getDevice(), timestampPool, nullptr);
+
     vkDestroyCommandPool(context->getDevice(), commandPool, nullptr);
     vkDestroyDescriptorPool(context->getDevice(), descriptorPool, nullptr);
 
@@ -158,19 +297,84 @@ void VulkanRenderer::cleanup() {
 // seedParticles: Initializes the voxel grid with empty space via a CPU-mapped pointer,
 // and resets the cloud/water tracking stats buffer alongside it.
 void VulkanRenderer::seedParticles() {
-    size_t totalVoxels = (size_t)GRID_SIZE * GRID_SIZE * GRID_SIZE;
+    size_t totalVoxels = voxelCount();
     void* data = ssboBuffer->mapMemory();
     memset(data, 0, sizeof(uint32_t) * totalVoxels);
     ssboBuffer->unmapMemory();
 
-    // Every CloudStats field starts at 0, including cloudChargeBits -- a zero bit pattern is
+    // Every SimStats field starts at 0, including cloudChargeBits -- a zero bit pattern is
     // +0.0f as a float, so the sky correctly starts completely uncharged with no sentinel needed.
-    std::vector<uint32_t> statsInit(9, 0u);
+    // Zero is also the "free slot" marker for the black hole table, so clearing the grid correctly
+    // forgets every hole that was in it.
+    std::vector<uint32_t> statsInit(SIM_STATS_FIELDS, 0u);
+
+    // maxOccupiedY is the exception: it starts at the roof rather than at zero. Over-reporting it is
+    // always safe (the renderer just marches sky that turns out to be empty) while under-reporting
+    // hides matter, and the compute shader only walks it down one voxel per dispatch. Starting high
+    // means the very first frame is drawn unclipped instead of being cropped to the floor until the
+    // first dispatch has had a chance to publish.
+    statsInit[SIM_STATS_MAX_Y] = config.tuning.gridHeight;
+
     void* counterData = steamCounterBuffer->mapMemory();
     memcpy(counterData, statsInit.data(), sizeof(uint32_t) * statsInit.size());
     steamCounterBuffer->unmapMemory();
 
     std::cout << "Seeded initial empty grid to GPU!\n";
+}
+
+// voxelCount: total cells in the configured world. Everything that sizes against the grid goes
+// through here rather than recomputing the product, so a 2D world allocates one layer and not a cube.
+size_t VulkanRenderer::voxelCount() const {
+    return (size_t)config.tuning.gridWidth * config.tuning.gridHeight * config.tuning.gridDepth;
+}
+
+// beginPurge: What "Clear Grid" does now. Resets the sky immediately, then drops one enormous black
+// hole at the centre of the grid and lets it eat everything.
+//
+// Safe to touch the buffers directly from here: the caller has already waited on the frame fence, so
+// the GPU is idle, which is the same guarantee seedParticles relies on.
+//
+// Nothing here schedules the ending. The hole is flagged BH_PURGE and the simulation's existing
+// starvation path does the rest -- a hole that catches nothing shrinks and deletes itself, which is
+// already exactly the behaviour wanted, just with a shorter fuse and a faster burn.
+void VulkanRenderer::beginPurge() {
+    uint32_t* stats = static_cast<uint32_t*>(steamCounterBuffer->mapMemory());
+    uint32_t* grid = static_cast<uint32_t*>(ssboBuffer->mapMemory());
+
+    // Any hole already in the table is removed first, voxel as well as slot. Black holes are the one
+    // thing the purge hole cannot eat -- capture skips type 7 so they would otherwise sit untouched
+    // through a Clear Grid and be the only survivors.
+    for (uint32_t i = 0; i < BLACK_HOLE_MAX; i++) {
+        uint32_t code = stats[SIM_STATS_HOLES + i];
+        if (code != 0u) grid[code & BH_INDEX_MASK] = 0u;
+        stats[SIM_STATS_HOLES + i] = 0u;
+        stats[SIM_STATS_MASS + i] = 0u;
+        stats[SIM_STATS_STARVE + i] = 0u;
+    }
+
+    // Sky back to base. Zeroing waterHighMark here matters beyond tidiness: the purge is about to
+    // destroy every water voxel in the world, and a high mark left standing would read as an
+    // enormous permanent deficit afterwards and open a storm over an empty grid.
+    for (uint32_t i = 0; i < SIM_STATS_CLOUD_FIELDS; i++) stats[i] = 0u;
+
+    const uint32_t w = config.tuning.gridWidth, h = config.tuning.gridHeight, d = config.tuning.gridDepth;
+    const uint32_t centre = (w / 2) + (h / 2) * w + (d / 2) * w * h;
+    grid[centre] = 7u; // pack(BlackHole, 0, 0, 0)
+
+    stats[SIM_STATS_HOLES] = BH_ACTIVE | BH_PURGE | centre;
+    stats[SIM_STATS_MASS] = config.tuning.purgeMass;
+    stats[SIM_STATS_STARVE] = 0u;
+    stats[SIM_STATS_COUNT] = 1u;
+
+    // The purge hole is written straight into the grid from here, so it never passes through the
+    // dispatch that would normally publish its height. Raising the ceiling to match means its body
+    // is not clipped away on the frame it appears.
+    stats[SIM_STATS_MAX_Y] = std::max(stats[SIM_STATS_MAX_Y], h / 2);
+
+    ssboBuffer->unmapMemory();
+    steamCounterBuffer->unmapMemory();
+
+    std::cout << "Purge started: one black hole at the centre, eating the world.\n";
 }
 
 // createFramebuffers: Connects swapchain image views to the render pass format
@@ -227,6 +431,15 @@ void VulkanRenderer::createDescriptorSet() {
         throw std::runtime_error("Failed to allocate descriptor set!");
     }
 
+    writeDescriptorSet();
+}
+
+// writeDescriptorSet: points the set at the buffers as they are right now.
+//
+// Separate from allocation because recreating a buffer gives it a new VkBuffer handle, and a
+// descriptor still holding the old one is a dangling reference the validation layers will not catch
+// until the shader reads garbage.
+void VulkanRenderer::writeDescriptorSet() {
     VkDescriptorBufferInfo bufferInfo{};
     bufferInfo.buffer = ssboBuffer->getBuffer();
     bufferInfo.offset = 0;
@@ -305,15 +518,91 @@ void VulkanRenderer::createSyncObjects() {
     }
 }
 
+// createTimestampPool: Allocates the query pool the frame breakdown is measured with.
+//
+// Timestamps are an optional capability twice over: the device reports how many bits of a timestamp
+// are meaningful, and it reports that PER QUEUE FAMILY. A family with 0 valid bits accepts the write
+// commands and returns garbage, so the check has to happen here rather than being assumed -- if it
+// fails, the GPU rows are simply not reported and the CPU row still works.
+void VulkanRenderer::createTimestampPool() {
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(context->getPhysicalDevice(), &props);
+    timestampPeriodNs = props.limits.timestampPeriod;
+
+    uint32_t familyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(context->getPhysicalDevice(), &familyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> families(familyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(context->getPhysicalDevice(), &familyCount, families.data());
+
+    const uint32_t family = context->getComputeQueueFamily();
+    const bool familyCanTimestamp = family < familyCount && families[family].timestampValidBits > 0;
+
+    if (timestampPeriodNs <= 0.0f || !familyCanTimestamp) {
+        std::cout << "GPU timestamps unavailable on this queue; the profiler will show CPU time only.\n";
+        return;
+    }
+
+    VkQueryPoolCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    info.queryCount = kTimestampCount;
+
+    if (vkCreateQueryPool(context->getDevice(), &info, nullptr, &timestampPool) != VK_SUCCESS) {
+        std::cout << "Failed to create the timestamp query pool; the profiler will show CPU time only.\n";
+        return;
+    }
+
+    timestampsSupported = true;
+}
+
+// readGpuTimestamps: Turns the previous frame's three ticks into two millisecond figures.
+//
+// Called straight after the fence wait, which is the point at which the queries are guaranteed
+// complete -- so this never blocks and never needs WITH_AVAILABILITY polling. WAIT_BIT is still
+// passed as a correctness backstop rather than as the mechanism.
+void VulkanRenderer::readGpuTimestamps() {
+    if (!timestampsSupported || !timestampsPending) return;
+    timestampsPending = false;
+
+    uint64_t ticks[kTimestampCount] = {};
+    VkResult result = vkGetQueryPoolResults(
+        context->getDevice(), timestampPool, 0, kTimestampCount,
+        sizeof(ticks), ticks, sizeof(uint64_t),
+        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+
+    if (result != VK_SUCCESS) return;
+
+    // Guarded rather than assumed: a timestamp counter can wrap, and an unsigned wrap would turn a
+    // sub-millisecond phase into a several-thousand-year one and wreck the graph's scale.
+    const float toMs = timestampPeriodNs * 1e-6f;
+    if (ticks[1] >= ticks[0]) lastComputeMs = float(ticks[1] - ticks[0]) * toMs;
+    if (ticks[2] >= ticks[1]) lastRaymarchMs = float(ticks[2] - ticks[1]) * toMs;
+}
+
 // drawFrame: Synchronizes execution, records the command buffer, triggers physics compute, and renders
 void VulkanRenderer::drawFrame() {
+    // The fence wait and the image acquire are the two places the CPU parks waiting on something
+    // else. Both are timed and subtracted from the frame's wall clock below, so what is left is the
+    // CPU's own work.
+    const auto waitStart = std::chrono::high_resolution_clock::now();
     vkWaitForFences(context->getDevice(), 1, &inFlightFence, VK_TRUE, UINT64_MAX);
+    gpuBlockedMs = std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - waitStart).count();
+
+    readGpuTimestamps();
+
     vkResetFences(context->getDevice(), 1, &inFlightFence);
 
     // Intercept a UI reset command. Since the Fence confirms the GPU is done reading the SSBO,
     // we can safely execute a memory wipe from the CPU before passing the SSBO back to the compute shader.
     if (uiManager.consumeResetRequest()) {
-        seedParticles();
+        beginPurge();
+    }
+
+    // Same point as the purge above, and for the same reason: the fence has confirmed the GPU is
+    // finished with the buffers, which is what makes it safe to touch them from here.
+    if (uiManager.consumeApplyOptions()) {
+        applyOptions(uiManager.pendingTuning());
     }
 
     if (uiManager.consumeCameraResetRequest()) {
@@ -321,13 +610,25 @@ void VulkanRenderer::drawFrame() {
     }
 
     uint32_t imageIndex;
+    const auto acquireStart = std::chrono::high_resolution_clock::now();
     vkAcquireNextImageKHR(context->getDevice(), swapchain->getSwapchain(), UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+    gpuBlockedMs += std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - acquireStart).count();
 
     vkResetCommandBuffer(commandBuffer, 0);
 
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+    // Queries must be reset outside a render pass, and one of the three is written inside one, so
+    // the reset goes here at the top of the buffer rather than next to its writes.
+    if (timestampsSupported) {
+        vkCmdResetQueryPool(commandBuffer, timestampPool, 0, kTimestampCount);
+        // BOTTOM_OF_PIPE throughout: the tick is recorded once everything submitted ahead of it has
+        // finished, which is what makes a pair of them an elapsed time rather than a queue position.
+        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool, 0);
+    }
 
     // Bind pipeline and descriptor sets once for the compute loop
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->getComputePipeline());
@@ -342,15 +643,23 @@ void VulkanRenderer::drawFrame() {
     pc.camZ = window->getCamZ();
     pc.spawnActive = 0;
 
-    pc.spawnSize = uiManager.getBrushSize();
+    // Read the selected material from the UI Manager
+    pc.spawnType = static_cast<int>(uiManager.getCurrentMaterial());
+
+    // A black hole is a single tracked object rather than paint, and the compute shader will only
+    // ever place the one at the brush's centre. Pinning the brush to 1 voxel here keeps the cursor
+    // honest about that instead of outlining a volume that a click won't fill.
+    int brushSize = (uiManager.getCurrentMaterial() == MaterialType::BlackHole)
+        ? 1
+        : uiManager.getBrushSize();
+
+    pc.spawnSize = brushSize;
+    pc.spawnShape = static_cast<int>(uiManager.getCursorShape());
     pc.fovDistance = uiManager.getFovDistance();
     pc.perspectiveBlend = uiManager.getPerspectiveBlend();
 
     // Set default out-of-bounds so the cursor hides if looking into the void
     pc.spawnX = -1; pc.spawnY = -1; pc.spawnZ = -1;
-
-    // Read the selected material from the UI Manager
-    pc.spawnType = static_cast<int>(uiManager.getCurrentMaterial());
 
     // --- CPU RAYCAST FOR MOUSE CURSOR AND CLICK ---
     float ndcX = window->getMouseNdcX();
@@ -381,8 +690,14 @@ void VulkanRenderer::drawFrame() {
 
     float t = std::clamp(pc.perspectiveBlend, 0.0f, 1.0f);
 
+    const float extentX = (float)config.tuning.gridWidth;
+    const float extentY = (float)config.tuning.gridHeight;
+    const float extentZ = (float)config.tuning.gridDepth;
+
     float viewDistance = std::max(1.0f,
-        (64.0f - pc.camX) * forward.x + (64.0f - pc.camY) * forward.y + (64.0f - pc.camZ) * forward.z);
+        (extentX * 0.5f - pc.camX) * forward.x +
+        (extentY * 0.5f - pc.camY) * forward.y +
+        (extentZ * 0.5f - pc.camZ) * forward.z);
     float orthoHalfSize = viewDistance / pc.fovDistance;
 
     float localDirX = (1.0f - t) * 0.0f + t * ndcX;
@@ -403,13 +718,14 @@ void VulkanRenderer::drawFrame() {
     float oy = pc.camY + originOffsetY;
     float oz = pc.camZ + originOffsetZ;
 
-    bool isInside = (ox > 0.0f && ox < 128.0f && oy > 0.0f && oy < 128.0f && oz > 0.0f && oz < 128.0f);
+    bool isInside = (ox > 0.0f && ox < extentX && oy > 0.0f && oy < extentY && oz > 0.0f && oz < extentZ);
 
-    int brushSize = uiManager.getBrushSize();
     int halfDistMin = brushSize / 2;
     int halfDistMax = (brushSize - 1) / 2;
     int minBound = 1 + halfDistMin;
-    int maxBound = 126 - halfDistMax;
+    int maxBoundX = (int)config.tuning.gridWidth - 2 - halfDistMax;
+    int maxBoundY = (int)config.tuning.gridHeight - 2 - halfDistMax;
+    int maxBoundZ = (int)config.tuning.gridDepth - 2 - halfDistMax;
 
     if (isInside) {
         float spawnDist = 30.0f;
@@ -417,7 +733,8 @@ void VulkanRenderer::drawFrame() {
         float hitY = oy + ry * spawnDist;
         float hitZ = oz + rz * spawnDist;
 
-        if (hitX >= minBound && hitX <= maxBound && hitY >= minBound && hitY <= maxBound && hitZ >= minBound && hitZ <= maxBound) {
+        if (hitX >= minBound && hitX <= maxBoundX && hitY >= minBound && hitY <= maxBoundY &&
+            hitZ >= minBound && hitZ <= maxBoundZ) {
             pc.spawnX = (int)hitX;
             pc.spawnY = (int)hitY;
             pc.spawnZ = (int)hitZ;
@@ -425,9 +742,9 @@ void VulkanRenderer::drawFrame() {
         }
     }
     else {
-        float t1 = (0.0f - ox) / rx;  float t2 = (128.0f - ox) / rx;
-        float t3 = (0.0f - oy) / ry;  float t4 = (128.0f - oy) / ry;
-        float t5 = (0.0f - oz) / rz;  float t6 = (128.0f - oz) / rz;
+        float t1 = (0.0f - ox) / rx;  float t2 = (extentX - ox) / rx;
+        float t3 = (0.0f - oy) / ry;  float t4 = (extentY - oy) / ry;
+        float t5 = (0.0f - oz) / rz;  float t6 = (extentZ - oz) / rz;
 
         float tmin = std::max({ std::min(t1, t2), std::min(t3, t4), std::min(t5, t6) });
         float tmax = std::min({ std::max(t1, t2), std::max(t3, t4), std::max(t5, t6) });
@@ -437,9 +754,9 @@ void VulkanRenderer::drawFrame() {
             float hitY = oy + ry * tmin + ry * 0.01f;
             float hitZ = oz + rz * tmin + rz * 0.01f;
 
-            pc.spawnX = std::clamp((int)hitX, minBound, maxBound);
-            pc.spawnY = std::clamp((int)hitY, minBound, maxBound);
-            pc.spawnZ = std::clamp((int)hitZ, minBound, maxBound);
+            pc.spawnX = std::clamp((int)hitX, minBound, maxBoundX);
+            pc.spawnY = std::clamp((int)hitY, minBound, maxBoundY);
+            pc.spawnZ = std::clamp((int)hitZ, minBound, maxBoundZ);
             if (window->isLeftClicking()) pc.spawnActive = 1;
         }
     }
@@ -449,7 +766,12 @@ void VulkanRenderer::drawFrame() {
     for (int step = 0; step < simSteps; step++) {
         // We dispatch the compute shader multiple times, allowing it to run physics multiple times per visual frame
         vkCmdPushConstants(commandBuffer, pipeline->getComputePipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &pc);
-        vkCmdDispatch(commandBuffer, GRID_SIZE / 8, GRID_SIZE / 8, GRID_SIZE / 8);
+        // Rounded up, so a grid size that is not a multiple of 8 still covers its last partial
+        // workgroup. main() drops the overshoot before it touches the grid.
+        vkCmdDispatch(commandBuffer,
+            (config.tuning.gridWidth + 7) / 8,
+            (config.tuning.gridHeight + 7) / 8,
+            (config.tuning.gridDepth + 7) / 8);
 
         // Phase 2: Execution Barrier
         VkMemoryBarrier memoryBarrier{};
@@ -469,6 +791,12 @@ void VulkanRenderer::drawFrame() {
         pc.spawnActive = 0;
     }
 
+    // Closes the compute phase. Sits after the whole simulation-speed loop, so the figure is what
+    // the simulation actually costs this frame at the current speed rather than the cost of one tick.
+    if (timestampsSupported) {
+        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool, 1);
+    }
+
     // Phase 3: Graphics Raymarching
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -486,12 +814,21 @@ void VulkanRenderer::drawFrame() {
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getGraphicsPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
     vkCmdDraw(commandBuffer, 6, 1, 0, 0);
 
+    // Closes the raymarch phase, BEFORE the UI is recorded. The profiler is a few hundred triangles
+    // of its own, and a profiler that counted itself as scene cost would be reporting on the wrong
+    // thing -- worse, its cost would rise with the very graph it was drawing.
+    if (timestampsSupported) {
+        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool, 2);
+    }
+
     // Inject the compiled UI mesh directly into the command buffer after rendering the primary world geometry
     uiManager.recordDrawCommands(commandBuffer);
 
     vkCmdEndRenderPass(commandBuffer);
 
     vkEndCommandBuffer(commandBuffer);
+
+    timestampsPending = timestampsSupported;
 
     // Phase 4: Submit and Present
     VkSubmitInfo submitInfo{};

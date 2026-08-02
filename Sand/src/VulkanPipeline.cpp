@@ -1,4 +1,5 @@
 #include "VulkanPipeline.hpp"
+#include "AssetPaths.hpp"
 #include <fstream>
 #include <stdexcept>
 #include <iostream>
@@ -69,9 +70,17 @@ void VulkanPipeline::createRenderPass() {
 
 // readFile: Helper to load SPIR-V binaries from disk
 std::vector<char> VulkanPipeline::readFile(const std::string& filename) {
-    std::ifstream file(filename, std::ios::ate | std::ios::binary);
+    // Beside the executable as well as in the working directory -- see AssetPaths.hpp. Without this
+    // a double-clicked build closes instantly, because its working directory is the output folder
+    // and the shaders are in the project folder.
+    const std::string path = resolveAssetPath(filename);
+
+    std::ifstream file(path, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
-        throw std::runtime_error("Failed to open file: " + filename);
+        throw std::runtime_error(
+            "Could not open '" + filename + "'. It was not in the working directory or next to the "
+            "executable. The program needs its shaders\\ folder and config.txt beside it: run it "
+            "from a packaged build, or from the Sand project folder.");
     }
     size_t fileSize = (size_t)file.tellg();
     std::vector<char> buffer(fileSize);

@@ -1,4 +1,34 @@
+# Simulation tuning. Every key below is also on the in-game options screen (Options... on the
+# controls panel), grouped into the same sections you see here -- editing this file and using that
+# screen are two doors into the same values.
+#
+# Applying from the screen writes this file back, preserving every comment in it. A value only ever
+# needs to exist in one place: Sand/src/ConfigSchema.cpp lists the key, its bounds and its label, and
+# the reader, the writer and the options screen all walk that one list.
+#
 # config.txt -- loaded once at startup, changes require relaunching the app
+
+# --- World shape ---
+# grid_size sets all three axes. Memory is 4 bytes per voxel, so 128 is 8 MB and 256 is 128 MB, and
+# the simulation cost rises with the cube of it. Clamped to 8..512.
+sim.grid_size=128
+
+# --- Rendering budget ---
+# march_max_steps bounds the primary raymarch in voxel steps. 0 means derive it from the world, which
+# is what you want: a DDA crossing a WxHxD box visits at most W+H+D cells, so W+H+D is exactly the
+# budget a ray needs to reach the far side.
+#
+# This was a hardcoded 400, which happens to suit 128^3 (384) and silently truncates every ray at
+# anything larger. At 256^3 a ray needs 768 and got 400, so the far half of the world was simply not
+# drawn -- and because zooming in brought geometry back within budget, it read as a camera problem
+# rather than a renderer one. Leave this at 0 and it follows grid_size automatically.
+#
+# Set it non-zero to deliberately trade distant geometry for frame time. Far surfaces stop being
+# drawn at all rather than degrading, so it is a blunt instrument.
+render.march_max_steps=0
+# Shadow rays are bounded separately: truncating one is graceful, it simply reads as lit, so this can
+# stay short at large world sizes where tracing every shadow in full is the expensive half of a frame.
+render.shadow_max_steps=256
 
 # --- Rain ---
 # A storm begins once the water deficit (peak level minus current level) exceeds start_layers
@@ -14,7 +44,7 @@
 #                    storm ends a touch early and the level creeps down. 0.2 = 20% extra.
 rain.start_layers=2
 rain.drops_per_tick=50
-rain.overshoot=0.2
+rain.overshoot=0.05
 rain.darken_delay=6.0
 
 # --- Clouds ---
@@ -30,7 +60,7 @@ cloud.drift_speed=2.0
 cloud.edge_fade_dist=20.0
 cloud.charge_saturation=20000.0
 cloud.charge_ease_rate=0.02
-cloud.min_alpha=0.05
+cloud.min_alpha=0.0
 cloud.max_alpha=0.9
 cloud.voxel_size=3.0
 cloud.edge_threshold_min=0.15
@@ -45,6 +75,13 @@ physics.sand_clump_threshold=9
 physics.dirt_clump_threshold=5
 physics.wake_sleep_threshold=5
 physics.empty_below_wake_count=6
+# How far water looks sideways for somewhere to fall, and the most expensive thing in the whole
+# simulation: 8 directions x this radius of reads, per awake water voxel, per dispatch. At 128 that
+# is 1024 reads against lava's 48, and it is the only cost that visibly scales with Simulation Speed.
+# 128 preserves the original behaviour. Lower it to trade long-range levelling speed for frame time --
+# water that cannot reach a distant drop falls back to spreading one cell at a time, so a basin still
+# levels, just incrementally instead of teleporting across itself. Try 32 and watch the profiler.
+physics.water_spread_radius=128
 physics.fire_lifetime=30
 physics.fire_dry_rate=5
 physics.grass_grow_chance=0.001
@@ -52,3 +89,326 @@ physics.grass_submerged_decay_chance=0.1
 physics.fire_burn_grass_chance=0.05
 physics.fire_spread_chance=0.1
 physics.steam_scatter_chance=0.3
+
+# --- Black hole ---
+# A black hole is a single tracked object (max 8 at once), not a paintable material. Anything
+# within `radius` stops running its own physics and follows the hole's orbit field instead.
+#   infall       = chance per move that a particle spirals inward instead of continuing around.
+#                  Small values spiral slowly; raise it and matter dives at the centre instead.
+#                  Below ~0.05 decay gets unreliable and matter can orbit for a very long time.
+#   orbit_speed  = scales a per-tick step chance of speed/sqrt(distance), so inner orbits shear
+#                  past outer ones. Above ~3 everything captured moves every tick.
+#   horizon      = how far PAST the body's surface matter is voided, as a spherical shell. Measured
+#                  from the body rather than the centre, so the region a hole clears keeps matching
+#                  the size it is drawn at as it grows, and it never sits flush against what it eats.
+#
+# Orbits cover every inclination, not one disk. Each hole owns a fan of `orbit_planes` candidate
+# planes and a particle rides whichever most nearly contains it, giving a shell of great circles at
+# all angles; roughly half run retrograde.
+#   orbit_planes = how many distinct inclinations exist. Low values (3-6) give a few crisp,
+#                  obviously separate rings; high values approach a smooth spherical swarm.
+#   plane_grip   = how firmly a particle is held in its own plane. 0 smears the orbits into a
+#                  diffuse cloud; high values make each ring razor-thin.
+#
+# The body is a ball of radius level+0.5, so it grows 1 -> 3 -> 5 -> ... voxels across as it eats.
+#   growth_cost  = multiplier on how much it must swallow to reach the next size. KEEP THIS ABOVE
+#                  1.0. The void ball at level L holds almost exactly what a cost of 1.0 requires
+#                  to reach level L+1 -- so at 1.0 a hole dropped in solid matter pays for its own
+#                  next level by expanding and cascades to max_level in a few ticks. At 2.0 the
+#                  shell covers half of each level and the rest has to be accreted from orbit, so
+#                  growth tracks what actually spirals in. Raise further for slower growth.
+#   max_level    = size ceiling. 8 is a body 17 voxels across. Reach grows by one voxel per level.
+#
+# A hole that captures nothing within its reach starves and evaporates, so one placed in empty space
+# does not sit there forever. Capturing anything at all resets the clock -- matter merely orbiting
+# counts, not just matter being eaten -- so only a genuinely isolated hole, or one that has already
+# cleaned out everything near it, dissipates.
+#   starve_grace = dispatches with nothing captured before it starts shedding mass. At sim speed 1
+#                  this is roughly frames, so 300 is about five seconds of finding nothing.
+#   decay_rate   = mass shed per dispatch once starving. The hole shrinks level by level as this
+#                  eats into its total, and is removed once it reaches zero.
+blackhole.starve_grace=300
+blackhole.decay_rate=1
+blackhole.horizon=1
+blackhole.radius=28
+blackhole.orbit_speed=2.2
+blackhole.infall=0.16
+blackhole.plane_grip=0.5
+blackhole.glow=0.85
+blackhole.orbit_planes=16
+blackhole.growth_cost=2.0
+blackhole.max_level=8
+
+# --- Water shadows ---
+# Fraction of light surviving one water voxel on a shadow ray.
+#
+# Water used to block shadow rays outright like any solid, and that hard binary test -- not the
+# surface normal -- was overwhelmingly what made water look jittery. When a surface voxel shuffles
+# one cell, a shadow ray from a nearby cell flips blocked/unblocked and that pixel's brightness
+# swings by the whole sun term. Measured against a single one-voxel hop, the shading change is 0.253
+# at 0.0 (hard block) against 0.012 at 1.0 -- and 0.012 is the floor set by the surface normal alone,
+# so at 1.0 the shadow contributes nothing to the jitter at all. That is a factor of 21.
+#
+# Attenuating per voxel instead of just switching water shadows off keeps it physical: one voxel of
+# spray barely dims anything, a deep pool crosses many voxels and still darkens the bed beneath it.
+#   0.9 puts the jitter near the floor and still transmits ~0.35 through ten voxels of water.
+#   1.0 removes water shadowing entirely -- the absolute floor, if any residual flicker still reads.
+#   0.0 restores the old hard-blocking behaviour.
+water.shadow_transmit=0.9
+
+# --- Water surface waves ---
+# A scrolling wave pattern perturbs the water's shading normal. Cosmetic only -- no geometry moves
+# and the voxel silhouette is unchanged. It has no role in hiding jitter any more; shadow_transmit
+# above and the wider water normal handle that at source, so these are purely a look.
+#
+# Deliberately understated. At the defaults the normal tilts a median of 1.8 degrees, 7.4 at the 95th
+# percentile, peaking near 12 -- just inside the ~14 degree half-angle of the specular lobe, so even
+# a crest only modulates the highlight instead of switching it fully on and off. That ceiling is what
+# keeps it reading as calm water. For reference the first version of this ran a median of 5.1 and
+# peaked past 31, which is why it looked overdone.
+#   wave_strength = how far the normal tilts. 0 gives a flat, glassy surface.
+#   wave_scale    = spatial frequency. 0.6 is long broad swell; raise toward 1.0+ for small chop.
+#   wave_speed    = how fast crests travel.
+# The pattern is domain-warped and passed through a low-frequency envelope, so crests bend rather
+# than running in straight parallel lines and some patches stay calmer than others. That envelope
+# matters more at low amplitude, not less -- a quiet surface with perfectly uniform ripple reads as
+# a texture rather than as water.
+water.wave_strength=0.9
+water.wave_scale=0.6
+water.wave_speed=0.4
+
+# --- Lava ---
+# Lava carries one number, "coolness", and its whole life is a function of it. Absorbing water raises
+# it, boiling moisture out of soil raises it, and sitting still raises it slowly -- so "cooled because
+# it drank" and "cooled because it sat there" are the same quantity instead of two counters that
+# could disagree. The visual stage (hottest to coldest) is derived from it, and at 4 x stage_size the
+# voxel turns to dark stone.
+#
+# That one number is also what makes the sharing rules work. Lava touching lava and lava touching
+# dark stone are the same one-unit diffusion step, run in whichever direction the gradient points.
+# Dark stone holds a HIGH coolness, so contact drains it toward the lava, and it re-melts the moment
+# contact drags it back under the solidify threshold.
+#   stage_size    = coolness per visual stage. 4x this is where lava becomes dark stone, so raising
+#                   it makes lava live longer at every stage.
+#   viscosity     = chance per tick that lava attempts to move at all. This is what makes it creep
+#                   rather than flow; a one-voxel step cannot carry a speed, so the speed lives in
+#                   how often the step is taken. Halving this exactly doubles how long a flow takes,
+#                   since it is the reciprocal of the mean gap between moves. 1.0 is water's pace.
+#   spread_radius = how far it looks sideways for somewhere to fall. Water searches up to 128, which
+#                   is what lets water teleport across a basin to level instantly; keeping this small
+#                   is most of what makes lava read as thick.
+#   water_cool    = coolness gained per water voxel flashed to steam. High, because a bucket of
+#                   water should visibly set lava back several stages.
+#   moisture_cool = coolness gained per unit of moisture boiled out of sand or dirt.
+#   rest_cool_chance = chance per tick to cool while settled. This is the clock that turns a still
+#                   lava pool into stone on its own, with no water involved at all.
+#   consume_chance   = chance per tick to eat a neighbour it has already dried out completely.
+#   ignite_chance    = chance per tick to set adjacent grass alight.
+#   dark_stone_dry_chance = chance per tick for dark stone to shed a unit of water. Very low. Drying
+#                   never re-melts stone on its own -- it only makes it easier for lava to reclaim,
+#                   so a lone slab stays stone forever instead of spontaneously turning back.
+lava.stage_size=48
+lava.viscosity=0.125
+lava.spread_radius=6
+lava.water_cool=40
+lava.moisture_cool=2
+lava.rest_cool_chance=0.01
+lava.consume_chance=0.05
+lava.ignite_chance=0.2
+#   Contact conversions have no knob because they are not rates: lava voids an adjacent leaf, sets an
+#   adjacent trunk alight, and scorches adjacent stone to dark stone, each on contact. The stone one
+#   has a consequence worth knowing: dark stone participates in lava's coolness diffusion, so lava
+#   now chills against the rock it has scorched at the same rate it already chills against its own
+#   crust -- a flow poured into a stone basin will crust over in a few seconds rather than sitting
+#   molten. Raise lava.stage_size to give it longer.
+lava.dark_stone_dry_chance=0.002
+#   churn_rate   = how fast a lava voxel walks the three-colour cycle around its own stage, in
+#                  cycles per second. A voxel does not sit at its stage's colour: it runs from the
+#                  stage below it, up through its own, on to the stage above, and back, so the mean
+#                  is still its own colour but the surface is never flat. The two end stages have no
+#                  neighbour on one side, so each reaches one step further out instead -- brighter
+#                  than molten at the top, dimmer than crust at the bottom.
+#
+#                  The phase is offset per voxel, which is what makes it churn rather than pulse.
+#                  Without that every lava voxel in the world would brighten and dim in unison.
+#                  Set it to 0 to freeze each voxel at whatever point of the cycle its offset puts
+#                  it, which is still a mottled flow, just a still one.
+lava.churn_rate=0.35
+
+# --- Locusts ------------------------------------------------------------------------------------
+# A swarm carries a head count in its age byte and its visual stage (types 13..17, sparsest to
+# densest) is derived from that count -- the same arrangement lava uses for coolness, so a swarm's
+# size and its appearance can never disagree.
+#
+# tick_dispatches is the one to read first, because it is what makes every other number here mean
+# something. A dispatch is not a locust's tick. At sim speed 1 there is one dispatch per frame, so
+# reading the rules literally -- "loses one locust per tick", "eats a grass block over 10 to 30
+# ticks" -- would starve a fresh swarm of 30 to death in half a second and let it strip a block of
+# grass in a sixth of one. Locusts therefore run on their own clock, one tick per this many
+# dispatches, counted in each swarm's own sleep byte. At 12 that is about 5 ticks a second, so a
+# starving swarm of 30 has roughly six seconds to find grass and a meal takes two to six. Set it
+# to 1 for the literal per-dispatch reading.
+locust.tick_dispatches=12
+#   stage_size / max_size = head counts per visual stage, and the cap. Five stages, so max_size is
+#                  clamped to 5 * stage_size. Bands are [1..10], [11..20] ... which is what makes
+#                  the placeable stage seed exactly 30 with no special case.
+#   spawn_size   = what a hand-placed swarm starts with. Only the stage containing this value is on
+#                  the keyboard (key 0); all five are in the dropdown.
+#   bud_size     = head count of a child swarm. A meal that pushes a swarm past the cap buds one off
+#                  in a random direction rather than throwing the surplus away, which is the whole
+#                  reason a single placed swarm becomes a plague.
+#   eat_gain     = head count gained per grass block finished.
+locust.stage_size=10
+locust.max_size=50
+locust.spawn_size=30
+locust.bud_size=10
+locust.eat_gain=20
+#   eat_ticks_min / max = ticks to strip one grass block, at the cap and at one stage respectively,
+#                  interpolated linearly between. Bigger swarms eat faster: 50 locusts take 10
+#                  ticks, 30 take 20, 10 take 30.
+locust.eat_ticks_min=10
+locust.eat_ticks_max=30
+#   run_length   = steps a swarm commits to a heading before it looks around for grass again.
+#                  Gating the search on the end of a run rather than running it every tick is what
+#                  makes swarms wander; checked every tick they would lock onto the nearest grass
+#                  the moment it came into range. Capped at 7 by the bits the counter lives in.
+#   climb_chance = when something blocks the run, the chance of climbing it rather than turning
+#                  away. A climb prefers to mount the obstacle -- stepping onto its top, which
+#                  keeps the swarm going the way it was -- over scaling a wall face.
+locust.run_length=3
+locust.climb_chance=0.5
+#   Appearance. A swarm is drawn as a lattice of small cubes inside its voxel rather than as a solid
+#   block, and a ray that finds a gap all the way through passes on to whatever is behind.
+#   subdivision  = sub-cubes per voxel edge. 4 means up to 64 bodies per block; the sub-march costs
+#                  at most 3x this many steps, and only for pixels that land on a swarm.
+#   density_min / max = how full the sparsest and densest stages look. This is the whole visual
+#                  read of a swarm's health -- it thins as it starves and thickens as it eats.
+#   crawl_rate   = times a second the swarm re-scatters. Quantised deliberately: a smooth version
+#                  reintroduces exactly the per-pixel shimmer the water normals were widened to
+#                  remove, and crawling insects read better as steps in any case.
+locust.subdivision=4
+locust.density_min=0.18
+locust.density_max=0.62
+locust.crawl_rate=6.0
+
+# --- Trees --------------------------------------------------------------------------------------
+# Trees are not placed, they happen. When a patch of dirt finishes growing its turf, one time in a
+# thousand it puts up a trunk instead of simply staying grass -- and the block keeps its turf either
+# way, because a tree grows out of its grass rather than over it.
+#
+# A trunk holds drawn-up water in its age byte and its height above the soil in dir; a leaf holds
+# only its distance from the nearest crown. That one number bounds the canopy, merges the crowns of
+# neighbouring trees into a single roof, and is how a leaf knows whether it is still attached to
+# anything -- fell the trunk and the canopy comes down from the inside out.
+#
+#   bloom_chance = the one-in-a-thousand. Rolled once, at the moment turf finishes growing in,
+#                  rather than every tick it is grass: a per-tick roll would turn every field into
+#                  forest eventually, since each block would keep rolling until it hit.
+tree.bloom_chance=0.001
+#   max_height   = trunk voxels in a full column. The topmost one is the crown, and the crown is the
+#                  only thing that puts out leaves.
+#   soil_reserve = soil moisture a trunk will not drink below. This is what stops trees and grass
+#                  competing to extinction: grass needs moisture 5 to grow, so a tree that could
+#                  drink a block dry would kill the turf under itself and every neighbour it was
+#                  about to seed into. Leave it at or above the grass threshold.
+#   water_max    = trunk capacity, one byte.
+#   drink_chance = chance per tick to draw one unit out of the soil. A trunk reaches the block
+#                  below it, the eight around that, and the eight at its own level -- the root patch
+#                  under the tree, not just the single square it stands on.
+#   flow_chance  = chance per tick to pump one unit up to the trunk above. Pumped, not shared: water
+#                  has to reach the tip, because that is where both growing and leafing happen.
+tree.max_height=6
+tree.soil_reserve=5
+tree.water_max=255
+tree.drink_chance=0.20
+tree.flow_chance=0.50
+#   What the water is spent on. Growing a voxel of trunk, putting out one leaf, and seeding a
+#   sapling on the grass next door. spread_cost is capped by water_max -- a cost above the tank size
+#   can never be paid and spreading stops entirely -- so past 255 the only lever left is
+#   spread_chance, which is how often a tree that is ALREADY full tries at all. Both are set slow:
+#   a mature tree spends nearly its whole tank on a sapling and then has to refill it.
+tree.grow_cost=20
+tree.leaf_cost=6
+tree.spread_cost=250
+tree.spread_chance=0.005
+tree.leaf_chance=0.15
+#   leaf_reach   = how many leaves a canopy may chain out from its crown, and so how wide a tree is.
+#                  1 is a tuft in the 26 cells around the crown; each step up adds a ring, so 3 is a
+#                  crown seven voxels across. Bridging survives at 1 because a tree seeds its
+#                  saplings onto the grass immediately beside it -- the crowns end up adjacent, so
+#                  their leaves are in reach of both trunks and the canopy joins up anyway.
+#   leaf_tick_chance = chance a leaf does anything at all on a given dispatch. Leaves are by far the
+#                  most numerous voxel in a forest and the support test reads 26 neighbours, so this
+#                  is what keeps a canopy costing about 1.6 reads per leaf per dispatch instead of 26.
+tree.leaf_reach=1
+tree.leaf_spread_chance=0.15
+tree.leaf_tick_chance=0.06
+#   leaf_fall_chance = how readily an unsupported leaf lets go. It does not vanish where it stands:
+#                  it detaches, drifts down a cell at a time and voids when it lands, so felling a
+#                  trunk brings its crown down as falling leaves rather than deleting it in place.
+#                  Rolled rather than immediate so a canopy comes apart leaf by leaf. Detached
+#                  leaves are drawn brown, and cannot re-attach to anything on the way down.
+tree.leaf_fall_chance=0.10
+#   Appearance. A trunk does not fill its voxel -- it is one or two slender stems with air around
+#   them, drawn by the same sub-voxel march the locusts use. The stem layout is seeded from the
+#   voxel's X and Z only, never its Y, so every voxel of a column produces the same stems and the
+#   tree does not zigzag. Leaves are ordinary solid voxels: there are far too many of them in a
+#   canopy to justify a sub-march, and they are meant to read as a dense mass anyway.
+#   leaf_burn_chance = how readily fire takes a leaf it is touching. There is a floor under this
+#                  worth knowing about: a flame lives physics.fire_lifetime ticks, so below roughly
+#                  1/lifetime each flame converts less than one leaf before it dies and a fire
+#                  fizzles out instead of spreading. Measured on a solid slab of canopy, 0.15 takes
+#                  all of it, 0.10 leaves survivors in patches, and 0.02 never gets going. A burning leaf simply becomes an
+#                  ordinary fire voxel, so it then ages out and lights its own neighbours -- which is
+#                  the whole of how a canopy fire spreads, and how it crosses from tree to tree over
+#                  the leaves that bridge them. Lava is not on this path at all: it voids leaves
+#                  outright on contact, with no roll, so a flow actually pours through a canopy
+#                  instead of perching on top of one it is slowly negotiating with.
+tree.leaf_burn_chance=0.15
+#   trunk_burn_chance = the same for wood. Fire reaching a trunk is how a ground fire gets into a
+#                  crown at all, and lava sets trunks alight the same way rather than voiding them --
+#                  leaves are voided so a flow can pour through a canopy, but a trunk burning is what
+#                  carries the damage into the rest of the stand.
+#
+#                  This wants to be higher than intuition suggests, and the reason is worth knowing
+#                  before you lower it. A bare trunk is one voxel wide, so a fire climbing it is a
+#                  single chain with one candidate per link, and it has only fire_lifetime ticks to
+#                  make each one. Measured over 200 runs on a bare column, the odds of the WHOLE
+#                  trunk burning rather than the fire dying partway up are: at 0.06, 42% for a
+#                  six-tall trunk and 8% for a sixteen-tall one; at 0.10, 78% and 52%; at 0.15, 94%
+#                  and 86%. Foliage never shows this because a canopy is many-neighboured and
+#                  retries constantly -- a trunk gets one shot per link.
+tree.trunk_burn_chance=0.15
+tree.trunk_columns=2
+tree.trunk_radius=0.17
+
+# --- Resetting: the Clear Grid button's purge ---
+# Clear Grid does not wipe the grid. It resets the sky to its base state, then drops one enormous
+# black hole at the centre with unlimited reach and lets it eat the world.
+#
+# It is an ordinary black hole with a flag set in the table, not a new material. Everything that
+# makes it different belongs to the HOLE -- reach, size, how fast it gives up -- rather than to the
+# voxel, so a separate block type would have meant duplicating the orbit and void machinery in order
+# to change three numbers. Its ending comes for free too: a hole that catches nothing already
+# starves, shrinks and deletes itself, which is exactly the requested behaviour, so the purge needs
+# only a shorter fuse and a faster burn.
+#   level        = body radius at full mass. 10 is a ball 21 voxels across.
+#   mass         = starting mass, and the divisor the shrink ramp is measured against. Size is
+#                  mass/purge.mass of level, so it melts away smoothly rather than stepping down
+#                  through the normal growth stages.
+#   starve_grace = dispatches with nothing left to catch before it begins shrinking. Short, because
+#                  by then the world is already gone and the pause is dead time.
+#   decay_rate   = mass shed per dispatch while shrinking. mass/decay_rate dispatches to vanish, so
+#                  10000/200 is about 0.8 seconds at sim speed 1.
+purge.level=10
+purge.mass=10000
+purge.starve_grace=30
+purge.decay_rate=200
+#   orbit_speed / infall = the purge hole's own pull, because the normal values are wrong for it.
+#                  Those are tuned so a captured stream takes many revolutions to come in, which is
+#                  right for a hole you placed deliberately and badly wrong for a Clear Grid button:
+#                  at 2.2 / 0.16 a voxel in the far corner needs ~2100 ticks, about 35 seconds. At
+#                  8.0 / 0.5 it is ~3.5 seconds, and half of every move is still sideways so the
+#                  world visibly swirls in instead of collapsing straight to the middle.
+purge.orbit_speed=8.0
+purge.infall=0.5

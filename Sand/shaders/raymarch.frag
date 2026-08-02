@@ -7,7 +7,14 @@ layout(std430, binding = 0) readonly buffer VoxelGrid {
     uint grid[];
 };
 
-layout(std430, binding = 1) buffer CloudStats {
+// Must stay byte-identical to the SimStats block in falling_sand.comp, and BH_INDEX_MASK must match
+// the slot encoding used there.
+const int BLACK_HOLE_MAX = 8;
+const int CLOUD_MAX = 64;
+const uint BH_INDEX_MASK = 0x3FFFFFFFu;
+const uint BH_PURGE = 0x40000000u;
+
+layout(std430, binding = 1) buffer SimStats {
     uint waterVoxelCount;
     uint waterHighMark;
     uint cloudWaterCount;
@@ -17,9 +24,20 @@ layout(std430, binding = 1) buffer CloudStats {
     uint rainCandidateCount;
     uint rainCandidateEstimate;
     uint cloudChargeBits;
+    uint blackHoleCount;
+    uint maxOccupiedY;
+    uint blackHoles[BLACK_HOLE_MAX];
+    uint blackHoleMass[BLACK_HOLE_MAX];
+    uint blackHoleStarve[BLACK_HOLE_MAX];
+    float cloudCache[CLOUD_MAX * 7];
 };
 
 layout(std140, binding = 2) uniform TuningParams {
+    uint gridWidth;
+    uint gridHeight;
+    uint gridDepth;
+    uint marchMaxSteps;
+    uint shadowMaxSteps;
     uint rainStartLayers;
     uint rainDropsPerTick;
     float rainOvershoot;
@@ -42,6 +60,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint dirtClumpThreshold;
     uint wakeSleepThreshold;
     uint emptyBelowWakeCount;
+    uint waterSpreadRadius;
     uint fireLifetime;
     uint fireDryRate;
     float grassGrowChance;
@@ -49,6 +68,70 @@ layout(std140, binding = 2) uniform TuningParams {
     float fireBurnGrassChance;
     float fireSpreadChance;
     float steamScatterChance;
+    uint blackHoleHorizon;
+    uint blackHoleRadius;
+    float blackHoleOrbitSpeed;
+    float blackHoleInfall;
+    float blackHolePlaneGrip;
+    float blackHoleGlow;
+    uint blackHoleOrbitPlanes;
+    float blackHoleGrowthCost;
+    uint blackHoleMaxLevel;
+    uint blackHoleStarveGrace;
+    uint blackHoleDecayRate;
+    uint purgeLevel;
+    uint purgeMass;
+    uint purgeStarveGrace;
+    uint purgeDecayRate;
+    float purgeOrbitSpeed;
+    float purgeInfall;
+    float waterShadowTransmit;
+    float waterWaveStrength;
+    float waterWaveScale;
+    float waterWaveSpeed;
+    uint lavaStageSize;
+    float lavaViscosity;
+    uint lavaSpreadRadius;
+    uint lavaWaterCool;
+    uint lavaMoistureCool;
+    float lavaRestCoolChance;
+    float lavaConsumeChance;
+    float lavaIgniteChance;
+    float darkStoneDryChance;
+    float lavaChurnRate;
+    uint locustTickDispatches;
+    uint locustStageSize;
+    uint locustSpawnSize;
+    uint locustMaxSize;
+    uint locustBudSize;
+    uint locustEatGain;
+    uint locustEatTicksMin;
+    uint locustEatTicksMax;
+    uint locustRunLength;
+    float locustClimbChance;
+    float locustDensityMin;
+    float locustDensityMax;
+    uint locustSubdivision;
+    float locustCrawlRate;
+    float treeBloomChance;
+    uint treeMaxHeight;
+    uint treeSoilReserve;
+    uint treeWaterMax;
+    float treeDrinkChance;
+    float treeFlowChance;
+    uint treeGrowCost;
+    uint treeLeafCost;
+    uint treeSpreadCost;
+    float treeSpreadChance;
+    float treeLeafChance;
+    uint treeLeafReach;
+    float treeLeafSpreadChance;
+    float treeLeafTickChance;
+    float treeLeafFallChance;
+    float treeTrunkBurnChance;
+    float treeLeafBurnChance;
+    uint treeTrunkColumns;
+    float treeTrunkRadius;
 } tuning;
 
 layout(push_constant) uniform Constants {
@@ -66,11 +149,36 @@ layout(push_constant) uniform Constants {
     int spawnSize;
     float fovDistance;
     float perspectiveBlend;
+    int spawnShape; // 0 = cube, 1 = sphere
 } pc;
 
-const int WIDTH = 128;
-const int HEIGHT = 128;
-const int DEPTH = 128;
+// World extents, from the UBO. Must agree with falling_sand.comp.
+#define WIDTH  int(tuning.gridWidth)
+#define HEIGHT int(tuning.gridHeight)
+#define DEPTH  int(tuning.gridDepth)
+
+// FUNCTION: worldExtent
+vec3 worldExtent() { return vec3(float(WIDTH), float(HEIGHT), float(DEPTH)); }
+
+// FUNCTION: marchCeiling
+// The lowest Y that is guaranteed to have nothing at or above it, so both the primary march and the
+// shadow march can stop there instead of walking to the roof of the world.
+//
+// This is the single biggest saving in this stage, and it is a saving on the common case rather than
+// a corner: a world is mostly empty sky, and a DDA has no way to know that -- it reads every cell it
+// crosses whether or not anything is there. At 256^3 with terrain filling the bottom quarter and the
+// default camera, the primary march averages 37 grid reads per pixel and the shadow march 11; clipped
+// to the occupied height those become 5 and 4. The rays that never touch the terrain are the ones
+// that benefit most, and they are most of the screen.
+//
+// The +2 is not slack, it is the exact margin the publisher needs. maxOccupiedY can sit one below the
+// truth (the decay in updateSimState may land after a voxel's atomicMax), and a voxel may rise one
+// cell in the dispatch that published it. Adding 2 therefore leaves at least one guaranteed-empty
+// cell above the highest matter -- which is also what keeps the DDA's face normal correct, since a
+// ray entering the clipped box always takes a step before it can hit anything.
+int marchCeiling() {
+    return min(HEIGHT, int(maxOccupiedY) + 2);
+}
 
 // FUNCTION: getVoxel
 uint getVoxel(ivec3 pos) {
@@ -116,36 +224,62 @@ vec2 intersectAABB(vec3 ro, vec3 rd, vec3 boxMin, vec3 boxMax) {
 bool isEdge(vec3 p) {
     float thickness = 0.3f; 
     int boundCount = 0;
-    if (p.x < thickness || p.x > 128.0f - thickness) boundCount++;
-    if (p.y < thickness || p.y > 128.0f - thickness) boundCount++;
-    if (p.z < thickness || p.z > 128.0f - thickness) boundCount++;
+    vec3 extent = worldExtent();
+    if (p.x < thickness || p.x > extent.x - thickness) boundCount++;
+    if (p.y < thickness || p.y > extent.y - thickness) boundCount++;
+    if (p.z < thickness || p.z > extent.z - thickness) boundCount++;
     return boundCount >= 2;
 }
 
 // FUNCTION: calculateShadow
-float calculateShadow(ivec3 hitVoxelPos, vec3 hitNormal, vec3 lightDir) {
+// Returns how much light reaches the point: 1 lit, 0 fully shadowed. Opaque materials block
+// outright; water instead attenuates by waterShadowTransmit per voxel crossed.
+//
+// That exception is the single largest fix for water's surface jitter, and it is not the one it
+// looks like. Water's surface voxels constantly shuffle by a cell, and when this test was a hard
+// binary block, one of those hops flipped a neighbouring shadow ray between blocked and clear --
+// swinging that pixel by the WHOLE sun term. Measured against a single one-voxel hop, the rendered
+// change is 0.253 with a hard block against 0.012 with water fully transmissive, and 0.012 is the
+// floor set by the surface normal on its own. The shadow was 21x the normal, which is why widening
+// the normal kernel alone barely helped.
+//
+// Attenuating per voxel rather than simply skipping water keeps it physical, and for free: a single
+// voxel of spray dims almost nothing, while a deep pool puts many voxels in the path and still
+// darkens its own bed. Beer-Lambert falls out of the DDA without a second pass.
+float calculateShadow(ivec3 hitVoxelPos, vec3 hitNormal, vec3 lightDir, int ceilingY) {
     ivec3 voxelPos = hitVoxelPos + ivec3(round(hitNormal));
     ivec3 stepDir = ivec3(sign(lightDir));
-    
+
     vec3 tDelta = vec3(
         (lightDir.x == 0.0f) ? 100000000.0f : abs(1.0f / lightDir.x),
         (lightDir.y == 0.0f) ? 100000000.0f : abs(1.0f / lightDir.y),
         (lightDir.z == 0.0f) ? 100000000.0f : abs(1.0f / lightDir.z)
     );
-    
+
     vec3 tMax = 0.5f * tDelta;
-    
-    for (int i = 0; i < 256; i++) {
-        if (voxelPos.x < 0 || voxelPos.x >= WIDTH || 
-            voxelPos.y < 0 || voxelPos.y >= HEIGHT || 
+    float transmittance = 1.0f;
+
+    for (int i = 0; i < int(tuning.shadowMaxSteps); i++) {
+        // ceilingY rather than HEIGHT: the sun is overhead, so a shadow ray only ever climbs, and
+        // once it is above the world's contents nothing further along it can block. That turns the
+        // march's length into a function of how much matter there is rather than how tall the
+        // world is -- which is what stops shadowMaxSteps from silently truncating at 256^3.
+        if (voxelPos.x < 0 || voxelPos.x >= WIDTH ||
+            voxelPos.y < 0 || voxelPos.y >= ceilingY ||
             voxelPos.z < 0 || voxelPos.z >= DEPTH) {
-            return 1.0f; 
+            return transmittance;
         }
-        
-        if ((getVoxel(voxelPos) & 0xFFu) != 0u) {
-            return 0.0f; 
+
+        uint blockerType = getVoxel(voxelPos) & 0xFFu;
+        if (blockerType == 2u) {
+            transmittance *= tuning.waterShadowTransmit;
+            // Deep water reaches effectively opaque quickly; bailing here keeps the march from
+            // walking the full 256 steps through a large body for a result already at zero.
+            if (transmittance < 0.02f) return 0.0f;
+        } else if (blockerType != 0u) {
+            return 0.0f;
         }
-        
+
         if (tMax.x < tMax.y) {
             if (tMax.x < tMax.z) {
                 voxelPos.x += stepDir.x;
@@ -164,27 +298,70 @@ float calculateShadow(ivec3 hitVoxelPos, vec3 hitNormal, vec3 lightDir) {
             }
         }
     }
-    return 1.0f;
+    return transmittance;
 }
 
 // FUNCTION: getSmoothNormal
-vec3 getSmoothNormal(ivec3 p, uint matchType) {
+// The offsets are lattice points, so their lengths are square roots of small integers rather than
+// anything that needs measuring: inversesqrt of an exact int replaces 26 length() calls and 26
+// divides with 26 reciprocal square roots, which is the same arithmetic at a fraction of the cost.
+vec3 getSmoothNormal(ivec3 p) {
     vec3 n = vec3(0.0f);
     for (int x = -1; x <= 1; x++) {
         for (int y = -1; y <= 1; y++) {
             for (int z = -1; z <= 1; z++) {
                 if (x == 0 && y == 0 && z == 0) continue;
-                
-                uint neighborType = getVoxel(p + ivec3(x, y, z)) & 0xFFu;
-                float isSolid = (neighborType != 0u) ? 1.0f : 0.0f;
+
+                if ((getVoxel(p + ivec3(x, y, z)) & 0xFFu) == 0u) continue;
+
                 vec3 offset = vec3(float(x), float(y), float(z));
-                
-                n -= (offset / length(offset)) * isSolid;
+                n -= offset * inversesqrt(float(x * x + y * y + z * z));
             }
         }
     }
-    
+
     if (length(n) < 0.1f) return vec3(0.0f, 1.0f, 0.0f);
+    return normalize(n);
+}
+
+// FUNCTION: getWaterNormal
+// Water's shading normal, taken as a distance-weighted density gradient over a radius-2
+// neighbourhood rather than the binary occupancy getSmoothNormal uses for everything else.
+//
+// This is the fix for surface jitter rather than a cover for it. In the binary version, one surface
+// voxel shuffling one cell flips a whole unit vector inside a sum whose magnitude is only 3-5, and
+// the normal swings ~13 degrees -- almost exactly the half-angle of the exponent-32 specular lobe,
+// so a highlight switches fully on or off and a 3%-of-cells motion reads as violent sparkle.
+// Spreading the same question across 80 weighted neighbours drops one cell's share to ~3 degrees,
+// comfortably inside the lobe, so the highlight slides instead of snapping.
+//
+// Radius 2 is where the curve flattens: radius 3 only reaches ~2.4 degrees for 178 taps. 80 taps at
+// a single shading point is modest against the marches that reach the same pixel.
+vec3 getWaterNormal(ivec3 p) {
+    vec3 n = vec3(0.0f);
+
+    for (int x = -2; x <= 2; x++) {
+        for (int y = -2; y <= 2; y++) {
+            for (int z = -2; z <= 2; z++) {
+                if (x == 0 && y == 0 && z == 0) continue;
+
+                // Squared, so the radius test and the weight are both exact integer arithmetic.
+                // The weight wanted (offset/d) * (1/d), which is just offset/d2 -- the two divides
+                // and the 124 length() calls this used to make were computing a square root only to
+                // square it again.
+                int d2 = x * x + y * y + z * z;
+                if (d2 > 6) continue; // round the cube off, so the kernel has no corner bias
+
+                // Any solid counts as "inside", matching getSmoothNormal: water lying against sand
+                // should not bend its normal at the contact, only at the boundary with air.
+                if ((getVoxel(p + ivec3(x, y, z)) & 0xFFu) == 0u) continue;
+
+                n -= vec3(float(x), float(y), float(z)) / float(d2);
+            }
+        }
+    }
+
+    if (length(n) < 0.001f) return vec3(0.0f, 1.0f, 0.0f);
     return normalize(n);
 }
 
@@ -198,6 +375,76 @@ vec3 renderSand(uint rawVoxel, vec3 baseLighting) {
     vec3 baseColor = mix(dryColor, wetColor, wetness);
     
     return baseColor * baseLighting;
+}
+
+// FUNCTION: waterWaveGradient
+// Slope of a small sum of scrolling sine ridges, evaluated analytically.
+//
+// Purely decorative. It used to be load-bearing -- a moving highlight to bury the surface's popping
+// under -- but the pop is fixed at source now (see calculateShadow and getWaterNormal), so this is
+// free to be tuned for looks alone, and is deliberately quiet: at the default the tilt peaks around
+// 12 degrees, just inside the specular lobe's half-angle, so crests MODULATE the highlight rather
+// than switching it on and off. That ceiling is what keeps it reading as calm water.
+//
+// Analytic rather than sampled, and sine rather than hash noise, because the surface has to stay
+// smooth: a finite-difference or per-voxel-hash normal would put high-frequency discontinuity back
+// into a surface that just had it taken out.
+vec2 waterWaveGradient(vec2 p, float t) {
+    float scale = max(tuning.waterWaveScale, 0.001f);
+
+    // Domain warp: displace the sample position by a large, slow wave before the detail octaves are
+    // evaluated. This is what stops the result reading as a few straight sine directions -- crests
+    // bend and braid along the warp instead of running parallel across the whole pool.
+    //
+    // The warp's own contribution to the derivative is deliberately dropped. What is needed here is
+    // a smooth vector field to tilt a normal with, not a mathematically exact gradient, and carrying
+    // the Jacobian through five octaves costs more than the difference is worth on screen.
+    float wt = t * tuning.waterWaveSpeed * 0.35f;
+    vec2 q = p + vec2(sin(p.y * 0.043f + wt), sin(p.x * 0.037f - wt * 0.8f)) * 6.0f;
+
+    const vec2 dirs[5] = vec2[5](vec2(0.860f, 0.510f), vec2(-0.421f, 0.907f), vec2(0.707f, -0.707f),
+                                 vec2(-0.966f, -0.259f), vec2(0.259f, 0.966f));
+    const float freq[5] = float[5](0.11f, 0.19f, 0.31f, 0.53f, 0.87f);
+    const float amp[5]  = float[5](1.00f, 0.62f, 0.38f, 0.24f, 0.15f);
+    const float spd[5]  = float[5](1.00f, 1.37f, 0.83f, 1.71f, 0.61f);
+
+    vec2 grad = vec2(0.0f);
+    for (int i = 0; i < 5; i++) {
+        float f = freq[i] * scale;
+        float phase = dot(dirs[i], q) * f + t * spd[i] * tuning.waterWaveSpeed;
+        // d/dp of amp*sin(dot(dir,p)*f + ...) is amp*f*dir*cos(...)
+        grad += dirs[i] * (amp[i] * f * cos(phase));
+    }
+
+    // Low-frequency envelope, evaluated on the UNWARPED position so it drifts independently of the
+    // crests. Without it every part of the surface is equally agitated at every moment, which is the
+    // single biggest reason a sum of sines reads as machine-made rather than as water. It matters
+    // more at low amplitudes, not less: a quiet surface with uniform ripple reads as a texture.
+    float envelope = 0.45f + 0.55f * sin(p.x * 0.021f + p.y * 0.017f + t * 0.11f);
+    return grad * envelope;
+}
+
+// FUNCTION: applyWaterWaves
+// Tilts the shading normal by the wave slope. Geometry is untouched -- the voxel silhouette is
+// exactly as blocky as before; only what the surface reflects changes.
+//
+// Weighted by how upward-facing the surface already is, because a height field only describes a
+// roughly horizontal surface. Applying it to the vertical face of a waterfall or a pool wall would
+// tilt normals in a direction the wave says nothing about, and those faces would shimmer for no
+// reason -- the opposite of the point.
+vec3 applyWaterWaves(vec3 normal, ivec3 voxelPos) {
+    if (tuning.waterWaveStrength <= 0.0f) return normal;
+
+    float upness = clamp(normal.y, 0.0f, 1.0f);
+    if (upness <= 0.0f) return normal;
+
+    // World XZ, so the pattern is anchored to the world and slides across it. Anchoring per voxel
+    // instead would make the wave jump with the voxel it is drawn on.
+    vec2 grad = waterWaveGradient(vec2(voxelPos.xz) + vec2(0.5f), pc.time);
+
+    // For a height field h, the surface normal is normalize(-dh/dx, 1, -dh/dz); adding the negated
+    // gradient to an up-facing normal is that same tilt, expressed so it composes with any base.
+    return normalize(normal + vec3(-grad.x, 0.0f, -grad.y) * tuning.waterWaveStrength * upness);
 }
 
 // FUNCTION: renderWater
@@ -263,6 +510,322 @@ vec3 renderFire(uint rawVoxel, ivec3 voxelPos) {
     return fireColor * 1.5f; 
 }
 
+// MATERIAL CURSOR PALETTE
+// One colour per material type, indexed directly.
+//
+// A table rather than a switch, deliberately. What was wrong with the if-chain this replaces was
+// never its shape -- a switch would read no better and compile to much the same thing -- it was that
+// the chain was a THIRD parallel list of per-material data, sitting alongside the MaterialType enum
+// and the UI's label array with nothing tying any of the three together. A table does not fix that
+// completely, but it makes adding a material one line in one obvious place, and an out-of-range
+// type now yields a defined colour instead of falling through to whatever the final else happened
+// to be (which was sand's yellow, so an unknown block previewed as sand).
+//
+// This is the CURSOR's palette specifically. The blocks themselves are shaded procedurally from
+// noise, moisture, coolness and lighting, so they cannot be reduced to one colour each -- which is
+// why the render dispatch downstream stays a switch. That one dispatches behaviour, not data.
+const int MATERIAL_COUNT = 20;
+const vec3 MATERIAL_CURSOR_COLOR[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
+    vec3(0.10f, 0.10f, 0.10f), // 0  void
+    vec3(1.00f, 0.90f, 0.20f), // 1  sand
+    vec3(0.20f, 0.60f, 1.00f), // 2  water
+    vec3(0.60f, 0.60f, 0.60f), // 3  stone
+    vec3(0.50f, 0.35f, 0.15f), // 4  dirt
+    vec3(1.00f, 0.50f, 0.00f), // 5  fire
+    vec3(0.90f, 0.90f, 0.90f), // 6  steam
+    vec3(0.80f, 0.40f, 1.00f), // 7  black hole
+    vec3(1.00f, 0.45f, 0.10f), // 8  lava, hottest -- the four walk the same ramp the blocks do
+    vec3(0.85f, 0.30f, 0.07f), // 9  lava
+    vec3(0.65f, 0.20f, 0.06f), // 10 lava
+    vec3(0.45f, 0.14f, 0.06f), // 11 lava, coldest
+    vec3(0.22f, 0.19f, 0.18f), // 12 dark stone
+    vec3(0.38f, 0.30f, 0.12f), // 13 locusts, sparsest -- the five darken as the swarm thickens
+    vec3(0.46f, 0.35f, 0.13f), // 14 locusts
+    vec3(0.54f, 0.40f, 0.14f), // 15 locusts, the placeable stage
+    vec3(0.62f, 0.45f, 0.15f), // 16 locusts
+    vec3(0.70f, 0.51f, 0.16f), // 17 locusts, densest
+    vec3(0.36f, 0.24f, 0.12f), // 18 tree trunk
+    vec3(0.22f, 0.46f, 0.15f)  // 19 tree leaves
+);
+
+const uint LAVA_HOTTEST = 8u;
+
+// LAVA COLOUR RAMP
+// Four stage colours with one reach past each end, indexed by stage + 1 so the two out-of-range
+// entries sit where stage -1 and stage 4 would be. Those two are the point of the table rather than
+// padding on it: the hottest stage has no hotter neighbour to cycle toward and the coldest has no
+// colder one, so each is given a step further out -- brighter than molten at the top, dimmer than
+// crust at the bottom -- and the ends of the range get the same three-colour churn as the middle
+// instead of flattening out.
+//
+// Every entry is deliberately at or under 1.0 in its brightest channel. Lava is emissive, so what is
+// written here is what reaches the screen with no lighting term to scale it, and anything over 1.0
+// is not "brighter" -- it clips, and clipping red first is exactly how molten orange turns white.
+const vec3 LAVA_RAMP[6] = vec3[6](
+    vec3(1.00f, 0.62f, 0.22f), // beyond hottest -- the reach above stage 0
+    vec3(1.00f, 0.40f, 0.07f), // stage 0, hottest
+    vec3(0.96f, 0.29f, 0.05f), // stage 1
+    vec3(0.86f, 0.20f, 0.04f), // stage 2
+    vec3(0.70f, 0.13f, 0.03f), // stage 3, coldest before it turns to dark stone
+    vec3(0.44f, 0.07f, 0.02f)  // beyond coldest -- the reach below stage 3
+);
+
+// FUNCTION: lavaStageColor
+vec3 lavaStageColor(int stage) {
+    return LAVA_RAMP[clamp(stage + 1, 0, 5)];
+}
+
+// FUNCTION: renderLava
+// Emissive, like fire and unlike every lit material: molten rock is a light source, and running it
+// through baseLighting would leave the shaded side of a flow looking like wet clay.
+//
+// A voxel does not hold still at its stage's colour. It cycles: one third of the phase running from
+// the stage below it up to its own, one third from its own up to the stage above, and the last third
+// falling back to where it started. Stage 2 therefore walks 1 -> 2 -> 3 -> 1 forever. The mean over
+// a cycle is still the stage's own colour, so the cooling gradient across a flow reads exactly as it
+// did, but the surface is never flat.
+//
+// The phase is offset per voxel, which is what makes this churn rather than pulse. Without the
+// offset every lava voxel in the world would brighten and dim in unison -- one enormous throbbing
+// mass. With it, neighbours sit at different points in the same cycle, so the motion reads as
+// something moving THROUGH the flow.
+vec3 renderLava(uint rawVoxel, ivec3 voxelPos) {
+    int stage = clamp(int(rawVoxel & 0xFFu) - int(LAVA_HOTTEST), 0, 3);
+
+    float phase = fract(pc.time * tuning.lavaChurnRate + hash(vec3(voxelPos)));
+
+    // Three equal legs around the cycle. The third one closes it, which is what keeps the animation
+    // seamless -- ending on the stage above and snapping back to the stage below would put a visible
+    // jump in every voxel once per cycle.
+    vec3 from, to;
+    float leg;
+    if (phase < 1.0f / 3.0f) {
+        from = lavaStageColor(stage - 1); to = lavaStageColor(stage);     leg = phase * 3.0f;
+    } else if (phase < 2.0f / 3.0f) {
+        from = lavaStageColor(stage);     to = lavaStageColor(stage + 1); leg = phase * 3.0f - 1.0f;
+    } else {
+        from = lavaStageColor(stage + 1); to = lavaStageColor(stage - 1); leg = phase * 3.0f - 2.0f;
+    }
+
+    // Eased rather than linear, so the colour settles at each corner of the cycle instead of sliding
+    // through it at constant speed. Linear legs make the turns read as three discrete sweeps.
+    vec3 molten = mix(from, to, smoothstep(0.0f, 1.0f, leg));
+
+    // A static per-voxel darkening, so two voxels that happen to share a phase are still not
+    // identical. It only ever darkens: the ramp above is already at 1.0 in red at the hot end, and
+    // a grain that could brighten would clip precisely the voxels meant to look hottest.
+    return molten * (0.90f + hash(vec3(voxelPos) * 1.7f) * 0.10f);
+}
+
+// FUNCTION: renderDarkStone
+// Cooled lava. Lit like ordinary stone but much darker and faintly warm-tinted, so a solidified flow
+// still reads as having come from somewhere rather than looking like ordinary rock that was always
+// there.
+vec3 renderDarkStone(ivec3 voxelPos, vec3 baseLighting) {
+    float noise = hash(vec3(voxelPos));
+    float val = 0.10f + noise * 0.06f;
+    return vec3(val * 1.08f, val * 0.94f, val * 0.92f) * baseLighting;
+}
+
+// =================================================================================================
+// LOCUSTS
+//
+// A swarm is drawn as what it is -- a cloud of separate bodies -- rather than as a block tinted to
+// suggest one. When the primary march reaches a locust voxel it does not stop there; it hands off to
+// a second DDA that runs INSIDE that single voxel over a locustSubdivision^3 lattice of sub-cubes,
+// each present or absent by a hash test. A ray that threads all the way through the gaps is not a
+// hit at all and carries on to whatever is behind, exactly the way steam's dither already works.
+//
+// The cost is bounded and small: crossing a cube of N cells on a side takes at most 3N sub-steps, so
+// 12 at the default subdivision, and only for pixels that actually land on a swarm. Nothing else in
+// the frame pays for it.
+//
+// Fill comes from the stage, which is the head count -- so a swarm visibly thins as it starves and
+// thickens as it eats, and the five types are legible at a glance without a legend.
+// =================================================================================================
+const uint LOCUST_SPARSEST = 13u;
+const uint LOCUST_DENSEST = 17u;
+
+// FUNCTION: isLocustType
+bool isLocustType(uint type) { return type >= LOCUST_SPARSEST && type <= LOCUST_DENSEST; }
+
+// FUNCTION: locustDensity
+float locustDensity(uint type) {
+    float stage = float(type - LOCUST_SPARSEST) / 4.0f;
+    return clamp(mix(tuning.locustDensityMin, tuning.locustDensityMax, stage), 0.02f, 0.98f);
+}
+
+// =================================================================================================
+// TREES
+//
+// A trunk does not fill its voxel -- it is one or two slender stems standing inside it, with air
+// around them, which is what makes a trunk read as a trunk rather than as a brown cube. That is the
+// same sub-voxel geometry locusts use, so it goes through the same sub-march below; only the test
+// for "is this little cube solid" differs, which is why that test is a switch on kind rather than
+// baked into the march.
+//
+// Leaves deliberately do NOT take part. They are far and away the most numerous voxel in a forest,
+// a canopy fills a lot of screen, and a sub-march for each of them would be the most expensive
+// thing in the frame -- for a shape that is meant to read as a dense mass anyway. They are ordinary
+// solid voxels with per-voxel colour variation.
+// =================================================================================================
+const uint TREE_TRUNK = 18u;
+const uint TREE_LEAF = 19u;
+// Must match falling_sand.comp: the distance value a leaf carries once it has let go of its tree.
+const uint LEAF_DETACHED = 255u;
+
+const uint SUB_LOCUST = 0u;
+const uint SUB_TRUNK = 1u;
+
+// FUNCTION: trunkStems
+// Where this column's stems sit, in voxel-local XZ. Seeded from the voxel's X and Z only, with Y
+// left out on purpose: every trunk voxel stacked above the same ground must produce the same
+// answer, or the stems would jump sideways from one voxel to the next and the tree would zigzag.
+void trunkStems(ivec3 voxelPos, out vec2 a, out vec2 b, out int count) {
+    float h0 = hash(vec3(float(voxelPos.x), 7.0f, float(voxelPos.z)));
+    float h1 = hash(vec3(float(voxelPos.x), 19.0f, float(voxelPos.z)));
+    float h2 = hash(vec3(float(voxelPos.x), 53.0f, float(voxelPos.z)));
+
+    count = 1 + int(h2 * float(max(int(tuning.treeTrunkColumns), 1)));
+    count = clamp(count, 1, 2);
+
+    // Kept off the voxel's edges so a stem is never sliced in half by the boundary between two
+    // trunk voxels of the same tree.
+    a = vec2(0.30f + h0 * 0.40f, 0.30f + h1 * 0.40f);
+    b = vec2(0.30f + h1 * 0.40f, 0.30f + h0 * 0.40f);
+}
+
+// FUNCTION: subOccupied
+// The per-sub-cube solidity test, shared by everything the sub-march draws.
+bool subOccupied(uint kind, uint type, ivec3 voxelPos, ivec3 cell, int sub, vec3 jitter) {
+    if (kind == SUB_TRUNK) {
+        // A disc test in XZ, extruded the full height of the voxel -- so the stems are continuous
+        // columns rather than a stack of separate blobs.
+        vec2 p = (vec2(cell.xz) + 0.5f) / float(sub);
+        vec2 a, b;
+        int count;
+        trunkStems(voxelPos, a, b, count);
+
+        float r = max(tuning.treeTrunkRadius, 0.02f);
+        if (dot(p - a, p - a) <= r * r) return true;
+        if (count > 1 && dot(p - b, p - b) <= r * r) return true;
+        return false;
+    }
+
+    return hash(vec3(voxelPos * sub + cell) + jitter) < locustDensity(type);
+}
+
+// FUNCTION: subMarch
+// Walks the sub-lattice of one voxel and reports the first occupied sub-cube.
+//
+// entryNormal is the face the primary DDA came through, and it is the answer for the very first
+// sub-cell -- that cell has taken no step of its own yet, so there is nothing else to derive a
+// normal from. Every later cell gets the face its own step crossed.
+bool subMarch(ivec3 voxelPos, vec3 rayOrigin, vec3 rayDir, uint kind, uint type, vec3 entryNormal,
+              out float tHit, out vec3 subNormal, out vec3 subCell) {
+    tHit = 0.0f; subNormal = entryNormal; subCell = vec3(0.0f);
+
+    int sub = clamp(int(tuning.locustSubdivision), 1, 8);
+    float cellSize = 1.0f / float(sub);
+
+    vec3 boxMin = vec3(voxelPos);
+    vec2 span = intersectAABB(rayOrigin, rayDir, boxMin, boxMin + vec3(1.0f));
+    float t = max(span.x, 0.0f);
+    if (t > span.y) return false;
+
+    // Nudged inward so a ray entering exactly on the face lands in the first cell rather than on
+    // the boundary between it and the one outside.
+    vec3 local = (rayOrigin + rayDir * (t + 1e-4f) - boxMin) * float(sub);
+    ivec3 c = clamp(ivec3(floor(local)), ivec3(0), ivec3(sub - 1));
+    ivec3 stepDir = ivec3(sign(rayDir));
+
+    vec3 tDelta = vec3(
+        (rayDir.x == 0.0f) ? 1000000.0f : abs(cellSize / rayDir.x),
+        (rayDir.y == 0.0f) ? 1000000.0f : abs(cellSize / rayDir.y),
+        (rayDir.z == 0.0f) ? 1000000.0f : abs(cellSize / rayDir.z)
+    );
+    vec3 fracPos = local - vec3(c);
+    vec3 tMax = t + vec3(
+        (stepDir.x > 0) ? (1.0f - fracPos.x) * tDelta.x : fracPos.x * tDelta.x,
+        (stepDir.y > 0) ? (1.0f - fracPos.y) * tDelta.y : fracPos.y * tDelta.y,
+        (stepDir.z > 0) ? (1.0f - fracPos.z) * tDelta.z : fracPos.z * tDelta.z
+    );
+
+    // Quantised time, so a swarm re-scatters in discrete jumps rather than boiling continuously. A
+    // smooth term here would put exactly the high-frequency shimmer back into the frame that the
+    // water normals were widened to take out -- and insects crawling read better as steps anyway.
+    // Trunks ignore it: a tree that shimmered would be absurd.
+    vec3 jitter = (kind == SUB_LOCUST)
+        ? vec3(floor(pc.time * tuning.locustCrawlRate) * 1.7f)
+        : vec3(0.0f);
+
+    for (int i = 0; i < 3 * sub; i++) {
+        if (c.x < 0 || c.x >= sub || c.y < 0 || c.y >= sub || c.z < 0 || c.z >= sub) return false;
+
+        if (subOccupied(kind, type, voxelPos, c, sub, jitter)) {
+            tHit = t;
+            subCell = vec3(c);
+            return true;
+        }
+
+        if (tMax.x < tMax.y) {
+            if (tMax.x < tMax.z) {
+                c.x += stepDir.x; t = tMax.x; tMax.x += tDelta.x; subNormal = vec3(float(-stepDir.x), 0.0f, 0.0f);
+            } else {
+                c.z += stepDir.z; t = tMax.z; tMax.z += tDelta.z; subNormal = vec3(0.0f, 0.0f, float(-stepDir.z));
+            }
+        } else {
+            if (tMax.y < tMax.z) {
+                c.y += stepDir.y; t = tMax.y; tMax.y += tDelta.y; subNormal = vec3(0.0f, float(-stepDir.y), 0.0f);
+            } else {
+                c.z += stepDir.z; t = tMax.z; tMax.z += tDelta.z; subNormal = vec3(0.0f, 0.0f, float(-stepDir.z));
+            }
+        }
+    }
+
+    return false;
+}
+
+// FUNCTION: renderLocust
+// Brown-amber bodies, shaded per sub-cube so the swarm reads as many individuals rather than one
+// carved mass. The variation is seeded off the sub-cell rather than the voxel for that reason.
+vec3 renderLocust(ivec3 voxelPos, vec3 subCell, vec3 baseLighting) {
+    float n = hash(subCell * 1.37f + vec3(voxelPos) * 0.11f);
+    vec3 shell = mix(vec3(0.15f, 0.10f, 0.035f), vec3(0.55f, 0.40f, 0.11f), n);
+    return shell * baseLighting;
+}
+
+// FUNCTION: renderTrunk
+// Bark. Varied along the column's height rather than per sub-cube, so a stem reads as one continuous
+// piece of wood with grain running up it instead of a stack of separate flecks.
+vec3 renderTrunk(ivec3 voxelPos, vec3 subCell, vec3 baseLighting) {
+    float grain = hash(vec3(float(voxelPos.x), float(voxelPos.y) * 0.35f + subCell.y * 0.2f, float(voxelPos.z)));
+    vec3 bark = mix(vec3(0.20f, 0.13f, 0.07f), vec3(0.38f, 0.25f, 0.13f), grain);
+    return bark * baseLighting;
+}
+
+// FUNCTION: renderLeaf
+// Canopy. The colour is pushed around by the leaf's distance from its trunk as well as by noise:
+// the outer ring of a canopy is lighter and yellower, which gives the mass some depth and quietly
+// shows where one tree's crown ends and the next begins.
+vec3 renderLeaf(uint rawVoxel, ivec3 voxelPos, vec3 baseLighting) {
+    float n = hash(vec3(voxelPos));
+    uint dist = (rawVoxel >> 24) & 0xFFu;
+
+    // A leaf that has let go is dead, and looks it: browned off rather than green, so a canopy
+    // coming apart is legible as it happens instead of looking like the tree is simply shedding
+    // healthy foliage. The marker is already in the byte -- this just reads it.
+    if (dist == LEAF_DETACHED) {
+        return mix(vec3(0.34f, 0.22f, 0.07f), vec3(0.52f, 0.38f, 0.12f), n) * baseLighting;
+    }
+
+    float depth = clamp(float(dist) / max(float(tuning.treeLeafReach), 1.0f), 0.0f, 1.0f);
+    vec3 inner = vec3(0.10f, 0.30f, 0.09f);
+    vec3 outer = vec3(0.28f, 0.52f, 0.16f);
+    vec3 leaf = mix(inner, outer, depth * 0.7f + n * 0.3f);
+    return leaf * baseLighting;
+}
+
 // FUNCTION: renderSteam
 vec3 renderSteam(ivec3 voxelPos, vec3 baseLighting) {
     float noise = hash(vec3(voxelPos) + vec3(pc.time));
@@ -272,51 +835,89 @@ vec3 renderSteam(ivec3 voxelPos, vec3 baseLighting) {
     return baseColor * baseLighting * 0.9f;
 }
 
+// FUNCTION: renderBlackHole
+// Deliberately unlit: a surface that took the scene's diffuse term would read as a dark grey cube
+// sitting in the light, which is the one thing it must not look like. Only a thin grazing-angle rim
+// survives, so the voxel reads as a hole punched in the world with a lensed edge.
+vec3 renderBlackHole(vec3 normal, vec3 rayDir) {
+    float rim = 1.0f - abs(dot(normal, rayDir));
+    float glow = pow(clamp(rim, 0.0f, 1.0f), 4.0f);
+    return mix(vec3(0.01f, 0.01f, 0.02f), vec3(0.85f, 0.45f, 1.0f), glow * 0.7f);
+}
+
+// FUNCTION: bhDecode
+ivec3 bhDecode(uint code) {
+    uint i = code & BH_INDEX_MASK;
+    return ivec3(int(i % uint(WIDTH)), int((i / uint(WIDTH)) % uint(HEIGHT)), int(i / uint(WIDTH * HEIGHT)));
+}
+
+// FUNCTION: bhBodyRadius / bhLevel
+// DUPLICATED VERBATIM FROM falling_sand.comp. Both stages read the same swallowed-voxel count from
+// the same buffer, so they derive the same body size with nothing to synchronise. If you change the
+// growth curve in one you MUST change it in the other, or the body that gets drawn will stop
+// matching the body that eats.
+float bhBodyRadius(uint level) { return float(level) + 0.5f; }
+
+uint bhLevel(uint mass) {
+    uint level = 0u;
+    for (uint l = 1u; l <= min(tuning.blackHoleMaxLevel, 16u); l++) {
+        float r = bhBodyRadius(l);
+        float volume = 4.18879f * r * r * r; // 4/3 pi r^3
+        if (float(mass) < tuning.blackHoleGrowthCost * volume) break;
+        level = l;
+    }
+    return level;
+}
+
+// FUNCTION: accretionGlow
+// Tints whatever the ray hit by how deep inside a black hole's influence it sits. Purely cosmetic,
+// but it is what makes the disk legible: without it a captured stream of sand is the same yellow as
+// a dune and the orbit reads as a glitch rather than as matter being whipped around something.
+// Cheap enough to run at the single hit point -- at most BLACK_HOLE_MAX distance tests.
+vec3 accretionGlow(vec3 color, ivec3 voxelPos) {
+    if (blackHoleCount == 0u || tuning.blackHoleGlow <= 0.0f) return color;
+
+    float radius = float(tuning.blackHoleRadius);
+    // Compared squared, so the loop costs one sqrt at the end rather than one per slot -- and it
+    // stops as soon as it has seen every live hole, since the table is sparse and usually holds one.
+    float closestSq = radius * radius;
+    uint seen = 0u;
+
+    for (int i = 0; i < BLACK_HOLE_MAX && seen < blackHoleCount; i++) {
+        uint code = blackHoles[i];
+        if (code == 0u) continue;
+        seen++;
+        vec3 d = vec3(bhDecode(code) - voxelPos);
+        closestSq = min(closestSq, dot(d, d));
+    }
+
+    if (closestSq >= radius * radius) return color;
+    float closest = sqrt(closestSq);
+
+    // Ramps hard rather than linearly so only the inner disk actually glows -- a linear falloff
+    // washed the entire influence sphere in orange and lost the shape of the spiral.
+    float heat = pow(1.0f - closest / radius, 3.0f) * tuning.blackHoleGlow;
+    vec3 hot = mix(vec3(1.0f, 0.45f, 0.1f), vec3(1.0f, 0.95f, 0.85f), clamp(heat, 0.0f, 1.0f));
+    return mix(color, hot, clamp(heat, 0.0f, 1.0f));
+}
+
 // =================================================================================================
-// CLOUD FIELD -- shared placement math. THIS BLOCK IS DUPLICATED VERBATIM IN falling_sand.comp.
+// CLOUD FIELD -- read only. The placement maths lives in falling_sand.comp, which evaluates it once
+// per dispatch into cloudCache; this stage just reads the answer.
 //
-// Cloud layout is a pure function of (index, time) and is stored nowhere. Both stages receive the
-// same pc.time in a single vkCmdPushConstants call, so the compute stage (deciding which columns
-// sit under a cloud and may rain) and the fragment stage (drawing them) derive byte-identical
-// positions with no synchronisation and no per-slot buffer. If you edit one copy you MUST edit
-// the other, or rain will fall out of a clear sky.
+// It used to be duplicated here verbatim, with a warning that editing one copy without the other
+// would make rain fall from a clear sky. Sharing the cache removes that hazard outright, and removes
+// the cost that made it worth duplicating in the first place: six sin() calls per cloud, re-derived
+// by every pixel, is ~369 M transcendentals a frame at 32 clouds and 1600x1200.
 //
-// The population is fixed: clouds scroll along +X and wrap, so one drifts out of the far border
-// exactly as another drifts in at the near one. Nothing is ever "revealed" or "retired".
+// The vertical centre and the edge fade are cached too. Both were still being re-derived here per
+// pixel after the first pass -- the centre carried a hash() of its own and the fade is four
+// smoothsteps -- and both are constant for the whole frame, so a pixel has nothing to contribute to
+// either answer.
 // =================================================================================================
-const int CLOUD_MAX = 64;
-
-// FUNCTION: cloudRadii
-vec3 cloudRadii(int i) {
-    float h4 = hash(vec3(float(i), 211.0f, 5.0f));
-    float h5 = hash(vec3(float(i), 71.0f, 61.0f));
-    float h6 = hash(vec3(float(i), 19.0f, 173.0f));
-    float rxz = 10.0f + h4 * 18.0f;
-    return vec3(rxz, 4.0f + h5 * 6.0f, rxz * (0.7f + h6 * 0.6f));
-}
-
-// FUNCTION: cloudCenterXZ
-vec2 cloudCenterXZ(int i, float t) {
-    float h1 = hash(vec3(float(i), 11.0f, 3.0f));
-    float h2 = hash(vec3(float(i), 47.0f, 91.0f));
-    float phase = hash(vec3(float(i), 91.0f, 250.0f)) * 6.28318f;
-
-    float x = mod(h1 * 128.0f + t * tuning.cloudDriftSpeed, 128.0f);
-    float z = mod(h2 * 128.0f + sin(t * 0.12f + phase) * 3.0f, 128.0f);
-    return vec2(x, z);
-}
-
-// FUNCTION: cloudEdgeFade
-// 1 over the middle of the cube, falling to 0 at each border. The fade has to happen INSIDE the
-// footprint because clouds are already hard-clipped to the cube's XZ column -- fading outside it
-// would be invisible and clouds would still pop at the boundary. This is what makes a cloud
-// dissolve as it reaches the border and re-emerge on the opposite side.
-float cloudEdgeFade(vec2 c) {
-    float d = max(tuning.cloudEdgeFadeDist, 0.001f);
-    float fx = smoothstep(0.0f, d, c.x) * smoothstep(0.0f, d, 128.0f - c.x);
-    float fz = smoothstep(0.0f, d, c.y) * smoothstep(0.0f, d, 128.0f - c.y);
-    return fx * fz;
-}
+vec3  cloudCenter(int i) { return vec3(cloudCache[i * 7 + 0], cloudCache[i * 7 + 1], cloudCache[i * 7 + 2]); }
+vec3  cloudRadii(int i)  { return vec3(cloudCache[i * 7 + 3], cloudCache[i * 7 + 4], cloudCache[i * 7 + 5]); }
+float cloudFade(int i)   { return cloudCache[i * 7 + 6]; }
 
 // FUNCTION: marchBlockyCloud
 // Walks a per-cloud voxel grid (same DDA stepping pattern as the primary raymarch loop) bounded
@@ -416,7 +1017,7 @@ void main() {
 
     // Orthographic half-width/height auto-derived from distance to the cube's center along
     // the view direction, so scrubbing the blend slider doesn't cause a visible "pop" in scale.
-    vec3 cubeCenter = vec3(64.0f, 64.0f, 64.0f);
+    vec3 cubeCenter = worldExtent() * 0.5f;
     float viewDistance = max(1.0f, dot(cubeCenter - baseOrigin, forward));
     float orthoHalfSize = viewDistance / pc.fovDistance;
 
@@ -429,7 +1030,7 @@ void main() {
     vec4 finalColor = vec4(0.05f, 0.05f, 0.1f, 1.0f);
     float finalDist = 1000000.0f;
     
-    vec2 aabbHit = intersectAABB(rayOrigin, rayDir, vec3(0.0f), vec3(128.0f));
+    vec2 aabbHit = intersectAABB(rayOrigin, rayDir, vec3(0.0f), worldExtent());
     bool hitFrontBox = false;
     bool hitBackBox = false;
 
@@ -438,9 +1039,15 @@ void main() {
         if (isEdge(rayOrigin + rayDir * aabbHit.y)) hitBackBox = true;
     }
 
-    vec3 currentPos = rayOrigin + rayDir * max(0.0f, aabbHit.x); 
-    if (aabbHit.x > 0.0f) currentPos += rayDir * 0.001f; 
-    
+    // The march runs against the world clipped to its occupied height, not the full cube. The full
+    // extent is still what the wireframe edges above and the distance fade below are measured
+    // against -- only where the DDA starts and stops changes.
+    int ceilingY = marchCeiling();
+    vec2 marchHit = intersectAABB(rayOrigin, rayDir, vec3(0.0f), vec3(float(WIDTH), float(ceilingY), float(DEPTH)));
+
+    vec3 currentPos = rayOrigin + rayDir * max(0.0f, marchHit.x);
+    if (marchHit.x > 0.0f) currentPos += rayDir * 0.001f;
+
     ivec3 voxelPos = ivec3(floor(currentPos));
     ivec3 stepDir = ivec3(sign(rayDir));
     
@@ -460,18 +1067,36 @@ void main() {
     bool hit = false;
     uint hitType = 0u;
     uint hitRawVoxel = 0u;
-    
-    for (int i = 0; i < 400; i++) {
-        if (voxelPos.x < 0 || voxelPos.x >= WIDTH || 
-            voxelPos.y < 0 || voxelPos.y >= HEIGHT || 
+
+    // Filled in only when the ray stops inside a voxel's sub-lattice; see subMarch. Shared by the
+    // two materials that do not fill their voxel -- locust swarms and tree trunks.
+    float subT = 0.0f;
+    vec3 subNormal = vec3(0.0f, 1.0f, 0.0f);
+    vec3 subCell = vec3(0.0f);
+
+    // Measured against the full cube, not the clipped march box, so the fade does not change as the
+    // world fills up or empties.
+    float MAX_VISIBILITY = max(300.0f, aabbHit.y * 1.5f);
+
+
+    for (int i = 0; i < int(tuning.marchMaxSteps); i++) {
+        if (voxelPos.x < 0 || voxelPos.x >= WIDTH ||
+            voxelPos.y < 0 || voxelPos.y >= ceilingY ||
             voxelPos.z < 0 || voxelPos.z >= DEPTH) {
-            break; 
+            break;
         }
         
         uint rawVoxel = getVoxel(voxelPos);
-        hitType = rawVoxel & 0xFFu;         
-        
-        if (hitType != 0u) { 
+        hitType = rawVoxel & 0xFFu;
+
+        // A black hole's centre voxel must not register as a solid cube: the body is drawn as a
+        // smooth ball after this loop, and at level 0 the voxel cube is strictly larger than the
+        // radius-0.5 ball inside it, so letting it hit here would draw a cube over the sphere and
+        // undo the shape entirely. The ray passes through instead -- the physics keeps the body's
+        // interior swept clear, so there is nothing else in there to occlude.
+        if (hitType == 7u) hitType = 0u;
+
+        if (hitType != 0u) {
             // Implementation of Dithered Transparency for Steam (Type 6)
             if (hitType == 6u) {
                 uint age = (rawVoxel >> 24) & 0xFFu;
@@ -485,9 +1110,23 @@ void main() {
                     hitType = 0u; // Skip this hit, let the ray keep traveling
                 } else {
                     hit = true;
-                    hitRawVoxel = rawVoxel; 
+                    hitRawVoxel = rawVoxel;
                     break;
                 }
+            } else if (isLocustType(hitType) || hitType == TREE_TRUNK) {
+                // Neither of these fills its voxel. A swarm is bodies and gaps; a trunk is a stem or
+                // two with air around it. The ray drops into the voxel's own sub-lattice, and if it
+                // threads all the way through without meeting anything then this was never a hit and
+                // it carries on to whatever is behind -- the same "keep traveling" the steam dither
+                // above does, just resolved geometrically rather than by a coin flip.
+                uint kind = (hitType == TREE_TRUNK) ? SUB_TRUNK : SUB_LOCUST;
+                if (subMarch(voxelPos, rayOrigin, rayDir, kind, hitType, normal,
+                             subT, subNormal, subCell)) {
+                    hit = true;
+                    hitRawVoxel = rawVoxel;
+                    break;
+                }
+                hitType = 0u;
             } else {
                 hit = true;
                 hitRawVoxel = rawVoxel; 
@@ -521,15 +1160,34 @@ void main() {
     if (hit) {
         if (length(normal) < 0.1f) normal = -rayDir;
         
-        vec3 ddaNormal = normal; 
-        normal = getSmoothNormal(voxelPos, hitType);
-        
+        vec3 ddaNormal = normal;
+
+        // Water gets the wider density-gradient normal; everything else keeps the cheap binary one,
+        // which is fine for materials that are not in constant motion at their surface.
+        if (hitType == 2u) {
+            normal = applyWaterWaves(getWaterNormal(voxelPos), voxelPos);
+        } else if (isLocustType(hitType) || hitType == TREE_TRUNK) {
+            // The sub-cube's own face. Smoothing across the voxel's neighbours would be actively
+            // wrong here: the surface the ray met is a small cube inside this voxel, and it has
+            // nothing to do with which voxels happen to sit next to this one.
+            normal = subNormal;
+        } else {
+            normal = getSmoothNormal(voxelPos);
+        }
+
+        // Waves are applied above rather than inside renderWater so they drive the diffuse term too,
+        // not just the highlight. Perturbing further down would light the surface flat and then gloss
+        // a wave pattern over it, which reads as a moving texture instead of moving water.
+        // ddaNormal is deliberately left alone -- it is the face the ray actually entered, and
+        // calculateShadow steps from it, so bending it would make the shadow ray start off-surface.
+
+
         vec3 sunDir = normalize(vec3(0.8f, 1.0f, 0.5f)); 
         vec3 sunColor = vec3(1.0f, 0.95f, 0.85f); 
         vec3 ambientColor = vec3(0.15f, 0.2f, 0.3f); 
         
         float diffuse = max(dot(normal, sunDir), 0.0f);
-        float shadow = calculateShadow(voxelPos, ddaNormal, sunDir);
+        float shadow = calculateShadow(voxelPos, ddaNormal, sunDir, ceilingY);
         vec3 baseLighting = ambientColor + (sunColor * diffuse * shadow);
         
         vec3 finalVoxelColor = vec3(1.0f, 0.0f, 1.0f) * baseLighting; 
@@ -553,13 +1211,43 @@ void main() {
             case 6u:
                 finalVoxelColor = renderSteam(voxelPos, baseLighting);
                 break;
+            case 8u:
+            case 9u:
+            case 10u:
+            case 11u:
+                finalVoxelColor = renderLava(hitRawVoxel, voxelPos);
+                break;
+            case 12u:
+                finalVoxelColor = renderDarkStone(voxelPos, baseLighting);
+                break;
+            case 13u:
+            case 14u:
+            case 15u:
+            case 16u:
+            case 17u:
+                finalVoxelColor = renderLocust(voxelPos, subCell, baseLighting);
+                break;
+            case 18u:
+                finalVoxelColor = renderTrunk(voxelPos, subCell, baseLighting);
+                break;
+            case 19u:
+                finalVoxelColor = renderLeaf(hitRawVoxel, voxelPos, baseLighting);
+                break;
+            // No case for type 7: the march above never reports a black hole voxel as a hit, because
+            // the body is drawn as a ball further down rather than as the voxel it is anchored to.
             default:
                 break;
         }
-        
-        float distanceTraveled = length(vec3(voxelPos) + vec3(0.5f) - rayOrigin);
-        float MAX_VISIBILITY = max(300.0f, aabbHit.y * 1.5f);
-        finalVoxelColor *= mix(1.0f, 0.0f, clamp(distanceTraveled / MAX_VISIBILITY, 0.0f, 1.0f)); 
+
+        finalVoxelColor = accretionGlow(finalVoxelColor, voxelPos);
+
+        // rayDir is normalised, so the sub-march's ray parameter is already a distance -- and it is
+        // the exact one, where the voxel-centre estimate every other material uses would put a
+        // swarm's bodies up to half a voxel out against the clouds and the cursor.
+        float distanceTraveled = (isLocustType(hitType) || hitType == TREE_TRUNK)
+            ? subT
+            : length(vec3(voxelPos) + vec3(0.5f) - rayOrigin);
+        finalVoxelColor *= mix(1.0f, 0.0f, clamp(distanceTraveled / MAX_VISIBILITY, 0.0f, 1.0f));
         
         finalDist = distanceTraveled;
         finalColor = vec4(finalVoxelColor, 1.0f);
@@ -567,6 +1255,53 @@ void main() {
     } else if (hitBackBox) {
         finalDist = aabbHit.y;
         finalColor = vec4(1.0f, 0.2f, 0.2f, 1.0f);
+    }
+
+    // --- BLACK HOLE BODIES: a hole's body is a ball of radius level+0.5, but only its CENTRE voxel
+    // is stored in the grid -- the rest is empty space the physics keeps swept clear. So the body is
+    // intersected analytically here, the way the cloud layer is, instead of being marched. Testing 8
+    // table slots at each of the DDA loop's 400 steps would cost thousands of reads per pixel to
+    // draw a shape one ray/sphere test resolves exactly, and it would come out voxel-stepped besides,
+    // where the point of a sphere is that it is smooth. ---
+    if (blackHoleCount > 0u) {
+        uint seenHoles = 0u;
+        for (int i = 0; i < BLACK_HOLE_MAX && seenHoles < blackHoleCount; i++) {
+            uint code = blackHoles[i];
+            if (code == 0u) continue;
+            seenHoles++;
+
+            // Purge holes size straight off their remaining mass rather than the growth curve, so
+            // they shrink as a smooth ramp. Must match bhLevelFor in falling_sand.comp.
+            uint bodyLevel = ((code & BH_PURGE) != 0u)
+                ? uint(float(tuning.purgeLevel) * clamp(float(blackHoleMass[i]) / float(max(tuning.purgeMass, 1u)), 0.0f, 1.0f))
+                : bhLevel(blackHoleMass[i]);
+            float bodyRadius = bhBodyRadius(bodyLevel);
+            // +0.5 puts the centre at the middle of its voxel rather than its min corner, so the
+            // ball is concentric with the region the physics clears.
+            vec3 center = vec3(bhDecode(code)) + vec3(0.5f);
+
+            vec3 oc = rayOrigin - center;
+            float b = dot(oc, rayDir);
+            float c = dot(oc, oc) - bodyRadius * bodyRadius;
+            float disc = b * b - c;
+            if (disc <= 0.0f) continue;
+
+            float sq = sqrt(disc);
+            float tNear = -b - sq;
+            float tFar = -b + sq;
+            if (tFar <= 0.0f) continue;
+
+            float bodyDist = max(0.0f, tNear);
+            if (bodyDist < finalDist) {
+                vec3 surfaceNormal = normalize(rayOrigin + rayDir * bodyDist - center);
+
+                vec3 bodyColor = renderBlackHole(surfaceNormal, rayDir);
+                bodyColor *= mix(1.0f, 0.0f, clamp(bodyDist / MAX_VISIBILITY, 0.0f, 1.0f));
+
+                finalColor = vec4(bodyColor, 1.0f);
+                finalDist = bodyDist;
+            }
+        }
     }
 
     // --- CLOUD LAYER: a fixed population of clouds constantly drifting along +X and wrapping,
@@ -591,7 +1326,7 @@ void main() {
         }
 
         if (groupAlpha > 0.002f) {
-            vec2 footprintClip = intersectAABB(rayOrigin, rayDir, vec3(0.0f, -1000000.0f, 0.0f), vec3(128.0f, 1000000.0f, 128.0f));
+            vec2 footprintClip = intersectAABB(rayOrigin, rayDir, vec3(0.0f, -1000000.0f, 0.0f), vec3(float(WIDTH), 1000000.0f, float(DEPTH)));
             vec3 cloudSunDir = normalize(vec3(0.8f, 1.0f, 0.5f));
 
             float bestT = 1000000.0f;
@@ -601,17 +1336,11 @@ void main() {
 
             int cloudN = int(min(tuning.cloudCount, uint(CLOUD_MAX)));
             for (int i = 0; i < cloudN; i++) {
-                vec2 centerXZ = cloudCenterXZ(i, pc.time);
-                float edgeFade = cloudEdgeFade(centerXZ);
+                float edgeFade = cloudFade(i);
                 if (edgeFade <= 0.01f) continue;
 
-                float h3 = hash(vec3(float(i), 133.0f, 7.0f));
+                vec3 center = cloudCenter(i);
                 vec3 radii = cloudRadii(i);
-                vec3 center = vec3(
-                    centerXZ.x,
-                    128.0f + radii.y + h3 * 4.0f,   // bottom edge sits right at the cube's top, 0-4 units of gap
-                    centerXZ.y
-                );
 
                 vec3 oc = (rayOrigin - center) / radii;
                 vec3 rdn = rayDir / radii;
@@ -627,6 +1356,13 @@ void main() {
 
                     float clippedNear = max(t0, footprintClip.x);
                     float clippedFar = min(t1, footprintClip.y);
+
+                    // Only the nearest cloud is ever drawn, and only if it is in front of the
+                    // geometry, so a cloud whose whole interval starts behind either cannot change
+                    // the result -- and marching it is up to maxCloudSteps of DDA for an answer
+                    // already known. Exact rather than approximate: clippedNear is a lower bound on
+                    // anything this cloud could produce, and both tests below it are strict.
+                    if (clippedNear >= min(bestT, finalDist)) continue;
 
                     if (clippedNear < clippedFar && clippedFar > 0.0f) {
                         float cloudTHit;
@@ -656,58 +1392,80 @@ void main() {
         
         vec3 boxMin = vec3(float(pc.spawnX - halfDistMin), float(pc.spawnY - halfDistMin), float(pc.spawnZ - halfDistMin));
         vec3 boxMax = vec3(float(pc.spawnX + halfDistMax + 1), float(pc.spawnY + halfDistMax + 1), float(pc.spawnZ + halfDistMax + 1));
-        vec2 cursorHit = intersectAABB(rayOrigin, rayDir, boxMin, boxMax);
-        
-        if (cursorHit.x < cursorHit.y && cursorHit.y > 0.0f) {
-            float distFront = max(0.0f, cursorHit.x);
-            float distBack = cursorHit.y;
-            
-            vec3 hitPosFront = rayOrigin + rayDir * distFront;
-            vec3 hitPosBack = rayOrigin + rayDir * distBack;
-            
-            float e = 0.15f; 
-            
-            bool onFrontEdge = false;
-            int edgesFront = 0;
-            if (hitPosFront.x < boxMin.x + e || hitPosFront.x > boxMax.x - e) edgesFront++;
-            if (hitPosFront.y < boxMin.y + e || hitPosFront.y > boxMax.y - e) edgesFront++;
-            if (hitPosFront.z < boxMin.z + e || hitPosFront.z > boxMax.z - e) edgesFront++;
-            if (edgesFront >= 2) onFrontEdge = true;
 
-            bool onBackEdge = false;
-            int edgesBack = 0;
-            if (hitPosBack.x < boxMin.x + e || hitPosBack.x > boxMax.x - e) edgesBack++;
-            if (hitPosBack.y < boxMin.y + e || hitPosBack.y > boxMax.y - e) edgesBack++;
-            if (hitPosBack.z < boxMin.z + e || hitPosBack.z > boxMax.z - e) edgesBack++;
-            if (edgesBack >= 2) onBackEdge = true;
-            
-            vec3 cursorColor;
-            if (pc.spawnType == 0) {
-                cursorColor = vec3(0.1f, 0.1f, 0.1f);
-            } else if (pc.spawnType == 2) {
-                cursorColor = vec3(0.2f, 0.6f, 1.0f);
-            } else if (pc.spawnType == 3) {
-                cursorColor = vec3(0.6f, 0.6f, 0.6f);
-            } else if (pc.spawnType == 4) {
-                cursorColor = vec3(0.5f, 0.35f, 0.15f);
-            } else if (pc.spawnType == 5) {
-                cursorColor = vec3(1.0f, 0.5f, 0.0f);
-            } else if (pc.spawnType == 6) {
-                cursorColor = vec3(0.9f, 0.9f, 0.9f);
-            } else {
-                cursorColor = vec3(1.0f, 0.9f, 0.2f);
+        vec3 cursorColor = MATERIAL_CURSOR_COLOR[clamp(pc.spawnType, 0, MATERIAL_COUNT - 1)];
+
+        if (pc.spawnShape == 1) {
+            // Matched to inBrush() in falling_sand.comp: same centre, same radius, so the outline
+            // encloses exactly the voxels a click would write.
+            vec3 sphereCenter = (boxMin + boxMax) * 0.5f;
+            float sphereRadius = float(pc.spawnSize) * 0.5f;
+
+            vec3 oc = rayOrigin - sphereCenter;
+            float b = dot(oc, rayDir);
+            float c = dot(oc, oc) - sphereRadius * sphereRadius;
+            float disc = b * b - c;
+
+            if (disc > 0.0f) {
+                float sq = sqrt(disc);
+                float tNear = -b - sq;
+                float tFar = -b + sq;
+
+                if (tFar > 0.0f) {
+                    // Inside the brush the near hit is behind the camera, so shade from the far
+                    // side and dim it -- the same read as the box cursor's back edges.
+                    bool inside = tNear <= 0.0f;
+                    float cursorDist = inside ? tFar : tNear;
+                    vec3 shellNormal = normalize((rayOrigin + rayDir * cursorDist) - sphereCenter);
+
+                    // 1 where the ray grazes the shell, which is exactly the silhouette. Shading
+                    // the rim rather than filling the sphere keeps the world visible through it.
+                    float rim = 1.0f - abs(dot(shellNormal, rayDir));
+                    float alpha = mix(0.12f, 0.9f, smoothstep(0.55f, 0.97f, rim)) * (inside ? 0.35f : 1.0f);
+
+                    if (cursorDist < finalDist) {
+                        finalColor.rgb = mix(finalColor.rgb, cursorColor, alpha);
+                    }
+                }
             }
-            
-            if (onFrontEdge && distFront < finalDist) {
-                finalColor.rgb = mix(finalColor.rgb, cursorColor, 0.9f);
-            } else if (onBackEdge && distBack < finalDist) {
-                finalColor.rgb = mix(finalColor.rgb, cursorColor, 0.2f);
-            } else if (distFront < finalDist) {
-                finalColor.rgb = mix(finalColor.rgb, cursorColor, 0.15f);
+        } else {
+            vec2 cursorHit = intersectAABB(rayOrigin, rayDir, boxMin, boxMax);
+
+            if (cursorHit.x < cursorHit.y && cursorHit.y > 0.0f) {
+                float distFront = max(0.0f, cursorHit.x);
+                float distBack = cursorHit.y;
+
+                vec3 hitPosFront = rayOrigin + rayDir * distFront;
+                vec3 hitPosBack = rayOrigin + rayDir * distBack;
+
+                float e = 0.15f;
+
+                bool onFrontEdge = false;
+                int edgesFront = 0;
+                if (hitPosFront.x < boxMin.x + e || hitPosFront.x > boxMax.x - e) edgesFront++;
+                if (hitPosFront.y < boxMin.y + e || hitPosFront.y > boxMax.y - e) edgesFront++;
+                if (hitPosFront.z < boxMin.z + e || hitPosFront.z > boxMax.z - e) edgesFront++;
+                if (edgesFront >= 2) onFrontEdge = true;
+
+                bool onBackEdge = false;
+                int edgesBack = 0;
+                if (hitPosBack.x < boxMin.x + e || hitPosBack.x > boxMax.x - e) edgesBack++;
+                if (hitPosBack.y < boxMin.y + e || hitPosBack.y > boxMax.y - e) edgesBack++;
+                if (hitPosBack.z < boxMin.z + e || hitPosBack.z > boxMax.z - e) edgesBack++;
+                if (edgesBack >= 2) onBackEdge = true;
+
+                if (onFrontEdge && distFront < finalDist) {
+                    finalColor.rgb = mix(finalColor.rgb, cursorColor, 0.9f);
+                } else if (onBackEdge && distBack < finalDist) {
+                    finalColor.rgb = mix(finalColor.rgb, cursorColor, 0.2f);
+                } else if (distFront < finalDist) {
+                    finalColor.rgb = mix(finalColor.rgb, cursorColor, 0.15f);
+                }
             }
         }
     }
-    
+
+
     if (hitFrontBox) {
         finalColor = vec4(1.0f, 0.2f, 0.2f, 1.0f);
     }

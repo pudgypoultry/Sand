@@ -20,6 +20,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\Config.cpp" />
+    <ClCompile Include="src\ConfigSchema.cpp" />
+    <ClCompile Include="src\AssetPaths.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\VulkanContext.cpp" />
     <ClCompile Include="src\VulkanBuffer.cpp" />
@@ -35,7 +37,9 @@
     <ClCompile Include="vendor\imgui\imgui_widgets.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="include\Config.hpp" />
+    <ClInclude Include="include\Config.hpp" />
+    <ClInclude Include="include\AssetPaths.hpp" />
+    <ClInclude Include="include\ConfigSchema.hpp" />
     <ClInclude Include="include\Particle.hpp" />
     <ClInclude Include="include\UIManager.hpp" />
     <ClInclude Include="include\VulkanBuffer.hpp" />
@@ -162,6 +166,11 @@
 "%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)shaders\screen.vert" -o "$(ProjectDir)shaders\screen.vert.spv"
 "%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)shaders\raymarch.frag" -o "$(ProjectDir)shaders\raymarch.frag.spv"</Command>
     </PreBuildEvent>
+      <PostBuildEvent>
+      <Command>if not exist "$(OutDir)shaders" mkdir "$(OutDir)shaders"
+copy /Y "$(ProjectDir)shaders\*.spv" "$(OutDir)shaders"
+copy /Y "$(ProjectDir)config.txt" "$(OutDir)config.txt"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -172,15 +181,27 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>;$(ProjectDir)vendor\imgui;$(ProjectDir)vendor\imgui\backends</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)vendor\glfw\include;$(ProjectDir)vendor\glm;$(VULKAN_SDK)\Include;$(ProjectDir)vendor\imgui;$(ProjectDir)vendor\imgui\backends</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(ProjectDir)vendor\glfw\lib-vc2022; $(VULKAN_SDK)\Lib</AdditionalLibraryDirectories>
+      <AdditionalDependencies>$(CoreLibraryDependencies);%(AdditionalDependencies); vulkan-1.lib; glfw3.lib</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
     </Manifest>
+    <PreBuildEvent>
+      <Command>"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)shaders\falling_sand.comp" -o "$(ProjectDir)shaders\falling_sand.spv"
+"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)shaders\screen.vert" -o "$(ProjectDir)shaders\screen.vert.spv"
+"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)shaders\raymarch.frag" -o "$(ProjectDir)shaders\raymarch.frag.spv"</Command>
+    </PreBuildEvent>
+      <PostBuildEvent>
+      <Command>if not exist "$(OutDir)shaders" mkdir "$(OutDir)shaders"
+copy /Y "$(ProjectDir)shaders\*.spv" "$(OutDir)shaders"
+copy /Y "$(ProjectDir)config.txt" "$(OutDir)config.txt"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
