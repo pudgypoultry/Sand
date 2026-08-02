@@ -92,6 +92,9 @@ The profiler (top right) breaks the frame into CPU, compute shader and fragment 
 three do not add up to the frame time and are not meant to -- they are three measured durations.
 
 
+Credits.txt in this folder lists the libraries Sand is built on and their licences.
+
+
 REPORTING SOMETHING
 -------------------
 Useful to include:

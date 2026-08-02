@@ -14,24 +14,26 @@ their include paths or libraries set, so they will not build — pick x64 in the
 ## Third-party dependencies are not in the repository
 
 `Sand/vendor/` is gitignored, so a fresh clone will not build until you put the dependencies back.
-Three are needed, in exactly these locations:
+Two are needed, in exactly these locations:
 
 ```
 Sand/vendor/glfw/include/GLFW/...      GLFW headers
 Sand/vendor/glfw/lib-vc2022/glfw3.lib  GLFW, the static library (not glfw3dll.lib)
-Sand/vendor/glm/glm/...                GLM headers, header-only
 Sand/vendor/imgui/*.cpp,*.h            Dear ImGui core
 Sand/vendor/imgui/backends/            imgui_impl_glfw.* and imgui_impl_vulkan.*
 ```
 
-GLFW's Windows binary release already has the `include/` and `lib-vc2022/` layout above, so it can
-be unpacked as-is. GLM and Dear ImGui are source drops from their repositories.
+GLFW's Windows binary release already has the `include/` and `lib-vc2022/` layout above, so it can be
+unpacked as-is. Dear ImGui is a source drop from its repository.
+
+GLM is referenced by `AdditionalIncludeDirectories` but no source file includes a GLM header or
+names anything in its namespace, so nothing needs it and it is not credited in `Sand/Credits.txt`.
+Dropping it from the include paths would make that plain.
 
 If you want a clone to build without this step, the options are to commit `vendor/` (simple, adds a
-few MB, needs the licences attributing in `Sand/Credits.txt`) or to add the three as git submodules
-(keeps the repo small, but GLFW would then need building from source rather than using its prebuilt
-`.lib`). Both are a deliberate choice rather than something to drift into, which is why the
-dependencies are currently just absent.
+few MB) or to add them as git submodules (keeps the repo small, but GLFW would then need building
+from source rather than using its prebuilt `.lib`). Both are a deliberate choice rather than
+something to drift into, which is why the dependencies are currently just absent.
 
 ## Building
 
@@ -89,10 +91,15 @@ powershell -ExecutionPolicy Bypass -File tools\package.ps1
 ```
 
 This builds Release x64 and writes `dist\Sand-<date>-x64.zip` containing the executable, the three
-compiled shaders, `config.txt`, and a README for the tester. Unzipping and running `Sand.exe` is
+compiled shaders, `config.txt`, `Credits.txt`, and a README for the tester. Unzipping and running `Sand.exe` is
 the whole of it at their end.
 
-Two things the script enforces rather than assumes:
+Three things the script enforces rather than assumes:
+
+- **`Credits.txt` is present and non-empty.** GLFW's zlib licence and Dear ImGui's MIT licence both
+  require their notices to accompany a distribution, and a binary-only zip is a distribution. It is
+  the one thing in this process that would actually breach a licence, so the script refuses to
+  package without it rather than quietly leaving it out.
 
 - **Release, not Debug.** A Debug build links the debug CRT, which Microsoft does not license for
   redistribution and which simply will not start on a machine without Visual Studio. Handing over

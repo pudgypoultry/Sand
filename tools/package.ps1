@@ -145,6 +145,16 @@ Copy-Item (Join-Path $projectDir "config.txt") $stage
 $readme = Join-Path $repoRoot "tools\TESTER_README.txt"
 if (Test-Path $readme) { Copy-Item $readme (Join-Path $stage "README.txt") }
 
+# Third-party notices, and this one is not optional. GLFW's zlib licence and Dear ImGui's MIT
+# licence both require their notices to accompany a distribution of the software, and a
+# binary-only zip is a distribution. Shipping the exe without this file is the one thing here that
+# would actually breach either licence, so the package refuses to build rather than quietly omit it.
+$credits = Join-Path $projectDir "Credits.txt"
+if (-not (Test-Path $credits) -or (Get-Item $credits).Length -eq 0) {
+    throw "Sand\Credits.txt is missing or empty. GLFW and Dear ImGui both require their licence notices to ship with the binary."
+}
+Copy-Item $credits (Join-Path $stage "Credits.txt")
+
 # ---------------------------------------------------------------------------------------------
 # Zip
 # ---------------------------------------------------------------------------------------------
