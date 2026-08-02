@@ -529,17 +529,27 @@ private:
 
         // Pinned below the scroll region, so Apply is reachable without scrolling to the end of
         // whichever tab happens to be open.
+        // Both buttons reload, and a reload is a reload: the world is wiped and the camera goes
+        // back to its framing pose either way. Revert differs only in WHICH values it reloads --
+        // it throws the pending edits away and reloads what is already live -- so it doubles as the
+        // plain "start over" this screen would otherwise not have.
         if (ImGui::Button("Apply and Reload")) m_applyOptions = true;
         ImGui::SameLine();
-        if (ImGui::Button("Revert")) m_pendingTuning = m_liveTuning;
+        if (ImGui::Button("Revert and Reload")) {
+            m_pendingTuning = m_liveTuning;
+            m_applyOptions = true;
+        }
         ImGui::SameLine();
-        if (ImGui::Button("Defaults")) m_pendingTuning = TuningParams{};
+        // Loads the built-in values into the sliders WITHOUT applying them, so they can be looked at
+        // and adjusted before anything is committed. Apply is still the only thing that acts.
+        if (ImGui::Button("Load Defaults")) m_pendingTuning = TuningParams{};
 
         if (m_pendingTuning.gridWidth != m_liveTuning.gridWidth) {
             ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
-                               "Grid size changed: applying rebuilds the world and clears it.");
+                               "Grid size changed: the world will be rebuilt at %u^3.",
+                               m_pendingTuning.gridWidth);
         } else {
-            ImGui::TextDisabled("Applying also writes config.txt.");
+            ImGui::TextDisabled("Either button clears the world and writes config.txt.");
         }
 
         ImGui::End();

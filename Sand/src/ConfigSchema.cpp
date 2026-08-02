@@ -147,26 +147,6 @@ const ConfigField kConfigFields[] = {
       offsetof(TuningParams, blackHoleDecayRate), 1.0, 5000.0,
       "mass shed per dispatch once starving" },
 
-    // ---- Purge ----
-    { "Purge", "purge.level", "Level", FieldKind::UInt,
-      offsetof(TuningParams, purgeLevel), 1.0, 32.0,
-      "body radius at full mass -- 10 is 21 voxels across" },
-    { "Purge", "purge.mass", "Mass", FieldKind::UInt,
-      offsetof(TuningParams, purgeMass), 1.0, 100000.0,
-      "starting mass, and the divisor the size ramp is measured against" },
-    { "Purge", "purge.starve_grace", "Starve grace", FieldKind::UInt,
-      offsetof(TuningParams, purgeStarveGrace), 0.0, 2000.0,
-      "dispatches with nothing left to catch before it starts shrinking" },
-    { "Purge", "purge.decay_rate", "Decay rate", FieldKind::UInt,
-      offsetof(TuningParams, purgeDecayRate), 1.0, 5000.0,
-      "mass shed per dispatch while shrinking; 10000/200 = ~0.8s" },
-    { "Purge", "purge.orbit_speed", "Orbit speed", FieldKind::Float,
-      offsetof(TuningParams, purgeOrbitSpeed), 0.0, 20.0,
-      nullptr },
-    { "Purge", "purge.infall", "Infall", FieldKind::Float,
-      offsetof(TuningParams, purgeInfall), 0.0, 1.0,
-      nullptr },
-
     // ---- Water ----
     { "Water", "water.shadow_transmit", "Shadow transmit", FieldKind::Float,
       offsetof(TuningParams, waterShadowTransmit), 0.0, 1.0,
@@ -312,6 +292,29 @@ const ConfigField kConfigFields[] = {
     { "Trees", "tree.trunk_radius", "Trunk radius", FieldKind::Float,
       offsetof(TuningParams, treeTrunkRadius), 0.02, 0.5,
       "stem radius in voxel units" },
+
+    // ---- Resetting ----
+    // Last on purpose. These are the parameters of the Clear Grid button's purge -- the giant black
+    // hole that eats the world -- so they describe how the simulation ENDS rather than how any part
+    // of it behaves, and they have no business sitting between the black hole and the water.
+    { "Resetting", "purge.level", "Level", FieldKind::UInt,
+      offsetof(TuningParams, purgeLevel), 1.0, 32.0,
+      "body radius at full mass -- 10 is 21 voxels across" },
+    { "Resetting", "purge.mass", "Mass", FieldKind::UInt,
+      offsetof(TuningParams, purgeMass), 1.0, 100000.0,
+      "starting mass, and the divisor the size ramp is measured against" },
+    { "Resetting", "purge.starve_grace", "Starve grace", FieldKind::UInt,
+      offsetof(TuningParams, purgeStarveGrace), 0.0, 2000.0,
+      "dispatches with nothing left to catch before it starts shrinking" },
+    { "Resetting", "purge.decay_rate", "Decay rate", FieldKind::UInt,
+      offsetof(TuningParams, purgeDecayRate), 1.0, 5000.0,
+      "mass shed per dispatch while shrinking; 10000/200 = ~0.8s" },
+    { "Resetting", "purge.orbit_speed", "Orbit speed", FieldKind::Float,
+      offsetof(TuningParams, purgeOrbitSpeed), 0.0, 20.0,
+      nullptr },
+    { "Resetting", "purge.infall", "Infall", FieldKind::Float,
+      offsetof(TuningParams, purgeInfall), 0.0, 1.0,
+      nullptr },
 };
 
 const size_t kConfigFieldCount = sizeof(kConfigFields) / sizeof(kConfigFields[0]);

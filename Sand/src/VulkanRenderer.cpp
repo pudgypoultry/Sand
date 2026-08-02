@@ -133,12 +133,19 @@ void VulkanRenderer::uploadTuning() {
 
 // applyOptions: takes the options screen's edited copy and makes it the config the simulation runs on.
 //
-// Almost everything here is free: the shaders read their tunables out of a uniform buffer every
-// tick, so rewriting it is the whole of the change. Grid size is the one exception, because it sizes
-// the two storage buffers -- and resizing those means new VkBuffer handles, a descriptor set that
-// still points at the old ones, and a world whose contents no longer describe a cube of the new
-// dimensions. That path therefore reallocates, re-points and reseeds, which is why it is the one
-// change that clears the world and why the screen warns before it does.
+// This is a reload, not a live patch, and it always ends with an empty world and the camera back at
+// its framing pose. Most tunables would not strictly need that -- the shaders read them out of a
+// uniform buffer every tick, so rewriting it is the whole of the change -- but a world that is
+// halfway through running under the OLD numbers is not a fair test of the new ones. Soil that was
+// wet because rain used to be heavier, or a forest grown at a spread rate you have just halved, both
+// keep answering the old question. Clearing makes the change mean what it says.
+//
+// The wipe is the direct one seedParticles does, not the purge black hole the Clear Grid button
+// drops. The purge is a spectacle that takes seconds to swallow the world; applying settings should
+// simply have applied them by the time the button comes back up.
+//
+// Grid size is still the one change that goes further, because it sizes the two storage buffers --
+// and resizing those means new VkBuffer handles and a descriptor set still pointing at the old ones.
 void VulkanRenderer::applyOptions(const TuningParams& requested) {
     // Everything below either destroys a buffer the GPU may still be reading or rewrites a
     // descriptor pointing at one. Neither is safe while work is in flight.
@@ -164,18 +171,28 @@ void VulkanRenderer::applyOptions(const TuningParams& requested) {
     if (shapeChanged) {
         createWorldBuffers();   // the old buffers are freed by the unique_ptr assignment
         writeDescriptorSet();   // ...which is exactly why the descriptors must be rewritten
-        seedParticles();
+
+        // Tells the camera how big the world is now. It reframes as a side effect, which the
+        // unconditional reset below would do anyway -- but the extents themselves have to be set
+        // here or the default pose would still be framed against the old size.
         window->setWorldExtents((float)config.tuning.gridWidth,
                                 (float)config.tuning.gridHeight,
-                                (float)config.tuning.gridDepth);  // this also reframes the camera
+                                (float)config.tuning.gridDepth);
     }
+
+    // The hard reset, on every apply rather than only on a resize. seedParticles zeroes the grid and
+    // the whole stats block with it, so the water level, the rain state machine, the cloud charge and
+    // the black hole table all start from nothing too -- none of which would be true of a world that
+    // had merely had its tunables swapped underneath it.
+    seedParticles();
+    window->resetCamera();
 
     uploadTuning();
     saveConfig("config.txt", config);
     uiManager.setTuning(config.tuning);
 
-    std::cout << "Options applied" << (shapeChanged ? " (world rebuilt at " : " (")
-              << (shapeChanged ? std::to_string(config.tuning.gridWidth) + "^3)" : "live)") << ".\n";
+    std::cout << "Options applied; world cleared at " << config.tuning.gridWidth << "^3"
+              << (shapeChanged ? " (buffers reallocated).\n" : ".\n");
 }
 
 // createWorldBuffers: allocates the two buffers whose size depends on the world's dimensions.
