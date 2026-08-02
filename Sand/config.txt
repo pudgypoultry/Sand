@@ -44,7 +44,7 @@ render.shadow_max_steps=256
 #                    storm ends a touch early and the level creeps down. 0.2 = 20% extra.
 rain.start_layers=2
 rain.drops_per_tick=50
-rain.overshoot=0.2
+rain.overshoot=0.05
 rain.darken_delay=6.0
 
 # --- Clouds ---
@@ -60,7 +60,7 @@ cloud.drift_speed=2.0
 cloud.edge_fade_dist=20.0
 cloud.charge_saturation=20000.0
 cloud.charge_ease_rate=0.02
-cloud.min_alpha=0.05
+cloud.min_alpha=0.0
 cloud.max_alpha=0.9
 cloud.voxel_size=3.0
 cloud.edge_threshold_min=0.15

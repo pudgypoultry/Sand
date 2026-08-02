@@ -38,7 +38,7 @@ struct TuningParams {
     // pooling). 0.2 delivers 20% past the measured deficit to absorb that.
     uint32_t rainStartLayers = 2;
     uint32_t rainDropsPerTick = 50;
-    float rainOvershoot = 0.2f;
+    float rainOvershoot = 0.05f;
     float rainDarkenDelay = 6.0f;
     // --- Clouds ---
     // A fixed population of cloudCount clouds drifts along +X and wraps, dissolving over
@@ -51,7 +51,7 @@ struct TuningParams {
     float cloudEdgeFadeDist = 20.0f;
     float cloudChargeSaturation = 20000.0f;
     float cloudChargeEaseRate = 0.02f; // per dispatch, so it is framerate-dependent by design
-    float cloudMinAlpha = 0.05f;       // set to 0 for a completely clear sky until steam appears
+    float cloudMinAlpha = 0.00f;       // set to 0 for a completely clear sky until steam appears
     float cloudMaxAlpha = 0.9f;
     float cloudVoxelSize = 3.0f;
     float cloudEdgeThresholdMin = 0.15f;
