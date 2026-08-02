@@ -52,6 +52,26 @@ directory, and Visual Studio defaults that to the project directory, where both 
 F5 works and why double-clicking `Sand.exe` in `x64\Release` does not — the executable is not next
 to its assets there.
 
+## If the link fails with missing Config symbols
+
+If a build ever fails with `unresolved external symbol` for `loadConfig`, `saveConfig`,
+`sanitizeTuning`, `applyWorldShape` and `autoMarchSteps` — all of them, and only them — the cause is
+an object file collision rather than anything wrong with the code.
+
+MSBuild names each object after its source file's **base** name, discarding the directory, so two
+`ClCompile` items sharing a base name write the same `.obj` and overwrite each other. With `/m` they
+compile in parallel and which one survives is a race, so the build works, then the identical build
+fails to link. `Sand/x64/*/Config.obj` is left holding whichever version won.
+
+The instance that actually happened was `include\Config.hpp` listed as `ClCompile` instead of
+`ClInclude`. It compiled to `Config.obj`, the same object `src\Config.cpp` produces, and a header's
+object has none of the definitions in it. It is fixed, and `tools/package.ps1` now refuses to build
+if either shape reappears — a non-source file under `ClCompile`, or two sources sharing a base name.
+
+Recovering from a build already in that state needs a **Rebuild**, not a Build; the bad `Config.obj`
+is newer than its source, so an incremental build leaves it alone. Deleting `Sand/x64` does the same
+thing.
+
 ## Packaging for someone else
 
 ```

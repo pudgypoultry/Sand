@@ -36,7 +36,7 @@
     <ClCompile Include="vendor\imgui\imgui_widgets.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="include\Config.hpp" />
+    <ClInclude Include="include\Config.hpp" />
     <ClInclude Include="include\ConfigSchema.hpp" />
     <ClInclude Include="include\Particle.hpp" />
     <ClInclude Include="include\UIManager.hpp" />

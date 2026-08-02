@@ -58,6 +58,32 @@ if (-not $SkipBuild) {
         throw "VULKAN_SDK is not set. Install the Vulkan SDK (vulkan.lunarg.com) and reopen the shell."
     }
 
+    # Two guards against a failure mode that cost a build once already: MSBuild derives an object
+    # file name from each ClCompile item's BASE name, dropping the directory, so two items sharing a
+    # base name write the same .obj and silently overwrite each other. With /m they do it in
+    # parallel, so which one survives is a race -- the build works, then the identical build fails to
+    # link, and the error names missing symbols rather than the duplicate that caused it.
+    #
+    # The instance that happened was a header listed as ClCompile: include\Config.hpp compiled to
+    # Config.obj, the same object src\Config.cpp produces, and the header's copy has no definitions
+    # in it. Both shapes are checked here because both produce the same baffling link error.
+    $proj = [xml](Get-Content $projectFile)
+    $items = @($proj.Project.ItemGroup.ClCompile | Where-Object { $_.Include } | ForEach-Object { $_.Include })
+
+    $notSource = $items | Where-Object { $_ -notmatch '\.(c|cc|cpp|cxx)$' }
+    if ($notSource) {
+        throw ("These are listed as ClCompile but are not source files, so each compiles to an " +
+               "object that may collide with a real one: " + ($notSource -join ", "))
+    }
+
+    $collisions = $items |
+        Group-Object { [System.IO.Path]::GetFileNameWithoutExtension($_).ToLower() } |
+        Where-Object { $_.Count -gt 1 }
+    if ($collisions) {
+        throw ("Two or more sources share a base name and would compile to the same .obj: " +
+               (($collisions | ForEach-Object { $_.Group -join " / " }) -join "; "))
+    }
+
     Write-Host "Building $Configuration|$Platform ..." -ForegroundColor Cyan
     & $msbuild $projectFile /p:Configuration=$Configuration /p:Platform=$Platform /m /v:minimal
     if ($LASTEXITCODE -ne 0) { throw "Build failed." }
