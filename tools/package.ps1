@@ -20,7 +20,8 @@ param(
     [string]$Configuration = "Release",
     [string]$Platform      = "x64",
     [string]$OutputDir     = "dist",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$Incremental
 )
 
 $ErrorActionPreference = "Stop"
@@ -84,8 +85,20 @@ if (-not $SkipBuild) {
                (($collisions | ForEach-Object { $_.Group -join " / " }) -join "; "))
     }
 
-    Write-Host "Building $Configuration|$Platform ..." -ForegroundColor Cyan
-    & $msbuild $projectFile /p:Configuration=$Configuration /p:Platform=$Platform /m /v:minimal
+    # Rebuild, not Build, and that is not just belt and braces for a release artifact.
+    #
+    # MSBuild decides whether to recompile by comparing timestamps, so an object file that is newer
+    # than its source is left alone no matter how wrong it is. That is a real state this project has
+    # been in: a bad Config.obj, written by a header that was mistakenly listed as a source, survived
+    # the fix to the project file and kept being linked, because fixing the project did not touch
+    # Config.cpp and so did not make it newer than the object. The build failed identically after the
+    # bug was fixed, which is about as misleading as a build gets.
+    #
+    # Pass -Incremental to skip this while iterating; it is only safe when nothing has changed
+    # underneath the object files.
+    $target = if ($Incremental) { "Build" } else { "Rebuild" }
+    Write-Host "$target $Configuration|$Platform ..." -ForegroundColor Cyan
+    & $msbuild $projectFile /t:$target /p:Configuration=$Configuration /p:Platform=$Platform /m /v:minimal
     if ($LASTEXITCODE -ne 0) { throw "Build failed." }
 }
 

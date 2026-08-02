@@ -68,9 +68,14 @@ The instance that actually happened was `include\Config.hpp` listed as `ClCompil
 object has none of the definitions in it. It is fixed, and `tools/package.ps1` now refuses to build
 if either shape reappears — a non-source file under `ClCompile`, or two sources sharing a base name.
 
-Recovering from a build already in that state needs a **Rebuild**, not a Build; the bad `Config.obj`
-is newer than its source, so an incremental build leaves it alone. Deleting `Sand/x64` does the same
-thing.
+Recovering from a build already in that state needs a **Rebuild**, not a Build, and this is the part
+that catches people out: fixing the project file does not touch `Config.cpp`, so `Config.cpp` is
+still older than the bad `Config.obj`, so MSBuild still skips it. The build fails identically after
+the bug is fixed. Deleting `Sand/x64` has the same effect as a Rebuild.
+
+`tools/package.ps1` therefore runs `/t:Rebuild` rather than `Build` — correct for a release artifact
+in any case, since an incrementally-linked package has uncertain provenance. Pass `-Incremental`
+while iterating if you want the faster path.
 
 ## Packaging for someone else
 
