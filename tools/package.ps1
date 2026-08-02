@@ -145,6 +145,16 @@ Copy-Item (Join-Path $projectDir "config.txt") $stage
 $readme = Join-Path $repoRoot "tools\TESTER_README.txt"
 if (Test-Path $readme) { Copy-Item $readme (Join-Path $stage "README.txt") }
 
+# Third-party notices, and this one is not optional. GLFW's zlib licence and Dear ImGui's MIT
+# licence both require their notices to accompany a distribution of the software, and a
+# binary-only zip is a distribution. Shipping the exe without this file is the one thing here that
+# would actually breach either licence, so the package refuses to build rather than quietly omit it.
+$credits = Join-Path $projectDir "Credits.txt"
+if (-not (Test-Path $credits) -or (Get-Item $credits).Length -eq 0) {
+    throw "Sand\Credits.txt is missing or empty. GLFW and Dear ImGui both require their licence notices to ship with the binary."
+}
+Copy-Item $credits (Join-Path $stage "Credits.txt")
+
 # ---------------------------------------------------------------------------------------------
 # Zip
 # ---------------------------------------------------------------------------------------------
@@ -153,8 +163,13 @@ if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip
 
 $sizeMb = [math]::Round((Get-Item $zip).Length / 1MB, 2)
+$hash   = (Get-FileHash $zip -Algorithm SHA256).Hash
+$exeHash = (Get-FileHash (Join-Path $stage "Sand.exe") -Algorithm SHA256).Hash
+
 Write-Host ""
 Write-Host "Packaged $zip ($sizeMb MB)" -ForegroundColor Green
+Write-Host "  zip SHA-256 $hash"
+Write-Host "  exe SHA-256 $exeHash"
 Write-Host "Contents:" -ForegroundColor Green
 Get-ChildItem $stage -Recurse -File | ForEach-Object {
     Write-Host ("  " + $_.FullName.Substring($stage.Length + 1))
@@ -162,3 +177,8 @@ Get-ChildItem $stage -Recurse -File | ForEach-Object {
 Write-Host ""
 Write-Host "The tester needs a Vulkan-capable GPU driver and the Microsoft Visual C++ 2015-2022" -ForegroundColor Yellow
 Write-Host "x64 Redistributable. See README.txt in the package." -ForegroundColor Yellow
+Write-Host ""
+Write-Host "This executable is unsigned, so Defender and SmartScreen may flag it on a machine that" -ForegroundColor Yellow
+Write-Host "has never seen it. See the false positives section of BUILDING.md; the exe hash above is" -ForegroundColor Yellow
+Write-Host "what to give a tester, or submit to VirusTotal, so they can check they have the file you" -ForegroundColor Yellow
+Write-Host "actually sent." -ForegroundColor Yellow

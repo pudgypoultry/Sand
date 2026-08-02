@@ -1,0 +1,47 @@
+// Sand.rc -- version resource.
+//
+// An executable with no VS_VERSIONINFO block at all is unusual for real software and ordinary for
+// something built to be thrown away, and heuristic scanners weight it accordingly. Adding it is not
+// a trick to dodge anything -- it is the metadata Windows shows in the file's Properties > Details
+// tab, and every shipped program has it. It costs a kilobyte and removes one of the few honest
+// signals a scanner has to work with when a binary is unsigned and brand new.
+//
+// Edit CompanyName and LegalCopyright to whatever is actually true for you.
+
+#include <winver.h>
+
+#define SAND_VERSION      0,1,0,0
+#define SAND_VERSION_STR  "0.1.0.0"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    SAND_VERSION
+ PRODUCTVERSION SAND_VERSION
+ FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
+#ifdef _DEBUG
+ FILEFLAGS      VS_FF_DEBUG
+#else
+ FILEFLAGS      0x0L
+#endif
+ FILEOS         VOS_NT_WINDOWS32
+ FILETYPE       VFT_APP
+ FILESUBTYPE    VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"   // US English, Unicode
+        BEGIN
+            VALUE "CompanyName",      "pudgypoultry"
+            VALUE "FileDescription",  "Sand - a 3D falling-sand simulation"
+            VALUE "FileVersion",      SAND_VERSION_STR
+            VALUE "InternalName",     "Sand"
+            VALUE "OriginalFilename", "Sand.exe"
+            VALUE "ProductName",      "Sand"
+            VALUE "ProductVersion",   SAND_VERSION_STR
+            VALUE "LegalCopyright",   "Copyright (C) 2026 pudgypoultry"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
