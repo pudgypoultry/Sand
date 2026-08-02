@@ -199,6 +199,10 @@ struct TuningParams {
     float lavaConsumeChance = 0.05f;   // chance per tick to eat a neighbour it has already dried out
     float lavaIgniteChance = 0.2f;     // chance per tick to set adjacent grass alight
     float darkStoneDryChance = 0.002f; // chance per tick for dark stone to shed one unit of water
+    // How fast a lava voxel walks the three-colour cycle around its own stage: cycles per second.
+    // Render-only, but it lives here with the rest of lava because it is a property of the material
+    // rather than of the camera.
+    float lavaChurnRate = 0.35f;
 
     // --- Locusts ---
     // A swarm voxel carrying a head count in its age byte, with the visual stage (types 13..17,

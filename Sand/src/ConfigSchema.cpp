@@ -189,6 +189,9 @@ const ConfigField kConfigFields[] = {
     { "Lava", "lava.dark_stone_dry_chance", "Dark stone dry chance", FieldKind::Float,
       offsetof(TuningParams, darkStoneDryChance), 0.0, 1.0,
       "chance per tick for dark stone to shed one unit of water" },
+    { "Lava", "lava.churn_rate", "Churn rate", FieldKind::Float,
+      offsetof(TuningParams, lavaChurnRate), 0.0, 4.0,
+      "Cycles per second that a lava voxel walks between its own stage's colour and its two neighbours'." },
 
     // ---- Locusts ----
     { "Locusts", "locust.tick_dispatches", "Tick dispatches", FieldKind::UInt,

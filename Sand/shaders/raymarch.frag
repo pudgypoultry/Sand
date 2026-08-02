@@ -98,6 +98,7 @@ layout(std140, binding = 2) uniform TuningParams {
     float lavaConsumeChance;
     float lavaIgniteChance;
     float darkStoneDryChance;
+    float lavaChurnRate;
     uint locustTickDispatches;
     uint locustStageSize;
     uint locustSpawnSize;
@@ -547,30 +548,73 @@ const vec3 MATERIAL_CURSOR_COLOR[MATERIAL_COUNT] = vec3[MATERIAL_COUNT](
     vec3(0.22f, 0.46f, 0.15f)  // 19 tree leaves
 );
 
+const uint LAVA_HOTTEST = 8u;
+
+// LAVA COLOUR RAMP
+// Four stage colours with one reach past each end, indexed by stage + 1 so the two out-of-range
+// entries sit where stage -1 and stage 4 would be. Those two are the point of the table rather than
+// padding on it: the hottest stage has no hotter neighbour to cycle toward and the coldest has no
+// colder one, so each is given a step further out -- brighter than molten at the top, dimmer than
+// crust at the bottom -- and the ends of the range get the same three-colour churn as the middle
+// instead of flattening out.
+//
+// Every entry is deliberately at or under 1.0 in its brightest channel. Lava is emissive, so what is
+// written here is what reaches the screen with no lighting term to scale it, and anything over 1.0
+// is not "brighter" -- it clips, and clipping red first is exactly how molten orange turns white.
+const vec3 LAVA_RAMP[6] = vec3[6](
+    vec3(1.00f, 0.62f, 0.22f), // beyond hottest -- the reach above stage 0
+    vec3(1.00f, 0.40f, 0.07f), // stage 0, hottest
+    vec3(0.96f, 0.29f, 0.05f), // stage 1
+    vec3(0.86f, 0.20f, 0.04f), // stage 2
+    vec3(0.70f, 0.13f, 0.03f), // stage 3, coldest before it turns to dark stone
+    vec3(0.44f, 0.07f, 0.02f)  // beyond coldest -- the reach below stage 3
+);
+
+// FUNCTION: lavaStageColor
+vec3 lavaStageColor(int stage) {
+    return LAVA_RAMP[clamp(stage + 1, 0, 5)];
+}
+
 // FUNCTION: renderLava
 // Emissive, like fire and unlike every lit material: molten rock is a light source, and running it
-// through baseLighting would leave the shaded side of a lava flow looking like wet clay.
+// through baseLighting would leave the shaded side of a flow looking like wet clay.
 //
-// Colour and brightness both come off the same coolness byte the simulation uses, so the four stage
-// types never have to agree with a separate palette -- a voxel's look and its remaining life are
-// literally the same number. Brightness falls much faster than hue, which is what sells cooling:
-// the crust goes dull well before it stops being red.
+// A voxel does not hold still at its stage's colour. It cycles: one third of the phase running from
+// the stage below it up to its own, one third from its own up to the stage above, and the last third
+// falling back to where it started. Stage 2 therefore walks 1 -> 2 -> 3 -> 1 forever. The mean over
+// a cycle is still the stage's own colour, so the cooling gradient across a flow reads exactly as it
+// did, but the surface is never flat.
+//
+// The phase is offset per voxel, which is what makes this churn rather than pulse. Without the
+// offset every lava voxel in the world would brighten and dim in unison -- one enormous throbbing
+// mass. With it, neighbours sit at different points in the same cycle, so the motion reads as
+// something moving THROUGH the flow.
 vec3 renderLava(uint rawVoxel, ivec3 voxelPos) {
-    float solidify = max(float(tuning.lavaStageSize) * 4.0f, 1.0f);
-    float t = clamp(float((rawVoxel >> 24) & 0xFFu) / solidify, 0.0f, 1.0f);
+    int stage = clamp(int(rawVoxel & 0xFFu) - int(LAVA_HOTTEST), 0, 3);
 
-    // Scaled so the hottest stage lands at roughly (1.0, 0.43, 0.10) AFTER the emissive gain below.
-    // The old values were pale to begin with and then multiplied by 2, which drove red and green
-    // both past 1.0 and clipped the hot end to white -- the brightness was eating the hue.
-    vec3 hot  = vec3(0.80f, 0.34f, 0.08f);
-    vec3 mid  = vec3(0.72f, 0.16f, 0.035f);
-    vec3 cold = vec3(0.30f, 0.075f, 0.05f);
-    vec3 baseColor = (t < 0.5f) ? mix(hot, mid, t * 2.0f) : mix(mid, cold, (t - 0.5f) * 2.0f);
+    float phase = fract(pc.time * tuning.lavaChurnRate + hash(vec3(voxelPos)));
 
-    // A slow crust flicker, seeded per voxel so neighbours are not in lockstep. Scaled down as it
-    // cools, so nearly-solid lava stops shimmering rather than twinkling until the instant it turns.
-    float flicker = hash(vec3(voxelPos) + vec3(floor(pc.time * 3.0f))) * 0.16f * (1.0f - t);
-    return baseColor * (mix(1.25f, 0.5f, t) + flicker);
+    // Three equal legs around the cycle. The third one closes it, which is what keeps the animation
+    // seamless -- ending on the stage above and snapping back to the stage below would put a visible
+    // jump in every voxel once per cycle.
+    vec3 from, to;
+    float leg;
+    if (phase < 1.0f / 3.0f) {
+        from = lavaStageColor(stage - 1); to = lavaStageColor(stage);     leg = phase * 3.0f;
+    } else if (phase < 2.0f / 3.0f) {
+        from = lavaStageColor(stage);     to = lavaStageColor(stage + 1); leg = phase * 3.0f - 1.0f;
+    } else {
+        from = lavaStageColor(stage + 1); to = lavaStageColor(stage - 1); leg = phase * 3.0f - 2.0f;
+    }
+
+    // Eased rather than linear, so the colour settles at each corner of the cycle instead of sliding
+    // through it at constant speed. Linear legs make the turns read as three discrete sweeps.
+    vec3 molten = mix(from, to, smoothstep(0.0f, 1.0f, leg));
+
+    // A static per-voxel darkening, so two voxels that happen to share a phase are still not
+    // identical. It only ever darkens: the ramp above is already at 1.0 in red at the hot end, and
+    // a grain that could brighten would clip precisely the voxels meant to look hottest.
+    return molten * (0.90f + hash(vec3(voxelPos) * 1.7f) * 0.10f);
 }
 
 // FUNCTION: renderDarkStone

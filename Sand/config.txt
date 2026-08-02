@@ -222,6 +222,18 @@ lava.ignite_chance=0.2
 #   crust -- a flow poured into a stone basin will crust over in a few seconds rather than sitting
 #   molten. Raise lava.stage_size to give it longer.
 lava.dark_stone_dry_chance=0.002
+#   churn_rate   = how fast a lava voxel walks the three-colour cycle around its own stage, in
+#                  cycles per second. A voxel does not sit at its stage's colour: it runs from the
+#                  stage below it, up through its own, on to the stage above, and back, so the mean
+#                  is still its own colour but the surface is never flat. The two end stages have no
+#                  neighbour on one side, so each reaches one step further out instead -- brighter
+#                  than molten at the top, dimmer than crust at the bottom.
+#
+#                  The phase is offset per voxel, which is what makes it churn rather than pulse.
+#                  Without that every lava voxel in the world would brighten and dim in unison.
+#                  Set it to 0 to freeze each voxel at whatever point of the cycle its offset puts
+#                  it, which is still a mottled flow, just a still one.
+lava.churn_rate=0.35
 
 # --- Locusts ------------------------------------------------------------------------------------
 # A swarm carries a head count in its age byte and its visual stage (types 13..17, sparsest to
