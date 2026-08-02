@@ -174,15 +174,22 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>;$(ProjectDir)vendor\imgui;$(ProjectDir)vendor\imgui\backends</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)vendor\glfw\include;$(ProjectDir)vendor\glm;$(VULKAN_SDK)\Include;$(ProjectDir)vendor\imgui;$(ProjectDir)vendor\imgui\backends</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(ProjectDir)vendor\glfw\lib-vc2022; $(VULKAN_SDK)\Lib</AdditionalLibraryDirectories>
+      <AdditionalDependencies>$(CoreLibraryDependencies);%(AdditionalDependencies); vulkan-1.lib; glfw3.lib</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
     </Manifest>
+    <PreBuildEvent>
+      <Command>"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)shaders\falling_sand.comp" -o "$(ProjectDir)shaders\falling_sand.spv"
+"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)shaders\screen.vert" -o "$(ProjectDir)shaders\screen.vert.spv"
+"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)shaders\raymarch.frag" -o "$(ProjectDir)shaders\raymarch.frag.spv"</Command>
+    </PreBuildEvent>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

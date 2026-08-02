@@ -35,3 +35,22 @@
 vendor/
 .vs/
 *.ipch
+
+# MSBuild intermediates and output. x64/ had 16 log and .tlog files committed by accident, which
+# change on every build and conflict on every merge.
+x64/
+Win32/
+*.tlog
+*.log
+*.ilk
+*.pdb
+*.idb
+*.recipe
+*.FileListAbsolute.txt
+
+# Package staging produced by tools/package.ps1
+dist/
+
+# Window positions, written by imgui at exit. Local to a machine, and the UI has one-shot startup
+# placement that only runs when this file is absent -- committing one pins everyone's layout.
+imgui.ini
