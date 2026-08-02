@@ -22,6 +22,29 @@ If something goes wrong at startup, the console says what and waits for you to p
 closing, so there is time to read it.
 
 
+IF WINDOWS CALLS IT A TROJAN
+----------------------------
+It is a false positive, and you should not simply take my word for that.
+
+The executable is unsigned and was compiled days ago, so no scanner has ever seen it before. That
+alone is most of what a heuristic detector has to go on, and small unsigned C++ programs trip it
+routinely -- detections with "!ml", "Wacatac", "Zusy", "Sabsik" or "Bearfoos" in the name are the
+generic machine-learning buckets rather than a match against anything real.
+
+What the binary actually contains, if you want to check rather than trust: it imports nothing for
+networking or cryptography -- no ws2_32, wininet, winhttp, urlmon or crypt32, and not even advapi32,
+so it cannot reach the network or touch the registry. Of its 385 imported functions the only ones a
+scanner weights are LoadLibrary, GetProcAddress and ShellExecute, which are how the Vulkan loader
+and the windowing library find their entry points.
+
+Ask me for the SHA-256 of the file I sent and check it matches, then paste it into virustotal.com.
+A couple of engines out of seventy is what a false positive looks like; a dozen is not, and if you
+see that, tell me and do not run it.
+
+If you are satisfied and want to run it anyway, add an exclusion for the folder you unzipped it to.
+Please do not turn Defender off.
+
+
 CONTROLS
 --------
 Right-drag           look around

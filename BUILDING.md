@@ -105,6 +105,47 @@ Two things the script enforces rather than assumes:
 layout only applies when that file is absent, so shipping one would give every tester whatever
 layout your machine happened to have.
 
+### If Windows flags it as a trojan
+
+Expect this, and expect it to be a false positive. The build is unsigned, freshly compiled, and has
+never been downloaded by anyone, which is most of what a heuristic scanner has to go on. Detections
+with `!ml`, `Wacatac`, `Zusy`, `Sabsik` or `Bearfoos` in the name are the generic machine-learning
+buckets and fire constantly on small unsigned C++ programs.
+
+Check rather than assume, since "it's probably fine" is how people ship real malware. What a clean
+build of this looks like, verified with `pefile` on a package that had been flagged:
+
+- **No network or crypto imports at all** — no `ws2_32`, `wininet`, `winhttp`, `urlmon`, `crypt32`,
+  not even `advapi32`. It cannot talk to anything or touch the registry.
+- **Nothing weighted for injection or persistence.** Of 385 imported functions, the only three a
+  scanner cares about are `LoadLibraryA`, `GetProcAddress` and `ShellExecuteW` — the first two are
+  how the Vulkan loader and GLFW resolve entry points, the third is GLFW's.
+- **Normal entropy.** `.text` at 6.50; a packed or encrypted payload sits above 7.5.
+- **Release CRT** — `MSVCP140.dll` and `VCRUNTIME140.dll`, not the `d`-suffixed debug versions.
+
+What actually fixes it, in order of effort:
+
+1. **Submit it to Microsoft** as a false positive, at
+   https://www.microsoft.com/en-us/wdsi/filesubmission — free, usually turned around in a day or
+   two, and it fixes the detection for everyone rather than just for you.
+2. **Upload to VirusTotal** and send testers the link. One or two engines flagging it out of seventy
+   is the signature of a false positive, and it lets a tester decide for themselves rather than
+   taking your word for it.
+3. **Distribute through GitHub Releases** rather than as an email attachment. A URL that Defender
+   has seen before accrues reputation; a zip that arrives from nowhere never does.
+4. **Sign the executable.** This is the only real fix. An OV certificate is roughly $200-400 a year
+   and still needs to build SmartScreen reputation; an EV certificate is more and gets it
+   immediately. Only worth it if this stops being a thing you hand to a few people.
+
+`Sand.rc` adds a version resource, which is the one thing in this list that was actually missing
+from the binary rather than from its reputation. It is what fills in Properties > Details, and an
+executable with none at all is unusual enough for real software that scanners notice.
+
+Two things not to do. Do not password-protect the zip to get it past a scanner — it defeats
+scanning, which is the point of the scanner, and it makes the file look considerably worse to
+anyone paying attention. Do not tell testers to switch Defender off; an exclusion for one folder is
+the most anyone should be asked for, and only after they have seen a VirusTotal result.
+
 ### What the tester needs
 
 Nothing to build, but two runtime pieces:

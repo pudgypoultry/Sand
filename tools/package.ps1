@@ -153,8 +153,13 @@ if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip
 
 $sizeMb = [math]::Round((Get-Item $zip).Length / 1MB, 2)
+$hash   = (Get-FileHash $zip -Algorithm SHA256).Hash
+$exeHash = (Get-FileHash (Join-Path $stage "Sand.exe") -Algorithm SHA256).Hash
+
 Write-Host ""
 Write-Host "Packaged $zip ($sizeMb MB)" -ForegroundColor Green
+Write-Host "  zip SHA-256 $hash"
+Write-Host "  exe SHA-256 $exeHash"
 Write-Host "Contents:" -ForegroundColor Green
 Get-ChildItem $stage -Recurse -File | ForEach-Object {
     Write-Host ("  " + $_.FullName.Substring($stage.Length + 1))
@@ -162,3 +167,8 @@ Get-ChildItem $stage -Recurse -File | ForEach-Object {
 Write-Host ""
 Write-Host "The tester needs a Vulkan-capable GPU driver and the Microsoft Visual C++ 2015-2022" -ForegroundColor Yellow
 Write-Host "x64 Redistributable. See README.txt in the package." -ForegroundColor Yellow
+Write-Host ""
+Write-Host "This executable is unsigned, so Defender and SmartScreen may flag it on a machine that" -ForegroundColor Yellow
+Write-Host "has never seen it. See the false positives section of BUILDING.md; the exe hash above is" -ForegroundColor Yellow
+Write-Host "what to give a tester, or submit to VirusTotal, so they can check they have the file you" -ForegroundColor Yellow
+Write-Host "actually sent." -ForegroundColor Yellow
