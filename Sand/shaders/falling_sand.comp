@@ -1,6 +1,18 @@
 #version 450
 
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+// 8 x 8 x 4 = 256 invocations, which is WebGPU's maxComputeInvocationsPerWorkgroup and therefore
+// the ceiling anywhere this has to run in a browser. Desktop Vulkan drivers report 1024, so 8x8x8
+// was fine there and would simply be rejected at pipeline creation on the web.
+//
+// Reshaping is safe because nothing here depends on the workgroup's shape: the shader reads only
+// gl_GlobalInvocationID, declares no shared variables, and calls no barrier(). Those are the only
+// three ways a compute shader can notice. The dispatch in VulkanRenderer divides Z by 4 to match.
+//
+// Not bit-identical, and it was never going to be: changing the shape changes the order invocations
+// reach a contested cell, so which atomicCompSwap wins a race shifts. That ordering is already
+// nondeterministic frame to frame -- it is what the atomics exist to be correct under -- so this
+// changes the tie-breaks, not the behaviour.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
 
 layout(std430, binding = 0) buffer VoxelGrid {
     uint grid[];

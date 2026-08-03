@@ -798,12 +798,17 @@ void VulkanRenderer::drawFrame() {
     for (int step = 0; step < simSteps; step++) {
         // We dispatch the compute shader multiple times, allowing it to run physics multiple times per visual frame
         vkCmdPushConstants(commandBuffer, pipeline->getComputePipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &pc);
-        // Rounded up, so a grid size that is not a multiple of 8 still covers its last partial
-        // workgroup. main() drops the overshoot before it touches the grid.
+        // Rounded up, so a grid size that is not a multiple of the workgroup still covers its last
+        // partial workgroup. main() drops the overshoot before it touches the grid.
+        //
+        // Z divides by 4 rather than 8: the workgroup is 8x8x4 so that it stays within WebGPU's
+        // 256-invocation limit. These two numbers are a pair -- change local_size_z in
+        // falling_sand.comp without changing this and the top of the world stops being simulated,
+        // silently and only on tall grids.
         vkCmdDispatch(commandBuffer,
             (config.tuning.gridWidth + 7) / 8,
             (config.tuning.gridHeight + 7) / 8,
-            (config.tuning.gridDepth + 7) / 8);
+            (config.tuning.gridDepth + 3) / 4);
 
         // Phase 2: Execution Barrier
         VkMemoryBarrier memoryBarrier{};
