@@ -58,6 +58,19 @@
 **/vendor/*/build/
 **/vendor/*/out/
 
+# Parts of the upstream distributions that nothing here compiles or reads. Vendoring is for the
+# code the build consumes, not for a mirror of the download.
+#
+# glfw/docs is generated doxygen HTML -- 199 files and 2.8 MB of it, and it carries images that the
+# *.png rule above would otherwise push into LFS, spending the quota on pictures of a documentation
+# theme. The real documentation is on glfw.org.
+#
+# imgui/examples is a project per backend -- DirectX 9 through 12, Metal, SDL, Allegro, GLUT. None
+# of them is in Sand.vcxproj or CMakeLists.txt, and each one that stays is a file someone can grep
+# into and mistake for ours.
+**/vendor/glfw/docs/
+**/vendor/imgui/examples/
+
 # GLM is deliberately not vendored: no source file includes a GLM header or names anything in its
 # namespace, and its include-path entries have been removed. Ignored rather than merely absent so a
 # stale local copy does not get committed by a `git add vendor`.
