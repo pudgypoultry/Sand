@@ -25,6 +25,11 @@ void init(const InitInfo& info) {
     init_info.NumFramesInFlight  = info.framesInFlight;
     init_info.RenderTargetFormat = info.renderTargetFormat;
     init_info.DepthStencilFormat = info.depthStencilFormat;
+    // Set explicitly, because ImGui hands this straight to the render pipeline descriptor without
+    // touching it. Its own default member initialiser is {}, which zeroes count -- and a
+    // multisample state with count 0 is invalid, so the pipeline is rejected and the UI silently
+    // does not draw. WGPU_MULTISAMPLE_STATE_INIT is the spec's own default: count 1, full mask.
+    init_info.PipelineMultisampleState = WGPU_MULTISAMPLE_STATE_INIT;
 
     ImGui_ImplWGPU_Init(&init_info);
 }

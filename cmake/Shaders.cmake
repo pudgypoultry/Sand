@@ -82,11 +82,14 @@ function(sand_add_shaders target)
                 COMMENT "tint ${stem} (translated from SPIR-V)"
                 VERBATIM)
         else()
-            message(FATAL_ERROR
-                "No WGSL for ${stem}.\n"
-                "Either write ${handwritten} by hand -- which falling_sand needs regardless, see "
-                "the note at the top of cmake/Shaders.cmake -- or install Tint from Dawn and set "
-                "DAWN_DIR so the two atomic-free shaders can be translated automatically.")
+            # Skipped rather than fatal. The port is milestone by milestone: the first renderer
+            # clears the canvas and draws the UI and loads no shaders at all, so demanding a WGSL
+            # translation here would block the milestone whose entire purpose is to prove the
+            # toolchain works. A renderer that does need one will fail to open it and say which,
+            # which is a better error than a configure-time refusal to build anything.
+            message(STATUS "No WGSL for ${stem} -- skipping. "
+                           "Write ${handwritten}, or install Tint and set DAWN_DIR.")
+            continue()
         endif()
 
         list(APPEND outputs "${wgsl}")

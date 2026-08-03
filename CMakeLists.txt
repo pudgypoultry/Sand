@@ -148,7 +148,12 @@ target_include_directories(${SAND_TARGET} PRIVATE
 if(SAND_BACKEND STREQUAL "vulkan")
     target_compile_definitions(${SAND_TARGET} PRIVATE SAND_BACKEND_VULKAN=1)
 else()
-    target_compile_definitions(${SAND_TARGET} PRIVATE SAND_BACKEND_WEBGPU=1)
+    target_compile_definitions(${SAND_TARGET} PRIVATE
+        SAND_BACKEND_WEBGPU=1
+        # imgui_impl_wgpu.cpp #errors unless exactly one of DAWN/WGPU/WGVK is defined. Its header
+        # does pick DAWN by default under __EMSCRIPTEN__, but relying on that means the build
+        # depends on an include ordering rather than on something stated. emdawnwebgpu IS Dawn.
+        IMGUI_IMPL_WEBGPU_BACKEND_DAWN=1)
 endif()
 
 # -------------------------------------------------------------------------------------------------
