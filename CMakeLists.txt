@@ -206,8 +206,13 @@ endif()
 # -------------------------------------------------------------------------------------------------
 # Shaders
 # -------------------------------------------------------------------------------------------------
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Shaders.cmake")
-sand_add_shaders(${SAND_TARGET})
+# sand_core has no renderer to load a shader into, so it has no business requiring a WGSL
+# translation that only the (unwritten) renderer would consume. Skipping this is what lets the
+# portable layer's compile check succeed on its own, before falling_sand.wgsl exists.
+if(SAND_HAVE_EXECUTABLE)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Shaders.cmake")
+    sand_add_shaders(${SAND_TARGET})
+endif()
 
 # -------------------------------------------------------------------------------------------------
 # Assets
