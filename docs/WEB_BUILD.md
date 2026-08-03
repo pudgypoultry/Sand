@@ -106,8 +106,8 @@ python3 -m http.server -d build-web      # then open Sand.html
 ```
 
 The backend follows the toolchain; `-DSAND_BACKEND=` overrides it. Both need `vendor/glfw` and
-`vendor/imgui`, which are not in the repository — CMake names them rather than failing sixty lines
-later on a missing header.
+`vendor/imgui`, which are tracked in the repository — GLFW's prebuilt `.lib` via Git LFS, so
+`git lfs install` has to happen before the clone. See BUILDING.md.
 
 Configuring the web target today reports that `WebGpuRenderer.cpp` is missing and builds the shared
 core as `sand_core` instead. That is deliberate: it means the portable layer is compiled and

@@ -162,7 +162,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)vendor\glfw\include;$(ProjectDir)vendor\glm;$(VULKAN_SDK)\Include;$(ProjectDir)vendor\imgui;$(ProjectDir)vendor\imgui\backends</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)vendor\glfw\include;$(VULKAN_SDK)\Include;$(ProjectDir)vendor\imgui;$(ProjectDir)vendor\imgui\backends</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -193,7 +193,7 @@ copy /Y "$(ProjectDir)config.txt" "$(OutDir)config.txt"</Command>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)vendor\glfw\include;$(ProjectDir)vendor\glm;$(VULKAN_SDK)\Include;$(ProjectDir)vendor\imgui;$(ProjectDir)vendor\imgui\backends</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)vendor\glfw\include;$(VULKAN_SDK)\Include;$(ProjectDir)vendor\imgui;$(ProjectDir)vendor\imgui\backends</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

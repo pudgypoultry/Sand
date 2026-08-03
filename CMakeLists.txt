@@ -195,15 +195,44 @@ else()
         target_link_libraries(${SAND_TARGET} PRIVATE Vulkan::Vulkan)
     endif()
 
-    # Prefer the vendored source tree so the CMake build matches what Sand.vcxproj links; fall back
-    # to an installed GLFW, which is how this builds on Linux where vendor/ is usually absent.
-    if(EXISTS "${SAND_VENDOR_DIR}/glfw/CMakeLists.txt")
+    # Three shapes vendor/glfw can take, in the order they are preferred.
+    #
+    # The first is the one actually in this repository, and it is the one an earlier version of
+    # this file got wrong: what is vendored is GLFW's PREBUILT WINDOWS DISTRIBUTION -- headers plus
+    # lib-vc2022/glfw3.lib -- and not its source tree. Sand.vcxproj has always linked it that way.
+    # Looking only for a CMakeLists.txt meant CMake fell through to find_package on the very
+    # machine where the library was sitting right there, and failed.
+    if(EXISTS "${SAND_VENDOR_DIR}/glfw/include/GLFW/glfw3.h" AND NOT EXISTS "${SAND_VENDOR_DIR}/glfw/CMakeLists.txt")
+        # lib-vc2022 is the only variant the repository carries. The others are listed because a
+        # GLFW download for a different toolset unpacks to a differently named folder, and finding
+        # it is friendlier than failing over a directory name.
+        find_library(SAND_GLFW_LIBRARY
+            NAMES glfw3 glfw3_mt glfw
+            PATHS "${SAND_VENDOR_DIR}/glfw/lib-vc2022"
+                  "${SAND_VENDOR_DIR}/glfw/lib-vc2019"
+                  "${SAND_VENDOR_DIR}/glfw/lib-mingw-w64"
+            NO_DEFAULT_PATH)
+
+        if(NOT SAND_GLFW_LIBRARY)
+            message(FATAL_ERROR
+                "Found GLFW's headers at ${SAND_VENDOR_DIR}/glfw/include but no import library "
+                "beside them. The prebuilt distribution puts it in lib-vc2022/glfw3.lib -- if that "
+                "file is a few hundred bytes of text beginning 'version https://git-lfs...', it is "
+                "an LFS pointer and `git lfs pull` will fetch the real one.")
+        endif()
+
+        target_include_directories(${SAND_TARGET} PRIVATE "${SAND_VENDOR_DIR}/glfw/include")
+        target_link_libraries(${SAND_TARGET} PRIVATE "${SAND_GLFW_LIBRARY}")
+
+    elseif(EXISTS "${SAND_VENDOR_DIR}/glfw/CMakeLists.txt")
         set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
         set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
         add_subdirectory("${SAND_VENDOR_DIR}/glfw" glfw EXCLUDE_FROM_ALL)
         target_link_libraries(${SAND_TARGET} PRIVATE glfw)
+
     else()
+        # Nothing vendored: an installed GLFW, which is how this builds on Linux.
         find_package(glfw3 3.3 REQUIRED)
         target_link_libraries(${SAND_TARGET} PRIVATE glfw)
     endif()

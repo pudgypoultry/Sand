@@ -83,11 +83,11 @@ vulkan-1.dll arrives with the graphics driver and is never copied into a release
 of Vulkan's is redistributed here, so nothing of Vulkan's needs a notice. The Vulkan SDK is a build
 dependency only; a tester needs a driver, not the SDK.
 
-GLM is on the compiler's include path but is not used: no source file in this project includes a GLM
-header or names anything in the glm namespace. It is therefore not part of the executable and is
+GLM was on the compiler's include path but was never used: no source file in this project includes a
+GLM header or names anything in the glm namespace. It is therefore not part of the executable and is
 deliberately not credited here -- a notice for code that is not actually present is its own small
-inaccuracy. Removing it from AdditionalIncludeDirectories in Sand.vcxproj, and from the vendor list
-in BUILDING.md, would make that unambiguous.
+inaccuracy. It has since been removed from AdditionalIncludeDirectories in Sand.vcxproj and from the
+vendor list in BUILDING.md, so the include path and this file now agree.
 
 
 -------------------------------------------------------------------------------

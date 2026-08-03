@@ -1,2 +1,48 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# ------------------------------------------------------------------------------------------------
+# Git LFS, and deliberately only for the binaries.
+# ------------------------------------------------------------------------------------------------
+# vendor/ is tracked now rather than ignored, so a clone builds without first hunting down two
+# dependencies. Most of what that adds is source -- Dear ImGui is about five megabytes of .cpp and
+# .h -- and source does not belong in LFS:
+#
+#   * LFS stores every version of a file as a whole object with no delta compression, while git
+#     deltas text three to five times over. Text in LFS therefore grows FASTER than text in plain
+#     git, which is the opposite of the reason to reach for it.
+#   * A clone made without git-lfs installed gets pointer files where the code should be. For a
+#     .lib that is an obvious link error; for imgui.cpp it is a compiler error that looks like
+#     nothing on earth.
+#   * GitHub cannot render, diff, blame or search an LFS file, so vendored source in LFS stops
+#     being readable in the browser.
+#   * Every clone and every CI run pulls the objects and bills against the free tier's 1 GB
+#     storage and 1 GB/month bandwidth.
+#
+# What genuinely is binary goes in LFS, which is what it is for. The -text on each of these also
+# protects them from the `* text=auto` above, which is a line-ending rewrite they must never get.
+
+# GLFW ships a prebuilt Windows binary distribution rather than source -- vendor/glfw/lib-vc2022
+# holds the real .lib the linker consumes. The rest are listed so that an added binary is caught by
+# convention rather than by someone remembering.
+*.lib   filter=lfs diff=lfs merge=lfs -text
+*.dll   filter=lfs diff=lfs merge=lfs -text
+*.a     filter=lfs diff=lfs merge=lfs -text
+*.so    filter=lfs diff=lfs merge=lfs -text
+*.dylib filter=lfs diff=lfs merge=lfs -text
+
+# Compiled shaders. Committed on purpose -- see BUILDING.md -- so a build whose glslc step failed
+# runs last commit's shaders rather than none. They are rewritten on every build, so they churn,
+# and a churning binary is the clearest case for LFS in this repository.
+*.spv   filter=lfs diff=lfs merge=lfs -text
+
+# Fonts and images inside the vendored trees.
+*.ttf   filter=lfs diff=lfs merge=lfs -text
+*.otf   filter=lfs diff=lfs merge=lfs -text
+*.png   filter=lfs diff=lfs merge=lfs -text
+*.jpg   filter=lfs diff=lfs merge=lfs -text
+
+# Vendored code is not this project's code. Without this GitHub reports the repository as being
+# mostly whatever ImGui is written in, and a dependency bump buries everything else in a pull
+# request's diff.
+vendor/** linguist-vendored

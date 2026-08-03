@@ -31,8 +31,38 @@
 *.out
 *.app
 
-# Vulkan and imgui
-vendor/
+# Third-party dependencies ARE in the repository -- vendor/ is no longer listed here.
+#
+# It used to be, which meant a fresh clone did not build: you had to know to clone Dear ImGui and
+# download the GLFW binary distribution into the right two paths first, and nothing said so until
+# the compiler failed on a missing header.
+#
+# The compiled-artifact rules above match by extension at any depth, so they also match the parts
+# of vendor/ that are legitimately binary -- GLFW ships prebuilt .lib and .dll rather than source.
+# Those have to be re-included by name. This only works because vendor/ itself is not excluded:
+# git cannot re-include a file whose parent directory has been excluded, so an exclude-then-negate
+# pair on vendor/ would silently keep the libraries out and leave the link failing.
+#
+# The leading **/ is load-bearing. A pattern with a slash anywhere but the end is anchored to the
+# directory holding this file, and the vendor directory is Sand/vendor rather than ./vendor -- so
+# `!vendor/**/*.lib` matches nothing here, keeps glfw3.lib ignored, and produces an unresolved
+# external at link time with no hint as to why. (The old `vendor/` rule worked because a trailing
+# slash is not "a slash in the middle", so it matched at any depth.)
+!**/vendor/**/*.lib
+!**/vendor/**/*.dll
+!**/vendor/**/*.a
+!**/vendor/**/*.so
+!**/vendor/**/*.dylib
+
+# Build trees someone may generate inside a vendored source tree.
+**/vendor/*/build/
+**/vendor/*/out/
+
+# GLM is deliberately not vendored: no source file includes a GLM header or names anything in its
+# namespace, and its include-path entries have been removed. Ignored rather than merely absent so a
+# stale local copy does not get committed by a `git add vendor`.
+**/vendor/glm/
+
 .vs/
 *.ipch
 
