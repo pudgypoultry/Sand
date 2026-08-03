@@ -158,14 +158,20 @@ if(EMSCRIPTEN)
     # GLFW and WebGPU both come from Emscripten's own ports, so there is nothing to find or build.
     # These are compile AND link options: the ports supply headers at compile time and JS glue at
     # link time, and setting them on only one side fails in whichever half was left out.
-    target_compile_options(${SAND_TARGET} PRIVATE "-sUSE_GLFW=3" "-sUSE_WEBGPU=1")
+    #
+    # WebGPU is `--use-port=emdawnwebgpu` rather than `-sUSE_WEBGPU=1` as of Emscripten 4.x --
+    # the old flag's webgpu.h shipped an early, incompatible draft of the spec and was retired
+    # outright rather than kept as an alias, so there is no version range where the previous name
+    # still worked. If this stops matching what your emsdk accepts, `em++ --help` lists the
+    # current name; the port itself hasn't gone anywhere.
+    target_compile_options(${SAND_TARGET} PRIVATE "-sUSE_GLFW=3" "--use-port=emdawnwebgpu")
 
     # Everything below produces a page, so it belongs to the executable and not to a static library
     # that has nothing to link yet.
     if(SAND_HAVE_EXECUTABLE)
     target_link_options(${SAND_TARGET} PRIVATE
         "-sUSE_GLFW=3"
-        "-sUSE_WEBGPU=1"
+        "--use-port=emdawnwebgpu"
         # The grid is the dominant allocation and it scales with the cube of the world size, so a
         # fixed heap would have to be sized for the largest world anyone might configure. Growth
         # costs a bounds check per access in exchange for not reserving a gigabyte on a page that
