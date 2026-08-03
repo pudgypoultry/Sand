@@ -1,0 +1,113 @@
+<!doctype html>
+<!--
+  Emscripten shell for the web build. emcc substitutes {{{ SCRIPT }}} with the tag that loads the
+  generated JS, and everything else here is ours.
+
+  The one thing this page must get right that a default shell does not: say something useful when
+  the browser has no WebGPU. Without the check the canvas stays black and the console fills with an
+  adapter-request failure, which reads as "the page is broken" rather than "this browser cannot run
+  it yet".
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Sand</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #12141a; color: #c8ccd4;
+               font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { display: flex; align-items: center; justify-content: center; overflow: hidden; }
+
+  /* display:block matters -- an inline canvas sits on the text baseline and leaves a few pixels of
+     background under it, which shows up as a seam along the bottom of the viewport. */
+  #canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+  #canvas:focus { outline: none; }
+
+  .panel { position: absolute; max-width: 34rem; padding: 2rem; text-align: center; }
+  .panel h1 { margin: 0 0 .75rem; font-size: 1.25rem; font-weight: 600; color: #e6e9ef; }
+  .panel p  { margin: 0 0 .75rem; }
+  .panel a  { color: #7fb2ff; }
+  .hidden   { display: none !important; }
+
+  #bar { width: 16rem; height: 3px; margin: 1rem auto 0; background: #262a33; border-radius: 2px; }
+  #bar > i { display: block; height: 100%; width: 0; background: #7fb2ff; border-radius: 2px;
+             transition: width .15s linear; }
+  code { background: #1c1f27; padding: .1rem .35rem; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+
+<div class="panel" id="loading">
+  <h1>Loading Sand</h1>
+  <p id="status">preparing…</p>
+  <div id="bar"><i></i></div>
+</div>
+
+<div class="panel hidden" id="nogpu">
+  <h1>This browser cannot run Sand</h1>
+  <p>Sand simulates every voxel on the GPU with a compute shader, and compute shaders in a browser
+     need <strong>WebGPU</strong>. This browser does not have it.</p>
+  <p>Chrome or Edge 113 and later, or Safari 26 and later, will work. Firefox is still rolling
+     WebGPU out and may need <code>dom.webgpu.enabled</code> set in <code>about:config</code>.</p>
+  <p>On Linux, Chrome may additionally need
+     <code>--enable-features=Vulkan</code>.</p>
+</div>
+
+<script>
+  var statusEl  = document.getElementById('status');
+  var barEl     = document.querySelector('#bar > i');
+  var loadingEl = document.getElementById('loading');
+
+  var Module = {
+    canvas: (function () {
+      var c = document.getElementById('canvas');
+      // A lost WebGL/WebGPU context is otherwise silent, and the symptom -- a frozen image -- looks
+      // identical to a hang in the simulation.
+      c.addEventListener('webglcontextlost', function (e) {
+        e.preventDefault();
+        showFatal('The graphics context was lost. Reload the page to start again.');
+      }, false);
+      return c;
+    })(),
+
+    setStatus: function (text) {
+      if (!statusEl) return;
+      // Emscripten reports progress as "text (i/total)"; turn that into the bar rather than
+      // printing a fraction nobody reads.
+      var m = /([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/.exec(text);
+      if (m) {
+        statusEl.textContent = m[1].trim();
+        barEl.style.width = (100 * parseFloat(m[2]) / parseFloat(m[4])) + '%';
+      } else {
+        statusEl.textContent = text;
+        if (text === '') { loadingEl.classList.add('hidden'); }
+      }
+    },
+
+    print: function (text) { console.log(text); },
+    printErr: function (text) { console.error(text); }
+  };
+
+  function showFatal(message) {
+    loadingEl.classList.remove('hidden');
+    loadingEl.innerHTML = '<h1>Sand stopped</h1><p></p>';
+    loadingEl.querySelector('p').textContent = message;
+  }
+
+  // Checked before the module loads, so the failure is this page's message rather than an
+  // adapter-request rejection deep inside the runtime.
+  if (!('gpu' in navigator)) {
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('nogpu').classList.remove('hidden');
+    document.getElementById('canvas').classList.add('hidden');
+  } else {
+    Module.setStatus('downloading…');
+    window.onerror = function () { showFatal('Something went wrong. The console has the detail.'); };
+  }
+</script>
+
+{{{ SCRIPT }}}
+</body>
+</html>

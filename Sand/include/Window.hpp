@@ -1,6 +1,14 @@
 #pragma once
 
+#include "GfxBackend.hpp"
+
+// Only the Vulkan build wants GLFW to pull vulkan.h in behind glfw3.h -- that is what declares
+// glfwCreateWindowSurface and glfwGetRequiredInstanceExtensions, which VulkanContext uses. Under
+// Emscripten there is no Vulkan header to find and the include would simply fail; the canvas is
+// obtained from the WebGPU side instead, so nothing is lost by leaving it out.
+#ifdef SAND_BACKEND_VULKAN
 #define GLFW_INCLUDE_VULKAN
+#endif
 #include <GLFW/glfw3.h>
 #include <string>
 #include <algorithm>

@@ -7,6 +7,7 @@
 #include "VulkanBuffer.hpp"
 #include "Particle.hpp"
 #include "UIManager.hpp"
+#include "UiBackendVulkan.hpp"
 #include "Config.hpp"
 #include <vector>
 #include <memory>
@@ -20,6 +21,7 @@ public:
 private:
     void initVulkan();
     void mainLoop();
+    void frame();
     void cleanup();
 
     void seedParticles();

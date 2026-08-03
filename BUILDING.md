@@ -47,6 +47,24 @@ A pre-build step compiles `shaders/*.comp|vert|frag` into `shaders/*.spv`. The c
 are committed, so a build failure at that step leaves you running *last commit's* shaders rather
 than none — if a shader edit appears to do nothing, check that step actually ran.
 
+### CMake, and the web target
+
+`Sand.vcxproj` is still the canonical Windows build; the root `CMakeLists.txt` is additive and does
+not affect it. It exists because there is a second target that MSBuild cannot express — a browser
+build through Emscripten, which is CMake-only.
+
+```
+cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build   # desktop, Vulkan
+emcmake cmake -B build-web && cmake --build build-web              # browser, WebGPU
+```
+
+If you add a source file, add it to **both** `Sand.vcxproj` and the appropriate list in
+`CMakeLists.txt`. Nothing checks that they agree.
+
+The WebGPU renderer is not written yet, so the web configure reports what is missing and builds the
+shared core only. `docs/WEB_BUILD.md` is the plan: what is portable, what the differences actually
+are, and the order to do it in.
+
 ### Where it looks for shaders and config.txt
 
 The working directory first, then the directory holding the executable. Visual Studio sets the

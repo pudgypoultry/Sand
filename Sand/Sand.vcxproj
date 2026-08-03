@@ -22,6 +22,9 @@
     <ClCompile Include="src\Config.cpp" />
     <ClCompile Include="src\ConfigSchema.cpp" />
     <ClCompile Include="src\AssetPaths.cpp" />
+    <ClCompile Include="src\Storage.cpp" />
+    <ClCompile Include="src\FrameLoop.cpp" />
+    <ClCompile Include="src\UiBackendVulkan.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\VulkanContext.cpp" />
     <ClCompile Include="src\VulkanBuffer.cpp" />
@@ -41,6 +44,12 @@
     <ClInclude Include="include\AssetPaths.hpp" />
     <ClInclude Include="include\ConfigSchema.hpp" />
     <ClInclude Include="include\Particle.hpp" />
+    <ClInclude Include="include\GfxBackend.hpp" />
+    <ClInclude Include="include\Renderer.hpp" />
+    <ClInclude Include="include\Storage.hpp" />
+    <ClInclude Include="include\FrameLoop.hpp" />
+    <ClInclude Include="include\UiBackend.hpp" />
+    <ClInclude Include="include\UiBackendVulkan.hpp" />
     <ClInclude Include="include\UIManager.hpp" />
     <ClInclude Include="include\VulkanBuffer.hpp" />
     <ClInclude Include="include\VulkanContext.hpp" />

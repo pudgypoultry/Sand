@@ -54,3 +54,10 @@ dist/
 # Window positions, written by imgui at exit. Local to a machine, and the UI has one-shot startup
 # placement that only runs when this file is absent -- committing one pins everyone's layout.
 imgui.ini
+
+# CMake build trees. Named rather than globbed as build*/ so a source directory that happens to
+# start with "build" is not swallowed.
+build/
+build-web/
+CMakeFiles/
+CMakeCache.txt
