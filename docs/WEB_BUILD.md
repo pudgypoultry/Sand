@@ -125,9 +125,29 @@ type-checked for the web either way.
 ### 4.1 The shading language, and the one real obstacle
 
 **WGSL only.** WebGPU does not accept SPIR-V, deliberately — the specification rejected binary
-shader input over driver bugs reachable from a web page. Tint (from Dawn) translates SPIR-V to
-WGSL, and `cmake/Shaders.cmake` wires it up for the two shaders that can be translated
-automatically.
+shader input over driver bugs reachable from a web page.
+
+`raymarch.frag` and `screen.vert` are translated by `tools/gen_wgsl.sh` (glslangValidator to
+SPIR-V, then `naga` from the wgpu project) and the **output is committed** under
+`Sand/shaders/wgsl/`, so an ordinary clone builds the web target with no shader translator
+installed. Each generated file carries the SHA-256 of the GLSL it came from, and
+`cmake/Shaders.cmake` re-computes that and refuses to build a stale one — timestamps cannot do that
+job, because a fresh clone gives every file the same mtime. The failure it prevents is otherwise
+silent and nasty: edit `raymarch.frag`, forget to regenerate, and the page renders last week's
+shader while the desktop renders this week's.
+
+Two things had to change in the GLSL before it would translate at all:
+
+**Push constants do not exist in WGSL.** Both shaders now carry an `#ifdef SAND_WEB` that swaps the
+`layout(push_constant)` block for a `std140` uniform at binding 3. Every field is a scalar, so the
+two layouts are byte-identical and the same C++ `PushConstants` struct is the payload either way.
+One `#ifdef` rather than two shader files is what stops them drifting — and the desktop SPIR-V is
+byte-identical before and after, checked.
+
+**A fragment shader may not bind a read-write storage buffer.** WebGPU permits those in compute
+only, so `SimStats` in `raymarch.frag` is now `readonly`. It never wrote to it, so this is simply
+the more accurate declaration; the SPIR-V gains 15 `NonWritable` decorations and *loses* three
+loads, the optimiser doing slightly better for knowing.
 
 `falling_sand.comp` cannot be one of them. **WGSL forbids a storage buffer being both atomic and
 non-atomic**: a binding is `array<atomic<u32>>` or `array<u32>`, never both, with no reinterpreting
@@ -222,9 +242,11 @@ Sequenced so the boring parts are proven before the hard part is started.
    ImGui drawing through `UiBackendWebGpu`. Proved the toolchain, the shell, the asset packaging
    and the frame loop; the UI panels came up working, because they were already portable. Runs in
    Chrome and Edge.
-2. **`raymarch.frag` and `screen.vert`.** No atomics, two `grid[]` reads between them; Tint
-   translates them. Render a world seeded on the CPU. Proves the buffers, the bind groups and the
-   uniform layout.
+2. **`raymarch.frag` and `screen.vert`.** Translation **done** — both are valid WGSL, committed,
+   with bindings landing where they should (grid and stats read-only storage at 0 and 1, tuning
+   uniform at 2, ex-push-constants uniform at 3, all group 0). What remains is the renderer side:
+   buffers, bind groups, a render pipeline, and a world seeded on the CPU. That is what proves the
+   `std140` → WGSL uniform layout, which is the likeliest thing to be subtly wrong.
 3. **`falling_sand.comp`.** The atomic split, the workgroup size, and the `std140` → WGSL uniform
    layout re-verification. All the difficulty is here.
 4. **Storage and limits.** Confirm `localStorage` round-trips the config; clamp `grid_size`.

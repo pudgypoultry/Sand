@@ -14,7 +14,9 @@ const int CLOUD_MAX = 64;
 const uint BH_INDEX_MASK = 0x3FFFFFFFu;
 const uint BH_PURGE = 0x40000000u;
 
-layout(std430, binding = 1) buffer SimStats {
+// readonly, and it has to be: WebGPU allows a read-write storage buffer in compute shaders only,
+// so a fragment shader binding this without it is rejected. Nothing here ever writes to it.
+layout(std430, binding = 1) readonly buffer SimStats {
     uint waterVoxelCount;
     uint waterHighMark;
     uint cloudWaterCount;
@@ -134,7 +136,20 @@ layout(std140, binding = 2) uniform TuningParams {
     float treeTrunkRadius;
 } tuning;
 
+// Per-frame state the CPU writes: camera pose, cursor position, brush.
+//
+// Vulkan takes this as push constants -- 60 bytes written straight into the command buffer, with
+// no buffer to allocate and nothing to synchronise. WebGPU has no equivalent at all; the web build
+// binds the same fields as an ordinary uniform buffer instead.
+//
+// Only the declaration differs. The fields are all scalars, so std140 packs them at exactly the
+// offsets a push-constant block uses, and the same C++ PushConstants struct is the payload either
+// way. Keeping it as one #ifdef rather than two shader files is what stops the two from drifting.
+#ifdef SAND_WEB
+layout(std140, binding = 3) uniform Constants {
+#else
 layout(push_constant) uniform Constants {
+#endif
     float time;
     float pitch;
     float yaw;

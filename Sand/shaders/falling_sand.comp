@@ -166,7 +166,20 @@ layout(std140, binding = 2) uniform TuningParams {
 
 #define LAYER_SIZE (uint(WIDTH) * uint(HEIGHT)) // one layer of the world
 
+// Per-frame state the CPU writes: camera pose, cursor position, brush.
+//
+// Vulkan takes this as push constants -- 60 bytes written straight into the command buffer, with
+// no buffer to allocate and nothing to synchronise. WebGPU has no equivalent at all; the web build
+// binds the same fields as an ordinary uniform buffer instead.
+//
+// Only the declaration differs. The fields are all scalars, so std140 packs them at exactly the
+// offsets a push-constant block uses, and the same C++ PushConstants struct is the payload either
+// way. Keeping it as one #ifdef rather than two shader files is what stops the two from drifting.
+#ifdef SAND_WEB
+layout(std140, binding = 3) uniform Constants {
+#else
 layout(push_constant) uniform Constants {
+#endif
     float time;
     float pitch;
     float yaw;

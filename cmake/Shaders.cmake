@@ -65,14 +65,39 @@ function(sand_add_shaders target)
         # --- web: SPIR-V is not loadable, so carry on to WGSL -------------------------------------
         string(REGEX REPLACE "\\.[a-z]+$" "" stem "${shader}")
         set(wgsl "${shader_out}/${stem}.wgsl")
-        set(handwritten "${shader_src}/wgsl/${stem}.wgsl")
+        set(committed "${shader_src}/wgsl/${stem}.wgsl")
 
-        if(EXISTS "${handwritten}")
+        if(EXISTS "${committed}")
+            # A committed translation carries the SHA-256 of the GLSL it was made from, and it is
+            # checked here rather than trusted. Timestamps cannot do this job: a fresh clone gives
+            # every file the same mtime, so an mtime rule is both false-negative in a clone and
+            # false-positive after a checkout. The hash is exact in either.
+            #
+            # Worth the twenty lines because the failure it catches is silent and specific -- edit
+            # raymarch.frag, forget to regenerate, and the page renders last week's shader while
+            # the desktop build renders this week's, with nothing anywhere saying they differ.
+            file(READ "${committed}" _wgsl_head LIMIT 1024)
+            file(SHA256 "${glsl}" _glsl_hash)
+            if(NOT _wgsl_head MATCHES "source-sha256: ${_glsl_hash}")
+                if(_wgsl_head MATCHES "source-sha256: ([0-9a-f]+)")
+                    message(FATAL_ERROR
+                        "${stem}.wgsl was generated from a different ${shader}.\n"
+                        "  committed translation came from: ${CMAKE_MATCH_1}\n"
+                        "  ${shader} is currently:           ${_glsl_hash}\n"
+                        "Re-run tools/gen_wgsl.sh and commit the result. Building as-is would run "
+                        "one shader on the web and a different one on the desktop.")
+                else()
+                    message(FATAL_ERROR
+                        "${committed} has no source-sha256 line, so it cannot be checked against "
+                        "${shader}. Re-run tools/gen_wgsl.sh to regenerate it properly.")
+                endif()
+            endif()
+
             add_custom_command(
                 OUTPUT "${wgsl}"
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${handwritten}" "${wgsl}"
-                DEPENDS "${handwritten}"
-                COMMENT "wgsl ${stem} (hand-maintained)"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${committed}" "${wgsl}"
+                DEPENDS "${committed}"
+                COMMENT "wgsl ${stem} (committed translation)"
                 VERBATIM)
         elseif(SAND_TINT)
             add_custom_command(
@@ -88,7 +113,7 @@ function(sand_add_shaders target)
             # toolchain works. A renderer that does need one will fail to open it and say which,
             # which is a better error than a configure-time refusal to build anything.
             message(STATUS "No WGSL for ${stem} -- skipping. "
-                           "Write ${handwritten}, or install Tint and set DAWN_DIR.")
+                           "Run tools/gen_wgsl.sh, or hand-write ${committed}.")
             continue()
         endif()
 
