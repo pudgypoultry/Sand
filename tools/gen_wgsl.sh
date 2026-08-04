@@ -37,7 +37,12 @@ for pair in screen.vert:vert raymarch.frag:frag; do
     # The hash of the GLSL this was made from. cmake/Shaders.cmake re-computes it and refuses to
     # build against a stale translation -- which matters because the failure is otherwise silent
     # and specific: the page renders last week's shader and nothing says so.
-    hash="$(sha256sum "$src/$glsl" | cut -d' ' -f1)"
+    #
+    # Line endings are stripped first, and cmake/Shaders.cmake does the same. .gitattributes sets
+    # `* text=auto`, so this file is LF in the repository and CRLF in a Windows working tree; a hash
+    # of the raw bytes would depend on which machine last touched it and fire on translations that
+    # are perfectly current.
+    hash="$(sed 's/\r$//' "$src/$glsl" | sha256sum | cut -d' ' -f1)"
     {
         echo "// GENERATED FILE -- DO NOT EDIT."
         echo "//"

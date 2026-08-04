@@ -77,7 +77,15 @@ function(sand_add_shaders target)
             # raymarch.frag, forget to regenerate, and the page renders last week's shader while
             # the desktop build renders this week's, with nothing anywhere saying they differ.
             file(READ "${committed}" _wgsl_head LIMIT 1024)
-            file(SHA256 "${glsl}" _glsl_hash)
+
+            # Hash the CONTENT with line endings normalised, not the file. .gitattributes sets
+            # `* text=auto`, so the same shader is LF in the repository and CRLF in a Windows
+            # working tree -- and file(SHA256), which hashes bytes, then disagrees with itself
+            # across platforms. The first version of this guard did exactly that and failed on
+            # Windows against a translation that was perfectly current.
+            file(READ "${glsl}" _glsl_text)
+            string(REPLACE "\r\n" "\n" _glsl_text "${_glsl_text}")
+            string(SHA256 _glsl_hash "${_glsl_text}")
             if(NOT _wgsl_head MATCHES "source-sha256: ${_glsl_hash}")
                 if(_wgsl_head MATCHES "source-sha256: ([0-9a-f]+)")
                     message(FATAL_ERROR
