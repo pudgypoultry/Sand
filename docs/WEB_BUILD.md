@@ -31,7 +31,7 @@ The split is by *what needs a graphics API*, not by subsystem. Three layers:
                                   │                    │
                       ┌───────────┴──────┐   ┌─────────┴────────┐
    backend            │ VulkanRenderer   │   │ WebGpuRenderer   │   1,850 (Vulkan)
-                      │ VulkanContext    │   │ (to be written)  │
+                      │ VulkanContext    │   │                  │
                       │ VulkanPipeline   │   │                  │
                       │ VulkanSwapchain  │   │                  │
                       │ VulkanBuffer     │   │                  │
@@ -151,19 +151,20 @@ The fragment shader needs no such treatment. It binds the grid `readonly` and to
 place, and a WGSL module's view of a buffer is per-module — so the compute module can declare
 `array<atomic<u32>>` while the render module declares `array<u32>` over the same buffer.
 
-### 4.2 The workgroup size has to change
+### 4.2 The workgroup size had to change — done
 
-```glsl
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;   // 512 invocations
-```
+`falling_sand.comp` was `8 × 8 × 8`, which is 512 invocations. WebGPU's default
+`maxComputeInvocationsPerWorkgroup` is **256**, so the pipeline would have been rejected outright.
+Desktop Vulkan drivers report 1024, which is why it had never been a problem.
 
-WebGPU's default `maxComputeInvocationsPerWorkgroup` is **256**. 512 is over the limit and the
-pipeline will be rejected. Desktop Vulkan drivers report 1024, which is why this has never been a
-problem.
+It is now `8 × 8 × 4`, with the Z dispatch divisor moved from 8 to 4 to match. Those two numbers
+are a pair: change one without the other and the top of the world silently stops being simulated.
 
-The fix is cheap, and that is worth knowing before anyone budgets for it: the shader uses only
-`gl_GlobalInvocationID`, declares no `shared` variables and calls no `barrier()`, so nothing
-depends on the workgroup shape. Change it to 8×8×4 and double the Z dispatch count. Two lines.
+Safe to reshape because nothing depended on the shape — the shader reads only
+`gl_GlobalInvocationID`, declares no `shared` variables and calls no `barrier()`, which are the
+only three ways a compute shader can notice. Not bit-identical, and never could be: the order
+invocations reach a contested cell changes, so which `atomicCompSwap` wins a race shifts. That
+order is already nondeterministic frame to frame.
 
 ### 4.3 World size is capped
 
