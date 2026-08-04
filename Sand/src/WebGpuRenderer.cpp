@@ -159,7 +159,7 @@ void WebGpuRenderer::initGpu() {
     wgpuInstanceRequestAdapter(instance, &options, adapterCb);
 }
 
-void WebGpuRenderer::onDeviceReady(WGPUDevice newDevice) {
+void WebGpuRenderer::onDeviceReady(WGPUDevice newDevice) try {
     device = newDevice;
     queue = wgpuDeviceGetQueue(device);
 
@@ -183,11 +183,15 @@ void WebGpuRenderer::onDeviceReady(WGPUDevice newDevice) {
 
     // Order matters: the buffers have to exist before the bind group names them, and the surface
     // format has to be known before the pipeline declares its colour target.
-    createWorldBuffers();
-    uploadTuning();
-    seedWorld();
-    createRaymarchPipeline();
-    createSimulatePipeline();
+    //
+    // Each step announces itself, which is worth the noise. Everything here happens inside an
+    // asynchronous callback before the first frame, so a failure shows up as a page that stays
+    // blank -- indistinguishable, without these, from the device never arriving at all.
+    std::printf("[sand] creating buffers\n");        createWorldBuffers();
+    std::printf("[sand] uploading tuning\n");        uploadTuning();
+    std::printf("[sand] seeding world\n");           seedWorld();
+    std::printf("[sand] raymarch pipeline\n");       createRaymarchPipeline();
+    std::printf("[sand] simulate pipeline\n");       createSimulatePipeline();
 
     // Context before backend, same ordering rule as the Vulkan path: ImGui_ImplWGPU_Init writes
     // into the context and needs it to exist.
@@ -202,8 +206,19 @@ void WebGpuRenderer::onDeviceReady(WGPUDevice newDevice) {
     uiManager.setTuning(config.tuning);
 
     ready = true;
-    std::printf("WebGPU ready: %ux%u, surface format %d\n", configuredWidth, configuredHeight,
+    std::printf("[sand] ready: %ux%u, surface format %d\n", configuredWidth, configuredHeight,
                 (int)surfaceFormat);
+}
+// Everything above runs inside a C callback invoked from the runtime's JS glue. Letting an
+// exception cross that boundary is undefined behaviour, and in practice it takes the whole module
+// down with no message worth reading -- so it is caught here, at the last frame that is still C++,
+// and reported. `ready` stays false, so frame() keeps returning early and the page stays up to
+// show the console rather than dying.
+catch (const std::exception& e) {
+    std::fprintf(stderr, "[sand] initialisation failed: %s\n", e.what());
+}
+catch (...) {
+    std::fprintf(stderr, "[sand] initialisation failed: unrecognised exception\n");
 }
 
 size_t WebGpuRenderer::voxelCount() const {
@@ -398,6 +413,7 @@ void WebGpuRenderer::createRaymarchPipeline() {
     pipeDesc.fragment = &fragment;
 
     raymarchPipeline = wgpuDeviceCreateRenderPipeline(device, &pipeDesc);
+    if (!raymarchPipeline) throw std::runtime_error("Render pipeline creation returned null.");
 
     // The pipeline holds its own references to all three; nothing here needs them again.
     wgpuPipelineLayoutRelease(pipelineLayout);
@@ -414,6 +430,8 @@ void WebGpuRenderer::createSimulatePipeline() {
     modDesc.nextInChain = &wgsl.chain;
     modDesc.label = sv("falling_sand.wgsl");
     WGPUShaderModule module = wgpuDeviceCreateShaderModule(device, &modDesc);
+    if (!module) throw std::runtime_error("falling_sand.wgsl did not compile.");
+    std::printf("[sand]   falling_sand.wgsl: %zu bytes\n", src.size());
 
     // The same four buffers as the render pass, but the grid and the stats are read_write here.
     // That is the whole reason for a second layout: a fragment shader may not bind a read-write
@@ -468,6 +486,7 @@ void WebGpuRenderer::createSimulatePipeline() {
     pipeDesc.compute.module = module;
     pipeDesc.compute.entryPoint = sv("main");
     simulatePipeline = wgpuDeviceCreateComputePipeline(device, &pipeDesc);
+    if (!simulatePipeline) throw std::runtime_error("Compute pipeline creation returned null.");
 
     wgpuPipelineLayoutRelease(pipelineLayout);
     wgpuShaderModuleRelease(module);
