@@ -97,4 +97,9 @@ function(sand_add_shaders target)
 
     add_custom_target(sand_shaders DEPENDS ${outputs})
     add_dependencies(${target} sand_shaders)
+
+    # Whether anything was actually produced. On the web this can legitimately be nothing -- see the
+    # skip above -- and the caller needs to know so it does not ask the file packager to preload an
+    # empty directory.
+    set(SAND_SHADER_OUTPUTS "${outputs}" PARENT_SCOPE)
 endfunction()

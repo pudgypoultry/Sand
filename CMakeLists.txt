@@ -161,15 +161,17 @@ endif()
 # -------------------------------------------------------------------------------------------------
 if(EMSCRIPTEN)
     # GLFW and WebGPU both come from Emscripten's own ports, so there is nothing to find or build.
-    # These are compile AND link options: the ports supply headers at compile time and JS glue at
-    # link time, and setting them on only one side fails in whichever half was left out.
     #
     # WebGPU is `--use-port=emdawnwebgpu` rather than `-sUSE_WEBGPU=1` as of Emscripten 4.x --
     # the old flag's webgpu.h shipped an early, incompatible draft of the spec and was retired
     # outright rather than kept as an alias, so there is no version range where the previous name
     # still worked. If this stops matching what your emsdk accepts, `em++ --help` lists the
     # current name; the port itself hasn't gone anywhere.
-    target_compile_options(${SAND_TARGET} PRIVATE "-sUSE_GLFW=3" "--use-port=emdawnwebgpu")
+    #
+    # Only the port is a compile option. It has to be, because it is what puts webgpu.h on the
+    # include path. -sUSE_GLFW=3 is link-only -- Emscripten's GLFW headers are in the sysroot
+    # unconditionally -- and passing it here earns a warning on every translation unit.
+    target_compile_options(${SAND_TARGET} PRIVATE "--use-port=emdawnwebgpu")
 
     # Everything below produces a page, so it belongs to the executable and not to a static library
     # that has nothing to link yet.
@@ -188,7 +190,13 @@ if(EMSCRIPTEN)
         "-sEXPORTED_RUNTIME_METHODS=['UTF8ToString','stringToUTF8','lengthBytesUTF8']"
         "-sEXPORTED_FUNCTIONS=['_main','_malloc','_free']"
         "-sSTACK_SIZE=1048576"
-        "--shell-file" "${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")
+        # SHELL: keeps the flag and its argument together as one entry.
+        #
+        # Without it they are two list items, and target_link_options DE-DUPLICATES: a second
+        # --preload-file is dropped as a repeat of the first, its path is left behind as a bare
+        # argument, and the linker reports it as a missing input file. The error names the file
+        # rather than the flag, so it reads as a path problem and is not one.
+        "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")
 
     set_target_properties(${SAND_TARGET} PROPERTIES SUFFIX ".html")
     endif()
@@ -259,10 +267,17 @@ endif()
 # -------------------------------------------------------------------------------------------------
 if(EMSCRIPTEN AND SAND_HAVE_EXECUTABLE)
     # Packed into the virtual filesystem at the root, which is where AssetPaths looks under
-    # Emscripten.
+    # Emscripten. SHELL: for the reason given on --shell-file above -- two bare --preload-file
+    # entries de-duplicate down to one and the second file silently becomes a stray linker input.
     target_link_options(${SAND_TARGET} PRIVATE
-        "--preload-file" "${CMAKE_CURRENT_BINARY_DIR}/shaders@/shaders"
-        "--preload-file" "${SAND_DIR}/config.txt@/config.txt")
+        "SHELL:--preload-file ${SAND_DIR}/config.txt@/config.txt")
+
+    # Only when there are some. Until the WGSL exists this directory is empty, and there is nothing
+    # to be gained by packing it.
+    if(SAND_SHADER_OUTPUTS)
+        target_link_options(${SAND_TARGET} PRIVATE
+            "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/shaders@/shaders")
+    endif()
 elseif(NOT EMSCRIPTEN AND SAND_HAVE_EXECUTABLE)
     add_custom_command(TARGET ${SAND_TARGET} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
