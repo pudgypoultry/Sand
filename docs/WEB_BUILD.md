@@ -1,8 +1,9 @@
 # Running Sand in a browser
 
 A plan for the web target, what it shares with the desktop build, and where the two genuinely
-differ. The scaffolding described here is in the repository; the WebGPU renderer itself is not
-written yet, and this is the document that says what it has to do.
+differ. Milestone 1 is done: the page builds, opens a canvas, brings up a WebGPU device and draws
+the whole UI. The simulation and the raymarcher are not ported yet, and section 6 is the order that
+work goes in.
 
 ---
 
@@ -109,10 +110,13 @@ The backend follows the toolchain; `-DSAND_BACKEND=` overrides it. Both need `ve
 `vendor/imgui`, which are tracked in the repository — GLFW's prebuilt `.lib` via Git LFS, so
 `git lfs install` has to happen before the clone. See BUILDING.md.
 
-Configuring the web target today reports that `WebGpuRenderer.cpp` is missing and builds the shared
-core as `sand_core` instead. That is deliberate: it means the portable layer is compiled and
-type-checked for the web on every configure, so it cannot quietly rot while the renderer is being
-written.
+The web target builds `Sand.html`, which needs serving over HTTP rather than opening off disk --
+`file://` blocks the `.wasm` and `.data` fetches. `python -m http.server -d build-web 8000` is
+enough.
+
+Should `WebGpuRenderer.cpp` ever go missing, CMake says so at configure time and falls back to
+building the shared core alone as `sand_core`, so the portable layer stays compiled and
+type-checked for the web either way.
 
 ---
 
@@ -213,9 +217,10 @@ real argument for the port rather than a side benefit.
 
 Sequenced so the boring parts are proven before the hard part is started.
 
-1. **Empty canvas.** `emcmake cmake`, GLFW window, WebGPU device, clear to a colour, ImGui drawing
-   through `UiBackendWebGpu`. Proves the toolchain, the shell, the asset packaging and the frame
-   loop. The UI panels should all work at this point — they are already portable.
+1. **~~Empty canvas.~~ DONE.** `emcmake cmake`, GLFW window, WebGPU device, clear to a colour,
+   ImGui drawing through `UiBackendWebGpu`. Proved the toolchain, the shell, the asset packaging
+   and the frame loop; the UI panels came up working, because they were already portable. Runs in
+   Chrome and Edge.
 2. **`raymarch.frag` and `screen.vert`.** No atomics, two `grid[]` reads between them; Tint
    translates them. Render a world seeded on the CPU. Proves the buffers, the bind groups and the
    uniform layout.
@@ -223,7 +228,7 @@ Sequenced so the boring parts are proven before the hard part is started.
    layout re-verification. All the difficulty is here.
 4. **Storage and limits.** Confirm `localStorage` round-trips the config; clamp `grid_size`.
 
-Steps 1–2 are a few days. Step 3 is the bulk. Two to four weeks overall for someone doing it
+Step 1 took an afternoon. Step 3 is the bulk. Two to four weeks overall for someone doing it
 attentively, and the estimate is dominated by step 3 not being mechanical.
 
 ---
@@ -256,4 +261,4 @@ Netlify or any static host works.
 | `Sand/{include,src}/UiBackendWebGpu.*` | its counterpart |
 | `Sand/{include,src}/Storage.*` | config persistence |
 | `Sand/{include,src}/FrameLoop.*` | who owns the thread |
-| `Sand/include/WebGpuRenderer.hpp` | the contract for the one file still to be written |
+| `Sand/{include,src}/WebGpuRenderer.*` | the WebGPU renderer — milestone 1 |
