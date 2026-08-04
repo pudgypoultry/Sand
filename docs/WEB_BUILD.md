@@ -1,9 +1,8 @@
 # Running Sand in a browser
 
 A plan for the web target, what it shares with the desktop build, and where the two genuinely
-differ. Milestones 1 and 2 are done: the page builds, brings up a WebGPU device, raymarches a world
-seeded on the CPU and draws the whole UI over it. The simulation itself — `falling_sand.comp` — is
-not ported yet, and section 6 is the order the remaining work goes in.
+differ. All three shaders are translated and running: the page brings up a WebGPU device, simulates,
+raymarches and draws the whole UI over it. Section 6 tracks what is done and what is left.
 
 ---
 
