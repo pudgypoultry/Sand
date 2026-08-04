@@ -11,6 +11,7 @@
 #include "UiBackendWebGpu.hpp"
 #include "Config.hpp"
 #include "FrameConstants.hpp"
+#include "CursorRay.hpp"
 
 #include <memory>
 #include <string>
@@ -49,7 +50,11 @@ private:
     void createWorldBuffers();
     void createRaymarchPipeline();
     void createSimulatePipeline();
+    void createBindGroups();
     void seedWorld();
+    void beginPurge();
+    void applyOptions(const TuningParams& requested);
+    void releaseWorldBuffers();
     void uploadTuning();
     void uploadFrameConstants();
     size_t voxelCount() const;

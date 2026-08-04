@@ -255,12 +255,24 @@ Sequenced so the boring parts are proven before the hard part is started.
    the `std140` → WGSL uniform layout are right, that reads as a neat row of correctly coloured
    columns; if `TuningParams` is misaligned by one field the world extents are wrong and it does
    not.
-3. **~~`falling_sand.comp`.~~ TRANSLATED AND WIRED UP.** Expected to be the bulk of the work and
-   was not: naga handles the atomic split, the workgroup was already fixed, and the uniform layout
-   was proved by milestone 2. The renderer runs a compute pass before the render pass, dispatching
-   once per step of the speed slider. What remains unproven is whether it *behaves* — validating as
-   WGSL is not the same as simulating correctly.
-4. **Storage and limits.** Confirm `localStorage` round-trips the config; clamp `grid_size`.
+3. **~~`falling_sand.comp`.~~ DONE — it simulates.** Expected to be the bulk of the work and was
+   not: naga handles the atomic split, the workgroup was already fixed, and the uniform layout was
+   proved by milestone 2. The renderer runs a compute pass before the render pass, dispatching once
+   per step of the speed slider.
+
+   One thing WGSL genuinely cannot express turned up here. `memoryBarrierBuffer()` orders the
+   calling invocation's memory operations and synchronises nothing, so GLSL allows it inside a
+   branch; WGSL's nearest spelling, `storageBarrier()`, is a workgroup execution barrier every
+   invocation must reach, and Tint rejects it in divergent control flow. There is no memory fence
+   without the rendezvous, so the web build goes without — see the `#ifndef SAND_WEB` in the black
+   hole spawn path for what that costs.
+4. **~~Interaction.~~ DONE.** The cursor raycast moved to `CursorRay`, shared verbatim by both
+   renderers, so clicking places blocks. Clear Grid, Reset Camera and the options screen's Apply all
+   work; `beginPurge` differs in one documented way, because WebGPU cannot map a storage buffer for
+   the read-modify-write the desktop does.
+5. **Storage and limits.** Confirm `localStorage` round-trips the config across a reload; clamp
+   `sim.grid_size` to what the device's `maxStorageBufferBindingSize` actually allows rather than
+   warning after the fact.
 
 Step 1 took an afternoon. Step 3 is the bulk. Two to four weeks overall for someone doing it
 attentively, and the estimate is dominated by step 3 not being mechanical.

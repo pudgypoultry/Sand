@@ -81,6 +81,7 @@ set(SAND_CORE_SOURCES
     "${SAND_DIR}/src/Config.cpp"
     "${SAND_DIR}/src/ConfigSchema.cpp"
     "${SAND_DIR}/src/AssetPaths.cpp"
+    "${SAND_DIR}/src/CursorRay.cpp"
     "${SAND_DIR}/src/Storage.cpp"
     "${SAND_DIR}/src/FrameLoop.cpp"
     "${SAND_DIR}/src/Window.cpp"

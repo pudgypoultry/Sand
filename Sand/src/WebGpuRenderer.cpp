@@ -9,6 +9,7 @@
 #include "AssetPaths.hpp"
 #include "Storage.hpp"
 #include "FrameLoop.hpp"
+#include "SimStats.hpp"
 
 #include <GLFW/glfw3.h>
 
@@ -22,13 +23,6 @@
 #include <string>
 #include <vector>
 
-// Size of the SimStats block, in uint32_t fields. Must match the SimStats block in both shaders --
-// the same contract VulkanRenderer.cpp states, restated here rather than shared because the two
-// renderers are the only things that need it and neither should have to include the other.
-static constexpr uint32_t BLACK_HOLE_MAX = 8;
-static constexpr uint32_t CLOUD_MAX = 64;
-static constexpr uint32_t SIM_STATS_MAX_Y = 10;                   // index of maxOccupiedY
-static constexpr uint32_t SIM_STATS_FIELDS = 11 + BLACK_HOLE_MAX * 3 + CLOUD_MAX * 7;
 
 namespace {
 
@@ -296,7 +290,7 @@ void WebGpuRenderer::createWorldBuffers() {
     gridBuffer = wgpuDeviceCreateBuffer(device, &desc);
 
     desc.label = sv("stats");
-    desc.size = (uint64_t)SIM_STATS_FIELDS * sizeof(uint32_t);
+    desc.size = (uint64_t)SimStats::kFieldCount * sizeof(uint32_t);
     statsBuffer = wgpuDeviceCreateBuffer(device, &desc);
 
     // Uniform buffer sizes are rounded up to 16: WebGPU requires the binding size to be a multiple
@@ -369,11 +363,11 @@ void WebGpuRenderer::seedWorld() {
 
     wgpuQueueWriteBuffer(queue, gridBuffer, 0, voxels.data(), voxels.size() * sizeof(uint32_t));
 
-    std::vector<uint32_t> stats(SIM_STATS_FIELDS, 0u);
+    std::vector<uint32_t> stats(SimStats::kFieldCount, 0u);
     // maxOccupiedY starts at the roof, as it does on the desktop: over-reporting only costs the
     // renderer some empty sky, while under-reporting hides matter. Nothing walks it down here --
     // that is the compute shader's job and there isn't one yet -- so it simply stays open.
-    stats[SIM_STATS_MAX_Y] = H;
+    stats[SimStats::kMaxY] = H;
     wgpuQueueWriteBuffer(queue, statsBuffer, 0, stats.data(), stats.size() * sizeof(uint32_t));
 }
 
@@ -425,20 +419,6 @@ void WebGpuRenderer::createRaymarchPipeline() {
     layoutDesc.entryCount = 4;
     layoutDesc.entries = entries;
     renderBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
-
-    WGPUBindGroupEntry bound[4] = {};
-    for (auto& b : bound) b = WGPU_BIND_GROUP_ENTRY_INIT;
-    bound[0].binding = 0; bound[0].buffer = gridBuffer;   bound[0].size = wgpuBufferGetSize(gridBuffer);
-    bound[1].binding = 1; bound[1].buffer = statsBuffer;  bound[1].size = wgpuBufferGetSize(statsBuffer);
-    bound[2].binding = 2; bound[2].buffer = tuningBuffer; bound[2].size = wgpuBufferGetSize(tuningBuffer);
-    bound[3].binding = 3; bound[3].buffer = frameBuffer;  bound[3].size = wgpuBufferGetSize(frameBuffer);
-
-    WGPUBindGroupDescriptor bgDesc = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
-    bgDesc.label = sv("raymarch bind group");
-    bgDesc.layout = renderBindGroupLayout;
-    bgDesc.entryCount = 4;
-    bgDesc.entries = bound;
-    renderBindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
 
     WGPUPipelineLayoutDescriptor plDesc = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
     plDesc.bindGroupLayoutCount = 1;
@@ -522,21 +502,6 @@ void WebGpuRenderer::createSimulatePipeline() {
     computeBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
     std::printf("[sand]   compute bind group layout\n");
 
-    WGPUBindGroupEntry bound[4] = {};
-    for (auto& b : bound) b = WGPU_BIND_GROUP_ENTRY_INIT;
-    bound[0].binding = 0; bound[0].buffer = gridBuffer;   bound[0].size = wgpuBufferGetSize(gridBuffer);
-    bound[1].binding = 1; bound[1].buffer = statsBuffer;  bound[1].size = wgpuBufferGetSize(statsBuffer);
-    bound[2].binding = 2; bound[2].buffer = tuningBuffer; bound[2].size = wgpuBufferGetSize(tuningBuffer);
-    bound[3].binding = 3; bound[3].buffer = frameBuffer;  bound[3].size = wgpuBufferGetSize(frameBuffer);
-
-    WGPUBindGroupDescriptor bgDesc = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
-    bgDesc.label = sv("simulate bind group");
-    bgDesc.layout = computeBindGroupLayout;
-    bgDesc.entryCount = 4;
-    bgDesc.entries = bound;
-    computeBindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
-    std::printf("[sand]   compute bind group\n");
-
     WGPUPipelineLayoutDescriptor plDesc = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
     plDesc.bindGroupLayoutCount = 1;
     plDesc.bindGroupLayouts = &computeBindGroupLayout;
@@ -554,6 +519,113 @@ void WebGpuRenderer::createSimulatePipeline() {
 
     wgpuPipelineLayoutRelease(pipelineLayout);
     wgpuShaderModuleRelease(module);
+}
+
+// createBindGroups: names the four buffers to both layouts.
+//
+// Separate from pipeline creation because a bind group is immutable -- WebGPU has no equivalent of
+// rewriting a descriptor set in place. Resizing the world makes new buffers, and new buffers mean
+// new bind groups even though the layouts and the pipelines are untouched.
+void WebGpuRenderer::createBindGroups() {
+    WGPUBindGroupEntry bound[4] = {};
+    for (auto& b : bound) b = WGPU_BIND_GROUP_ENTRY_INIT;
+    bound[0].binding = 0; bound[0].buffer = gridBuffer;   bound[0].size = wgpuBufferGetSize(gridBuffer);
+    bound[1].binding = 1; bound[1].buffer = statsBuffer;  bound[1].size = wgpuBufferGetSize(statsBuffer);
+    bound[2].binding = 2; bound[2].buffer = tuningBuffer; bound[2].size = wgpuBufferGetSize(tuningBuffer);
+    bound[3].binding = 3; bound[3].buffer = frameBuffer;  bound[3].size = wgpuBufferGetSize(frameBuffer);
+
+    WGPUBindGroupDescriptor bgDesc = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
+    bgDesc.entryCount = 4;
+    bgDesc.entries = bound;
+
+    if (renderBindGroup)  { wgpuBindGroupRelease(renderBindGroup);  renderBindGroup = nullptr; }
+    if (computeBindGroup) { wgpuBindGroupRelease(computeBindGroup); computeBindGroup = nullptr; }
+
+    bgDesc.label = sv("raymarch bind group");
+    bgDesc.layout = renderBindGroupLayout;
+    renderBindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
+
+    bgDesc.label = sv("simulate bind group");
+    bgDesc.layout = computeBindGroupLayout;
+    computeBindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
+}
+
+void WebGpuRenderer::releaseWorldBuffers() {
+    if (gridBuffer)  { wgpuBufferDestroy(gridBuffer);  wgpuBufferRelease(gridBuffer);  gridBuffer = nullptr; }
+    if (statsBuffer) { wgpuBufferDestroy(statsBuffer); wgpuBufferRelease(statsBuffer); statsBuffer = nullptr; }
+}
+
+// beginPurge: what Clear Grid does -- one enormous black hole at the centre, eating the world.
+//
+// The desktop version reads the black hole table back, clears the voxel of every hole already in
+// it, and leaves the rest of the world standing for the purge hole to eat. That read-modify-write
+// needs mapped memory, which WebGPU does not offer for a storage buffer without an asynchronous
+// staging copy, so this writes a fresh stats block instead.
+//
+// What that costs: a black hole PLACED BY HAND before Clear Grid keeps its voxel, as an inert
+// type-7 cube with no table entry, because clearing it would mean knowing where it was. Capture
+// skips type 7, so it survives the purge either way; the desktop removes it first. Narrow, only
+// visible if you placed one, and written down rather than left to be found.
+void WebGpuRenderer::beginPurge() {
+    const uint32_t w = config.tuning.gridWidth, h = config.tuning.gridHeight, d = config.tuning.gridDepth;
+    const uint32_t centre = (w / 2) + (h / 2) * w + (d / 2) * w * h;
+
+    std::vector<uint32_t> stats(SimStats::kFieldCount, 0u);
+    stats[SimStats::kHoles]  = SimStats::kActive | SimStats::kPurge | centre;
+    stats[SimStats::kMass]   = config.tuning.purgeMass;
+    stats[SimStats::kStarve] = 0u;
+    stats[SimStats::kCount]  = 1u;
+    // The purge hole is written straight into the grid, so it never passes through the dispatch
+    // that would publish its height. Opening the ceiling stops its body being clipped away on the
+    // frame it appears.
+    stats[SimStats::kMaxY]  = h;
+    wgpuQueueWriteBuffer(queue, statsBuffer, 0, stats.data(), stats.size() * sizeof(uint32_t));
+
+    const uint32_t hole = 7u; // pack(BlackHole, 0, 0, 0)
+    wgpuQueueWriteBuffer(queue, gridBuffer, (uint64_t)centre * sizeof(uint32_t), &hole, sizeof(hole));
+
+    std::printf("[sand] purge started: one black hole at the centre, eating the world.\n");
+}
+
+// applyOptions: makes the options screen's edited copy the config the simulation runs on.
+//
+// A reload rather than a live patch, exactly as on the desktop: it ends with an empty world and the
+// camera back at its framing pose, because a world halfway through running under the old numbers is
+// not a fair test of the new ones.
+void WebGpuRenderer::applyOptions(const TuningParams& requested) {
+    TuningParams next = requested;
+    applyWorldShape(next, next.gridWidth);
+    sanitizeTuning(next);
+
+    const bool shapeChanged = next.gridWidth  != config.tuning.gridWidth ||
+                              next.gridHeight != config.tuning.gridHeight ||
+                              next.gridDepth  != config.tuning.gridDepth;
+    config.tuning = next;
+
+    if (shapeChanged) {
+        // No vkDeviceWaitIdle equivalent is needed or offered: WebGPU tracks the buffers' use by
+        // already-submitted work itself, and a destroy takes effect once that work retires.
+        releaseWorldBuffers();
+        createWorldBuffers();
+        createBindGroups();
+        window->setWorldExtents((float)config.tuning.gridWidth,
+                                (float)config.tuning.gridHeight,
+                                (float)config.tuning.gridDepth);
+    }
+
+    uploadTuning();
+    seedWorld();
+    window->resetCamera();
+
+    if (saveConfig(configPath, config)) {
+        if (!Storage::persist(configPath)) {
+            std::printf("[sand] settings applied, but could not be stored for next launch.\n");
+        }
+    }
+    uiManager.setTuning(config.tuning);
+
+    std::printf("[sand] options applied; world cleared at %u^3%s\n", config.tuning.gridWidth,
+                shapeChanged ? " (buffers reallocated)." : ".");
 }
 
 void WebGpuRenderer::configureSurface(uint32_t width, uint32_t height) {
@@ -599,26 +671,16 @@ void WebGpuRenderer::frame() {
     uiManager.buildUI();
     window->processInput(uiManager.wantsCaptureMouse(), uiManager.wantsCaptureKeyboard());
 
-    // The camera half of what the Vulkan renderer packs into push constants. The cursor and brush
-    // half is left inert: placing a voxel is done by the compute shader, which does not exist yet,
-    // so a spawn request here would be silently ignored and pretending otherwise would be worse.
-    frameConstants.time = (float)glfwGetTime();
-    frameConstants.pitch = window->getPitch();
-    frameConstants.yaw = window->getYaw();
-    frameConstants.camX = window->getCamX();
-    frameConstants.camY = window->getCamY();
-    frameConstants.camZ = window->getCamZ();
-    frameConstants.fovDistance = uiManager.getFovDistance();
-    frameConstants.perspectiveBlend = uiManager.getPerspectiveBlend();
+    // The same raycast the desktop runs, from the same file. Placing blocks works now: spawnActive
+    // is set by a click and the compute shader does the rest.
+    buildFrameConstants(*window, uiManager, config.tuning, (float)glfwGetTime(), frameConstants);
 
-    // -1, not 0. An out-of-bounds spawn position is how "draw no cursor" is expressed: the shader
-    // gates the cursor on the coordinates being inside the world and never looks at spawnActive,
-    // which governs only whether a click PLACES something. Zero-initialising these put a cursor at
-    // the world origin every frame -- the desktop renderer sets -1 for exactly this reason.
-    frameConstants.spawnX = -1;
-    frameConstants.spawnY = -1;
-    frameConstants.spawnZ = -1;
-    frameConstants.spawnActive = 0;
+    // The three UI actions. Safe to do here between frames: everything below touches buffers only
+    // through the queue, which orders them against work already submitted.
+    if (uiManager.consumeResetRequest())        beginPurge();
+    if (uiManager.consumeApplyOptions())        applyOptions(uiManager.pendingTuning());
+    if (uiManager.consumeCameraResetRequest())  window->resetCamera();
+
     uploadFrameConstants();
 
     drawFrame();
