@@ -1,4 +1,5 @@
 #include "Renderer.hpp"
+#include "GfxBackend.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <cstdlib>
@@ -46,8 +47,24 @@ int main() {
     // it was declared above the block -- so the failures most likely to hit an unfamiliar machine
     // were the ones that produced no message at all.
     try {
+#if SAND_LOOP_IS_DRIVEN
+        // Deliberately leaked, and it has to be.
+        //
+        // On a driven platform run() REGISTERS the frame loop and returns; the frames happen
+        // afterwards, and so does the asynchronous device callback that finishes initialisation. A
+        // local here is destroyed the moment run() returns, which is before any of that -- so every
+        // callback then reads a destroyed object. That is not theoretical: it showed up as a grid
+        // sized 6568 MiB, because gridWidth was being read out of freed memory, and as a canvas
+        // reporting 0x0 because the Window had been deleted underneath it.
+        //
+        // The renderer must outlive main, and on a page the tab closing is the only teardown there
+        // is, so leaking it is exactly right rather than a shortcut.
+        auto* app = new Renderer();
+        app->run();
+#else
         Renderer app;
         app.run();
+#endif
     }
     catch (const std::exception& e) {
         std::cerr << "\nFatal error: " << e.what() << "\n";

@@ -217,6 +217,14 @@ void WebGpuRenderer::onDeviceReady(WGPUDevice newDevice) try {
 
     int fbWidth = 0, fbHeight = 0;
     glfwGetFramebufferSize(window->getGLFWwindow(), &fbWidth, &fbHeight);
+    // A canvas that has not been laid out yet reports 0x0, and configureSurface refuses that -- so
+    // taking it at face value leaves the surface unconfigured and every getCurrentTexture failing
+    // forever. Fall back to what the window was asked for; the per-frame check corrects it as soon
+    // as the real size is known.
+    if (fbWidth <= 0 || fbHeight <= 0) {
+        glfwGetWindowSize(window->getGLFWwindow(), &fbWidth, &fbHeight);
+    }
+    if (fbWidth <= 0 || fbHeight <= 0) { fbWidth = 1600; fbHeight = 1200; }
     configureSurface(uint32_t(fbWidth), uint32_t(fbHeight));
 
     window->setWorldExtents((float)config.tuning.gridWidth,
@@ -580,6 +588,9 @@ void WebGpuRenderer::frame() {
     // a stretched image. Cheap to check, and the failure it prevents looks like a rendering bug.
     int fbWidth = 0, fbHeight = 0;
     glfwGetFramebufferSize(window->getGLFWwindow(), &fbWidth, &fbHeight);
+    if (fbWidth <= 0 || fbHeight <= 0) {
+        glfwGetWindowSize(window->getGLFWwindow(), &fbWidth, &fbHeight);
+    }
     if (fbWidth > 0 && fbHeight > 0 &&
         (uint32_t(fbWidth) != configuredWidth || uint32_t(fbHeight) != configuredHeight)) {
         configureSurface(uint32_t(fbWidth), uint32_t(fbHeight));
@@ -622,6 +633,18 @@ void WebGpuRenderer::frame() {
 }
 
 void WebGpuRenderer::drawFrame() {
+    // Asking an unconfigured surface for a texture fails, and the failure is per-frame -- sixty
+    // identical lines a second, which buries whatever actually went wrong. If it is not configured
+    // there is nothing to draw into, so say so once and stop.
+    if (configuredWidth == 0 || configuredHeight == 0) {
+        static bool complained = false;
+        if (!complained) {
+            std::fprintf(stderr, "[sand] surface has no size; not drawing. The canvas is 0x0.\n");
+            complained = true;
+        }
+        return;
+    }
+
     WGPUSurfaceTexture surfaceTexture = WGPU_SURFACE_TEXTURE_INIT;
     wgpuSurfaceGetCurrentTexture(surface, &surfaceTexture);
 
