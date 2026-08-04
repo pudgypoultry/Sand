@@ -1,9 +1,9 @@
 # Running Sand in a browser
 
 A plan for the web target, what it shares with the desktop build, and where the two genuinely
-differ. Milestone 1 is done: the page builds, opens a canvas, brings up a WebGPU device and draws
-the whole UI. The simulation and the raymarcher are not ported yet, and section 6 is the order that
-work goes in.
+differ. Milestones 1 and 2 are done: the page builds, brings up a WebGPU device, raymarches a world
+seeded on the CPU and draws the whole UI over it. The simulation itself — `falling_sand.comp` — is
+not ported yet, and section 6 is the order the remaining work goes in.
 
 ---
 
@@ -242,11 +242,14 @@ Sequenced so the boring parts are proven before the hard part is started.
    ImGui drawing through `UiBackendWebGpu`. Proved the toolchain, the shell, the asset packaging
    and the frame loop; the UI panels came up working, because they were already portable. Runs in
    Chrome and Edge.
-2. **`raymarch.frag` and `screen.vert`.** Translation **done** — both are valid WGSL, committed,
-   with bindings landing where they should (grid and stats read-only storage at 0 and 1, tuning
-   uniform at 2, ex-push-constants uniform at 3, all group 0). What remains is the renderer side:
-   buffers, bind groups, a render pipeline, and a world seeded on the CPU. That is what proves the
-   `std140` → WGSL uniform layout, which is the likeliest thing to be subtly wrong.
+2. **~~`raymarch.frag` and `screen.vert`.~~ DONE.** Both translated and committed, with bindings
+   where they should be (grid and stats read-only storage at 0 and 1, tuning uniform at 2,
+   ex-push-constants uniform at 3, all group 0). The renderer creates the four buffers, one
+   explicit bind group layout, and a render pipeline, and seeds a diagnostic world on the CPU: a
+   stone floor plus one pillar per material in id order. If the palette, the lighting and above all
+   the `std140` → WGSL uniform layout are right, that reads as a neat row of correctly coloured
+   columns; if `TuningParams` is misaligned by one field the world extents are wrong and it does
+   not.
 3. **`falling_sand.comp`.** The atomic split, the workgroup size, and the `std140` → WGSL uniform
    layout re-verification. All the difficulty is here.
 4. **Storage and limits.** Confirm `localStorage` round-trips the config; clamp `grid_size`.

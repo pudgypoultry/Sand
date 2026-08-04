@@ -10,17 +10,19 @@
 #include "UIManager.hpp"
 #include "UiBackendWebGpu.hpp"
 #include "Config.hpp"
+#include "FrameConstants.hpp"
 
 #include <memory>
 #include <string>
 
 // The WebGPU renderer.
 //
-// MILESTONE 1 of the port (see docs/WEB_BUILD.md section 6): this clears the canvas and draws the
-// UI, and does no simulation and no raymarching. That is the deliberate scope -- it proves the
-// toolchain, the shell page, the asset packaging, the frame loop and the ImGui backend all work
-// together before any of the difficult shader work starts. The options screen and profiler are
-// already portable, so they should come up fully functional on top of a blank background.
+// MILESTONE 2 of the port (see docs/WEB_BUILD.md section 6): this raymarches a world seeded on the
+// CPU and draws the UI over it. There is still no simulation -- falling_sand.comp is milestone 3,
+// and it is where the difficulty lives -- so the world is inert. What this milestone proves is the
+// buffers, the bind group, the render pipeline and, above all, the std140-to-WGSL uniform layout:
+// TuningParams is a 99-field binary contract between C++ and both shaders, and it is the likeliest
+// thing to be subtly wrong.
 //
 // The one structural difference from VulkanRenderer, and it shapes everything else: WebGPU has no
 // synchronous way to get a device. requestAdapter and requestDevice are both asynchronous with no
@@ -44,6 +46,13 @@ private:
     void frame();
     void drawFrame();
 
+    void createWorldBuffers();
+    void createRaymarchPipeline();
+    void seedWorld();
+    void uploadTuning();
+    void uploadFrameConstants();
+    size_t voxelCount() const;
+
     std::unique_ptr<Window> window;
 
     WGPUInstance instance = nullptr;
@@ -66,6 +75,20 @@ private:
     // image that reads as a rendering bug rather than a configuration one.
     uint32_t configuredWidth = 0;
     uint32_t configuredHeight = 0;
+
+    // The four bindings the shaders declare, in the order the WGSL numbers them.
+    WGPUBuffer gridBuffer   = nullptr;  // binding 0, storage: one uint per voxel
+    WGPUBuffer statsBuffer  = nullptr;  // binding 1, storage: the SimStats block
+    WGPUBuffer tuningBuffer = nullptr;  // binding 2, uniform: TuningParams
+    WGPUBuffer frameBuffer  = nullptr;  // binding 3, uniform: FrameConstants
+
+    WGPUBindGroupLayout bindGroupLayout = nullptr;
+    WGPUBindGroup       bindGroup       = nullptr;
+    WGPURenderPipeline  raymarchPipeline = nullptr;
+
+    // Written every frame from the camera and cursor, then uploaded to frameBuffer. Kept as a
+    // member rather than a local so the upload and the values are obviously the same object.
+    FrameConstants frameConstants{};
 
     UIManager uiManager;
 
