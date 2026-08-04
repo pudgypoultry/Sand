@@ -12,7 +12,12 @@
 // Path of the directory holding the running executable, with a trailing separator. Empty if it
 // cannot be determined, which callers treat as "only the working directory is available".
 std::string executableDir() {
-#ifdef _WIN32
+#if defined(__EMSCRIPTEN__)
+    // There is no executable and no directory containing one. What there is instead is a virtual
+    // filesystem the assets were packaged into, mounted at the root, so that is the answer to the
+    // question this function is actually being asked: where do the files live if not beside me.
+    return "/";
+#elif defined(_WIN32)
     char buffer[MAX_PATH];
     DWORD length = GetModuleFileNameA(nullptr, buffer, MAX_PATH);
     // A return of MAX_PATH means the buffer was too small and the result was truncated, so it is a

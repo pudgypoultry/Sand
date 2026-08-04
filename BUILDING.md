@@ -11,29 +11,46 @@
 Only **x64** is configured. The Win32 configurations exist in the project file but have never had
 their include paths or libraries set, so they will not build — pick x64 in the toolbar.
 
-## Third-party dependencies are not in the repository
+## Third-party dependencies are in the repository, and one of them needs Git LFS
 
-`Sand/vendor/` is gitignored, so a fresh clone will not build until you put the dependencies back.
-Two are needed, in exactly these locations:
+`Sand/vendor/` is tracked, so a clone has everything it needs:
 
 ```
 Sand/vendor/glfw/include/GLFW/...      GLFW headers
-Sand/vendor/glfw/lib-vc2022/glfw3.lib  GLFW, the static library (not glfw3dll.lib)
+Sand/vendor/glfw/lib-vc2022/glfw3.lib  GLFW, the static library (not glfw3dll.lib)   <-- LFS
 Sand/vendor/imgui/*.cpp,*.h            Dear ImGui core
-Sand/vendor/imgui/backends/            imgui_impl_glfw.* and imgui_impl_vulkan.*
+Sand/vendor/imgui/backends/            imgui_impl_glfw.*, imgui_impl_vulkan.*, imgui_impl_wgpu.*
 ```
 
-GLFW's Windows binary release already has the `include/` and `lib-vc2022/` layout above, so it can be
-unpacked as-is. Dear ImGui is a source drop from its repository.
+GLFW is vendored as its **prebuilt Windows distribution** rather than as source — that is why there
+is a `.lib` in the tree and no GLFW `CMakeLists.txt`. Dear ImGui is a source drop.
 
-GLM is referenced by `AdditionalIncludeDirectories` but no source file includes a GLM header or
-names anything in its namespace, so nothing needs it and it is not credited in `Sand/Credits.txt`.
-Dropping it from the include paths would make that plain.
+**Install [Git LFS](https://git-lfs.com) before cloning**, then:
 
-If you want a clone to build without this step, the options are to commit `vendor/` (simple, adds a
-few MB) or to add them as git submodules (keeps the repo small, but GLFW would then need building
-from source rather than using its prebuilt `.lib`). Both are a deliberate choice rather than
-something to drift into, which is why the dependencies are currently just absent.
+```
+git lfs install
+git clone <repo>
+```
+
+Only the genuine binaries are in LFS — `*.lib`, `*.dll`, `*.spv`, fonts and images. All the
+vendored *source* is ordinary git, deliberately: LFS stores each version whole with no delta
+compression, so text in LFS grows faster than text in git, and it would stop being diffable or
+searchable on GitHub for no gain. `.gitattributes` spells the reasoning out.
+
+If you cloned before installing LFS, you will have pointer files instead of binaries — a `.lib`
+that is a few hundred bytes of text starting `version https://git-lfs.github.com/spec/v1`. Fix it
+in place, no re-clone needed:
+
+```
+git lfs install
+git lfs pull
+```
+
+The CMake build detects this case and says so by name rather than reporting a missing library.
+
+GLM used to be on the include path and is now gone: no source file includes a GLM header or names
+anything in its namespace, so it was two entries in `AdditionalIncludeDirectories` pointing at a
+dependency the project does not have. That is also why it is not credited in `Sand/Credits.txt`.
 
 ## Building
 
@@ -46,6 +63,24 @@ msbuild Sand\Sand.vcxproj /p:Configuration=Release /p:Platform=x64
 A pre-build step compiles `shaders/*.comp|vert|frag` into `shaders/*.spv`. The compiled `.spv` files
 are committed, so a build failure at that step leaves you running *last commit's* shaders rather
 than none — if a shader edit appears to do nothing, check that step actually ran.
+
+### CMake, and the web target
+
+`Sand.vcxproj` is still the canonical Windows build; the root `CMakeLists.txt` is additive and does
+not affect it. It exists because there is a second target that MSBuild cannot express — a browser
+build through Emscripten, which is CMake-only.
+
+```
+cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build   # desktop, Vulkan
+emcmake cmake -B build-web && cmake --build build-web              # browser, WebGPU
+```
+
+If you add a source file, add it to **both** `Sand.vcxproj` and the appropriate list in
+`CMakeLists.txt`. Nothing checks that they agree.
+
+The WebGPU renderer is not written yet, so the web configure reports what is missing and builds the
+shared core only. `docs/WEB_BUILD.md` is the plan: what is portable, what the differences actually
+are, and the order to do it in.
 
 ### Where it looks for shaders and config.txt
 

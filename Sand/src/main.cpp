@@ -1,4 +1,4 @@
-#include "VulkanRenderer.hpp"
+#include "Renderer.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <cstdlib>
@@ -46,7 +46,7 @@ int main() {
     // it was declared above the block -- so the failures most likely to hit an unfamiliar machine
     // were the ones that produced no message at all.
     try {
-        VulkanRenderer app;
+        Renderer app;
         app.run();
     }
     catch (const std::exception& e) {

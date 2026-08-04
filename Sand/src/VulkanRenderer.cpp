@@ -1,12 +1,19 @@
 #include "VulkanRenderer.hpp"
 #include "ConfigSchema.hpp"
 #include "AssetPaths.hpp"
+#include "Storage.hpp"
+#include "FrameLoop.hpp"
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
 #include <algorithm>
 #include <cstring>
 #include <cfloat>
+// std::sin/cos/sqrt in the camera basis and the mouse ray. This arrived transitively before --
+// UIManager.hpp used to include vulkan.h, and MSVC's headers pull <cmath> in behind it -- so the
+// omission only surfaced once the UI stopped naming a graphics API. libc++, which is what a web
+// build compiles against, does not forward it either.
+#include <cmath>
 
 // Size of the SimStats SSBO at binding 1, in uint32_t fields: 9 cloud/water scalars, then
 // blackHoleCount and maxOccupiedY, then three BLACK_HOLE_MAX-sized arrays (table slots,
@@ -37,6 +44,10 @@ VulkanRenderer::VulkanRenderer() {
     // loaded -- reading the copy beside the executable and writing one into the working directory
     // would look exactly like settings silently failing to stick.
     configPath = resolveAssetPath("config.txt");
+    // No-op on the desktop. On a platform whose filesystem does not outlive the session, this puts
+    // the previously saved copy back before it is read -- so it has to happen between resolving
+    // the path and loading it, and nowhere else.
+    Storage::prime(configPath);
     config = loadConfig(configPath);
     window = std::make_unique<Window>(1600, 1200, "3D Falling Sand Compute");
     context = std::make_unique<VulkanContext>(window.get());
@@ -107,18 +118,22 @@ void VulkanRenderer::initVulkan() {
         throw std::runtime_error("Failed to create ImGui descriptor pool!");
     }
 
-    uiManager.init(
-        window->getGLFWwindow(),
-        context->getInstance(),
-        context->getPhysicalDevice(),
-        context->getDevice(),
-        context->getComputeQueue(),
-        context->getComputeQueueFamily(),
-        imguiDescriptorPool,
-        pipeline->getRenderPass(),
-        2,
-        static_cast<uint32_t>(swapchain->getImageViews().size())
-    );
+    // Context first, then the backend: ImGui_ImplVulkan_Init writes into the context, so the order
+    // is load-bearing rather than stylistic.
+    uiManager.init();
+
+    UiBackendVulkan::InitInfo uiInit;
+    uiInit.window         = window->getGLFWwindow();
+    uiInit.instance       = context->getInstance();
+    uiInit.physicalDevice = context->getPhysicalDevice();
+    uiInit.device         = context->getDevice();
+    uiInit.graphicsQueue  = context->getComputeQueue();
+    uiInit.queueFamily    = context->getComputeQueueFamily();
+    uiInit.descriptorPool = imguiDescriptorPool;
+    uiInit.renderPass     = pipeline->getRenderPass();
+    uiInit.minImageCount  = 2;
+    uiInit.imageCount     = static_cast<uint32_t>(swapchain->getImageViews().size());
+    UiBackendVulkan::init(uiInit);
 
     // So the options screen opens showing what is actually running.
     uiManager.setTuning(config.tuning);
@@ -193,7 +208,14 @@ void VulkanRenderer::applyOptions(const TuningParams& requested) {
     window->resetCamera();
 
     uploadTuning();
-    saveConfig(configPath, config);
+    if (saveConfig(configPath, config)) {
+        // Second half of the same act on a platform where writing a file is not the end of it.
+        // Reported rather than ignored: "applied but will not survive a reload" is a different
+        // thing to tell someone than "applied".
+        if (!Storage::persist(configPath)) {
+            std::cout << "  (settings applied, but could not be stored for next launch)\n";
+        }
+    }
     uiManager.setTuning(config.tuning);
 
     std::cout << "Options applied; world cleared at " << config.tuning.gridWidth << "^3"
@@ -232,35 +254,42 @@ void VulkanRenderer::createWorldBuffers() {
 
 }
 
+// frame: one frame's work, start to finish.
+//
+// Split out of the loop that used to hold it so the loop itself can be owned by the platform --
+// see FrameLoop. Nothing here changed in the move; it is the same body between the same braces.
+void VulkanRenderer::frame() {
+    // Everything between here and the end of drawFrame is one frame's CPU work: event polling,
+    // building the UI, the mouse raycast, and recording the command buffer. drawFrame reports
+    // back how much of that span it spent blocked on the GPU, which is subtracted below.
+    const auto frameStart = std::chrono::high_resolution_clock::now();
+
+    window->pollEvents();
+
+    uiManager.buildUI();
+
+    bool captureMouse = uiManager.wantsCaptureMouse();
+    bool captureKeyboard = uiManager.wantsCaptureKeyboard();
+
+    window->processInput(captureMouse, captureKeyboard);
+
+    drawFrame();
+
+    const double wallMs = std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - frameStart).count();
+
+    // buildUI runs at the TOP of the frame, so the figures it draws are the previous frame's.
+    // That is one frame of lag on a graph of the last minute, and the alternative -- reordering
+    // the frame so the UI is built after the work it describes -- would push the UI's own vertex
+    // upload a frame out of step with the command buffer that draws it.
+    uiManager.setFrameTimings(float(std::max(0.0, wallMs - gpuBlockedMs)),
+                              lastComputeMs, lastRaymarchMs, timestampsSupported);
+}
+
 // mainLoop: Continues rendering frames until the window is closed
 void VulkanRenderer::mainLoop() {
-    while (!window->shouldClose()) {
-        // Everything between here and the end of drawFrame is one frame's CPU work: event polling,
-        // building the UI, the mouse raycast, and recording the command buffer. drawFrame reports
-        // back how much of that span it spent blocked on the GPU, which is subtracted below.
-        const auto frameStart = std::chrono::high_resolution_clock::now();
-
-        window->pollEvents();
-
-        uiManager.buildUI();
-
-        bool captureMouse = uiManager.wantsCaptureMouse();
-        bool captureKeyboard = uiManager.wantsCaptureKeyboard();
-
-        window->processInput(captureMouse, captureKeyboard);
-
-        drawFrame();
-
-        const double wallMs = std::chrono::duration<double, std::milli>(
-            std::chrono::high_resolution_clock::now() - frameStart).count();
-
-        // buildUI runs at the TOP of the loop, so the figures it draws are the previous frame's.
-        // That is one frame of lag on a graph of the last minute, and the alternative -- reordering
-        // the loop so the UI is built after the work it describes -- would push the UI's own vertex
-        // upload a frame out of step with the command buffer that draws it.
-        uiManager.setFrameTimings(float(std::max(0.0, wallMs - gpuBlockedMs)),
-                                  lastComputeMs, lastRaymarchMs, timestampsSupported);
-    }
+    FrameLoop::run([this] { return !window->shouldClose(); },
+                   [this] { frame(); });
     vkDeviceWaitIdle(context->getDevice());
 }
 
@@ -268,7 +297,10 @@ void VulkanRenderer::mainLoop() {
 void VulkanRenderer::cleanup() {
     vkDeviceWaitIdle(context->getDevice());
 
-    uiManager.cleanup(context->getDevice());
+    // The device is already idle -- vkDeviceWaitIdle above -- which is what makes it safe to pull
+    // the backend's buffers out from under it here.
+    UiBackend::shutdown();
+    uiManager.shutdownUi();
     vkDestroyDescriptorPool(context->getDevice(), imguiDescriptorPool, nullptr);
 
     vkDestroySemaphore(context->getDevice(), renderFinishedSemaphore, nullptr);
@@ -766,12 +798,17 @@ void VulkanRenderer::drawFrame() {
     for (int step = 0; step < simSteps; step++) {
         // We dispatch the compute shader multiple times, allowing it to run physics multiple times per visual frame
         vkCmdPushConstants(commandBuffer, pipeline->getComputePipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &pc);
-        // Rounded up, so a grid size that is not a multiple of 8 still covers its last partial
-        // workgroup. main() drops the overshoot before it touches the grid.
+        // Rounded up, so a grid size that is not a multiple of the workgroup still covers its last
+        // partial workgroup. main() drops the overshoot before it touches the grid.
+        //
+        // Z divides by 4 rather than 8: the workgroup is 8x8x4 so that it stays within WebGPU's
+        // 256-invocation limit. These two numbers are a pair -- change local_size_z in
+        // falling_sand.comp without changing this and the top of the world stops being simulated,
+        // silently and only on tall grids.
         vkCmdDispatch(commandBuffer,
             (config.tuning.gridWidth + 7) / 8,
             (config.tuning.gridHeight + 7) / 8,
-            (config.tuning.gridDepth + 7) / 8);
+            (config.tuning.gridDepth + 3) / 4);
 
         // Phase 2: Execution Barrier
         VkMemoryBarrier memoryBarrier{};
@@ -822,7 +859,7 @@ void VulkanRenderer::drawFrame() {
     }
 
     // Inject the compiled UI mesh directly into the command buffer after rendering the primary world geometry
-    uiManager.recordDrawCommands(commandBuffer);
+    UiBackendVulkan::render(commandBuffer);
 
     vkCmdEndRenderPass(commandBuffer);
 

@@ -1,9 +1,6 @@
 #pragma once
 
 #include <imgui.h>
-#include <imgui_impl_glfw.h>
-#include <imgui_impl_vulkan.h>
-#include <vulkan/vulkan.h>
 #include <stdexcept>
 #include <vector>
 #include <string>
@@ -12,8 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include "ConfigSchema.hpp"
-
-struct GLFWwindow;
+#include "UiBackend.hpp"
 
 enum class MaterialType {
     Void = 0,
@@ -61,17 +57,11 @@ public:
     UIManager(const UIManager&) = delete;
     UIManager& operator=(const UIManager&) = delete;
 
-    void init(GLFWwindow* window,
-        VkInstance instance,
-        VkPhysicalDevice physicalDevice,
-        VkDevice device,
-        VkQueue graphicsQueue,
-        uint32_t queueFamily,
-        VkDescriptorPool descriptorPool,
-        VkRenderPass renderPass,
-        uint32_t minImageCount,
-        uint32_t imageCount)
-    {
+    // Creates the ImGui context and applies the theme. Deliberately takes nothing: the graphics
+    // backend is initialised separately by whichever renderer owns the device handles, so this
+    // class -- and the six hundred lines of panels below it -- compiles unchanged against Vulkan
+    // and WebGPU alike. Call this BEFORE the backend's own init, which needs the context to exist.
+    void init() {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGuiIO& io = ImGui::GetIO();
@@ -84,36 +74,16 @@ public:
 
         ImGui::StyleColorsDark();
         setupCustomTheme();
-
-        ImGui_ImplGlfw_InitForVulkan(window, true);
-
-        ImGui_ImplVulkan_InitInfo init_info = {};
-        init_info.Instance = instance;
-        init_info.PhysicalDevice = physicalDevice;
-        init_info.Device = device;
-        init_info.QueueFamily = queueFamily;
-        init_info.Queue = graphicsQueue;
-        init_info.PipelineCache = VK_NULL_HANDLE;
-        init_info.DescriptorPool = descriptorPool;
-
-        init_info.PipelineInfoMain.RenderPass = renderPass;
-        init_info.PipelineInfoMain.Subpass = 0;
-
-        init_info.MinImageCount = minImageCount;
-        init_info.ImageCount = imageCount;
-        init_info.Allocator = nullptr;
-        init_info.CheckVkResultFn = checkVulkanResult;
-
-        ImGui_ImplVulkan_Init(&init_info);
     }
 
-    void uploadFonts(VkDevice device, VkCommandPool commandPool, VkQueue graphicsQueue) {
-        // Automatic in Dear ImGui 1.90+
+    // Tears down the ImGui context. The graphics backend must already have been shut down --
+    // UiBackend::shutdown holds references into the context and has to go first.
+    void shutdownUi() {
+        ImGui::DestroyContext();
     }
 
     void buildUI() {
-        ImGui_ImplVulkan_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
+        UiBackend::newFrame();
         ImGui::NewFrame();
 
         handleShortcuts();
@@ -229,20 +199,6 @@ public:
         m_firstFrame = false;
 
         ImGui::Render();
-    }
-
-    void recordDrawCommands(VkCommandBuffer commandBuffer) {
-        ImDrawData* draw_data = ImGui::GetDrawData();
-        if (draw_data) {
-            ImGui_ImplVulkan_RenderDrawData(draw_data, commandBuffer);
-        }
-    }
-
-    void cleanup(VkDevice device) {
-        vkDeviceWaitIdle(device);
-        ImGui_ImplVulkan_Shutdown();
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
     }
 
     int getBrushSize() const { return m_brushSize; }
@@ -599,11 +555,6 @@ private:
         if (ImGui::IsKeyPressed(ImGuiKey_Equal) || ImGui::IsKeyPressed(ImGuiKey_KeypadAdd)) {
             m_simulationSpeed = std::min(10, m_simulationSpeed + 1);
         }
-    }
-
-    static void checkVulkanResult(VkResult err) {
-        if (err == 0) return;
-        throw std::runtime_error("ImGui Vulkan Error: VkResult = " + std::to_string(err));
     }
 
     void setupCustomTheme() {

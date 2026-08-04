@@ -1,10 +1,36 @@
 #version 450
 
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+// 8 x 8 x 4 = 256 invocations, which is WebGPU's maxComputeInvocationsPerWorkgroup and therefore
+// the ceiling anywhere this has to run in a browser. Desktop Vulkan drivers report 1024, so 8x8x8
+// was fine there and would simply be rejected at pipeline creation on the web.
+//
+// Reshaping is safe because nothing here depends on the workgroup's shape: the shader reads only
+// gl_GlobalInvocationID, declares no shared variables, and calls no barrier(). Those are the only
+// three ways a compute shader can notice. The dispatch in VulkanRenderer divides Z by 4 to match.
+//
+// Not bit-identical, and it was never going to be: changing the shape changes the order invocations
+// reach a contested cell, so which atomicCompSwap wins a race shifts. That ordering is already
+// nondeterministic frame to frame -- it is what the atomics exist to be correct under -- so this
+// changes the tie-breaks, not the behaviour.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
 
 layout(std430, binding = 0) buffer VoxelGrid {
     uint grid[];
 };
+
+// The grid is read in two ways and it matters which: a plain read of a neighbour, and an atomic
+// read-modify-write that claims a cell. Every plain read goes through readCell and every plain
+// write through writeCell, so the two are named rather than spelled identically to the atomics
+// around them.
+//
+// This is also the seam a WebGPU port turns on. WGSL will not let one storage buffer be both
+// atomic and non-atomic -- a binding is array<atomic<u32>> or array<u32>, never both, and there is
+// no reinterpreting between them -- while this shader does exactly that on grid[] in about a
+// hundred and fifty places. Routed through here, the whole of that becomes two function bodies
+// calling atomicLoad and atomicStore. Left inline, it is a hundred and fifty edits with no
+// compiler to check them. It costs nothing in the Vulkan build: both compile to the same load.
+uint readCell(uint index) { return grid[index]; }
+void writeCell(uint index, uint value) { grid[index] = value; }
 
 // Black holes are the one thing in the sim that acts at a distance, so unlike every other
 // material they cannot be discovered by looking at neighbouring voxels. They live in a tiny fixed
@@ -364,7 +390,7 @@ bool isLocustFood(uint value) {
 // FUNCTION: locustFoodAt
 bool locustFoodAt(ivec3 p) {
     if (p.x < 0 || p.x >= WIDTH || p.y < 0 || p.y >= HEIGHT || p.z < 0 || p.z >= DEPTH) return false;
-    return isLocustFood(grid[getIndex(p)]);
+    return isLocustFood(readCell(getIndex(p)));
 }
 
 // FUNCTION: locustPackNav / locustHeading / locustSteps
@@ -406,7 +432,7 @@ bool locustHasGrip(ivec3 pos) {
     for (int d = 0; d < 8; d++) {
         ivec3 n = pos + getHDir(d);
         if (n.x <= 0 || n.x >= WIDTH - 1 || n.z <= 0 || n.z >= DEPTH - 1) continue;
-        if (grid[getIndex(n)] != 0u) return true;
+        if (readCell(getIndex(n)) != 0u) return true;
     }
     return false;
 }
@@ -760,7 +786,7 @@ uint getWaterDeficit() {
 
 // FUNCTION: tryMove
 bool tryMove(uint currentIndex, uint currentValue, uint targetIndex, uint newValue) {
-    uint targetValue = grid[targetIndex];
+    uint targetValue = readCell(targetIndex);
     uint targetType = getType(targetValue);
     uint currentType = getType(currentValue);
 
@@ -814,7 +840,7 @@ bool orbitStep(ivec3 pos, uint currentIndex, uint rawValue, ivec3 stepDir) {
         target.z < 1 || target.z >= DEPTH - 1) return false;
 
     uint targetIndex = getIndex(target);
-    if (getType(grid[targetIndex]) != 0u) return false;
+    if (getType(readCell(targetIndex)) != 0u) return false;
 
     return tryMove(currentIndex, rawValue, targetIndex,
                    pack(getType(rawValue), getDir(rawValue), 0u, getAge(rawValue)));
@@ -1059,7 +1085,7 @@ bool grainCanMove(ivec3 pos) {
         ivec3 target = pos + ivec3((i == 1) ? 1 : ((i == 2) ? -1 : 0), -1,
                                    (i == 3) ? 1 : ((i == 4) ? -1 : 0));
         if (target.x <= 0 || target.x >= WIDTH - 1 || target.z <= 0 || target.z >= DEPTH - 1) continue;
-        uint t = getType(grid[getIndex(target)]);
+        uint t = getType(readCell(getIndex(target)));
         if (t == 0u || t == 2u) return true; // empty to fall into, or water to displace
     }
     return false;
@@ -1078,7 +1104,7 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
                 ivec3 nPos = pos + getOrthoDir(d);
                 if (nPos.x > 0 && nPos.x < WIDTH-1 && nPos.y > 0 && nPos.y < HEIGHT-1 && nPos.z > 0 && nPos.z < DEPTH-1) {
                     uint nIndex = getIndex(nPos);
-                    uint nVal = grid[nIndex];
+                    uint nVal = readCell(nIndex);
 
                     if (getType(nVal) == 2u) {
                         if (atomicCompSwap(grid[nIndex], nVal, 0u) == nVal) {
@@ -1099,7 +1125,7 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
             ivec3 nPos = pos + getOrthoDir(d);
             if (nPos.x > 0 && nPos.x < WIDTH-1 && nPos.y > 0 && nPos.y < HEIGHT-1 && nPos.z > 0 && nPos.z < DEPTH-1) {
                 uint nIndex = getIndex(nPos);
-                uint nVal = grid[nIndex];
+                uint nVal = readCell(nIndex);
                 uint nType = getType(nVal);
 
                 if (nType == 1u || nType == 4u) {
@@ -1118,7 +1144,7 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
 
     if (!moistureModified && moisture >= tuning.sandWaterAbsorbUnit) {
         ivec3 leakPos = pos + ivec3(0, -1, 0);
-        if (leakPos.y > 0 && getType(grid[getIndex(leakPos)]) == 0u) {
+        if (leakPos.y > 0 && getType(readCell(getIndex(leakPos))) == 0u) {
             if (atomicCompSwap(grid[getIndex(leakPos)], 0u, pack(2u, 0u, 0u, 0u)) == 0u) {
                 // Release exactly what one absorption stored. Was hardcoded 0xA6000000u, which
                 // is (-90 << 24) and so silently assumed sandWaterAbsorbUnit == 90; deriving it
@@ -1144,7 +1170,7 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
                 for (int z = -1; z <= 1; z++) {
                     ivec3 checkPos = pos + ivec3(x, -1, z);
                     if (checkPos.x >= 0 && checkPos.x < WIDTH && checkPos.z >= 0 && checkPos.z < DEPTH) {
-                        if (getType(grid[getIndex(checkPos)]) == 0u) {
+                        if (getType(readCell(getIndex(checkPos))) == 0u) {
                             emptyBelowCount++;
                         }
                     }
@@ -1162,7 +1188,7 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
                         if (x == 0 && y == 0 && z == 0) continue;
                         ivec3 nPos = pos + ivec3(x, y, z);
                         if (nPos.x >= 0 && nPos.x < WIDTH && nPos.y >= 0 && nPos.y < HEIGHT && nPos.z >= 0 && nPos.z < DEPTH) {
-                            if (getType(grid[getIndex(nPos)]) == 1u) clumpCount++;
+                            if (getType(readCell(getIndex(nPos))) == 1u) clumpCount++;
                         }
                     }
                 }
@@ -1174,7 +1200,7 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
     if (canMove && !isClumped) {
         if (pos.y > 1) {
             ivec3 belowPos = pos + ivec3(0, -1, 0);
-            if (getType(grid[getIndex(belowPos)]) == 0u) {
+            if (getType(readCell(getIndex(belowPos))) == 0u) {
                 if (tryMove(currentIndex, rawValue, getIndex(belowPos), pack(1u, 0u, 0u, moisture))) return;
             }
         }
@@ -1190,12 +1216,12 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
             }
 
             if (slidePos1.x > 0 && slidePos1.x < WIDTH - 1 && slidePos1.z > 0 && slidePos1.z < DEPTH - 1) {
-                if (getType(grid[getIndex(slidePos1)]) == 0u) {
+                if (getType(readCell(getIndex(slidePos1))) == 0u) {
                     if (tryMove(currentIndex, rawValue, getIndex(slidePos1), pack(1u, 0u, 0u, moisture))) return;
                 }
             }
             if (slidePos2.x > 0 && slidePos2.x < WIDTH - 1 && slidePos2.z > 0 && slidePos2.z < DEPTH - 1) {
-                if (getType(grid[getIndex(slidePos2)]) == 0u) {
+                if (getType(readCell(getIndex(slidePos2))) == 0u) {
                     if (tryMove(currentIndex, rawValue, getIndex(slidePos2), pack(1u, 0u, 0u, moisture))) return;
                 }
             }
@@ -1204,7 +1230,7 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
         if (pos.y > 1) {
             ivec3 belowPos = pos + ivec3(0, -1, 0);
             uint belowIndex = getIndex(belowPos);
-            uint belowValue = grid[belowIndex];
+            uint belowValue = readCell(belowIndex);
             
             if (getType(belowValue) == 2u) {
                 int startDir = int(fract(randVal * 8.0f) * 8.0f);
@@ -1230,7 +1256,7 @@ void updateSand(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, 
                 ivec3 sPos = slidePos[s];
                 if (sPos.x > 0 && sPos.x < WIDTH - 1 && sPos.z > 0 && sPos.z < DEPTH - 1) {
                     uint sIndex = getIndex(sPos);
-                    uint sValue = grid[sIndex];
+                    uint sValue = readCell(sIndex);
                     if (getType(sValue) == 2u) {
                         int startDir = int(fract(randVal * 8.0f + float(s)) * 8.0f);
                         for (int i = 0; i < 8; i++) {
@@ -1263,7 +1289,7 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
             ivec3 nPos = pos + getOrthoDir(d);
             if (nPos.x > 0 && nPos.x < WIDTH-1 && nPos.y > 0 && nPos.y < HEIGHT-1 && nPos.z > 0 && nPos.z < DEPTH-1) {
                 uint nIndex = getIndex(nPos);
-                uint nVal = grid[nIndex];
+                uint nVal = readCell(nIndex);
 
                 if (getType(nVal) == 2u) {
                     if (atomicCompSwap(grid[nIndex], nVal, 0u) == nVal) {
@@ -1282,7 +1308,7 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
         ivec3 nPos = pos + getOrthoDir(d);
         if (nPos.x > 0 && nPos.x < WIDTH-1 && nPos.y > 0 && nPos.y < HEIGHT-1 && nPos.z > 0 && nPos.z < DEPTH-1) {
             uint nIndex = getIndex(nPos);
-            uint nVal = grid[nIndex];
+            uint nVal = readCell(nIndex);
             uint nType = getType(nVal);
 
             if (nType == 4u || nType == 1u) {
@@ -1310,7 +1336,7 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
                 for (int z = -1; z <= 1; z++) {
                     ivec3 checkPos = pos + ivec3(x, -1, z);
                     if (checkPos.x >= 0 && checkPos.x < WIDTH && checkPos.z >= 0 && checkPos.z < DEPTH) {
-                        if (getType(grid[getIndex(checkPos)]) == 0u) {
+                        if (getType(readCell(getIndex(checkPos))) == 0u) {
                             emptyBelowCount++;
                         }
                     }
@@ -1328,7 +1354,7 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
                         if (x == 0 && y == 0 && z == 0) continue;
                         ivec3 nPos = pos + ivec3(x, y, z);
                         if (nPos.x >= 0 && nPos.x < WIDTH && nPos.y >= 0 && nPos.y < HEIGHT && nPos.z >= 0 && nPos.z < DEPTH) {
-                            if (getType(grid[getIndex(nPos)]) == 4u) clumpCount++;
+                            if (getType(readCell(getIndex(nPos))) == 4u) clumpCount++;
                         }
                     }
                 }
@@ -1340,7 +1366,7 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
     if (canMove && !isClumped) {
         if (pos.y > 1) {
             ivec3 belowPos = pos + ivec3(0, -1, 0);
-            if (getType(grid[getIndex(belowPos)]) == 0u) {
+            if (getType(readCell(getIndex(belowPos))) == 0u) {
                 if (tryMove(currentIndex, rawValue, getIndex(belowPos), pack(4u, 0u, 0u, moisture))) return;
             }
         }
@@ -1356,12 +1382,12 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
             }
 
             if (slidePos1.x > 0 && slidePos1.x < WIDTH - 1 && slidePos1.z > 0 && slidePos1.z < DEPTH - 1) {
-                if (getType(grid[getIndex(slidePos1)]) == 0u) {
+                if (getType(readCell(getIndex(slidePos1))) == 0u) {
                     if (tryMove(currentIndex, rawValue, getIndex(slidePos1), pack(4u, 0u, 0u, moisture))) return;
                 }
             }
             if (slidePos2.x > 0 && slidePos2.x < WIDTH - 1 && slidePos2.z > 0 && slidePos2.z < DEPTH - 1) {
-                if (getType(grid[getIndex(slidePos2)]) == 0u) {
+                if (getType(readCell(getIndex(slidePos2))) == 0u) {
                     if (tryMove(currentIndex, rawValue, getIndex(slidePos2), pack(4u, 0u, 0u, moisture))) return;
                 }
             }
@@ -1370,7 +1396,7 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
         if (pos.y > 1) {
             ivec3 belowPos = pos + ivec3(0, -1, 0);
             uint belowIndex = getIndex(belowPos);
-            uint belowValue = grid[belowIndex];
+            uint belowValue = readCell(belowIndex);
             
             if (getType(belowValue) == 2u) {
                 int startDir = int(fract(randVal * 8.0f) * 8.0f);
@@ -1396,7 +1422,7 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
                 ivec3 sPos = slidePos[s];
                 if (sPos.x > 0 && sPos.x < WIDTH - 1 && sPos.z > 0 && sPos.z < DEPTH - 1) {
                     uint sIndex = getIndex(sPos);
-                    uint sValue = grid[sIndex];
+                    uint sValue = readCell(sIndex);
                     if (getType(sValue) == 2u) {
                         int startDir = int(fract(randVal * 8.0f + float(s)) * 8.0f);
                         for (int i = 0; i < 8; i++) {
@@ -1419,7 +1445,7 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
         ivec3 abovePos = pos + ivec3(0, 1, 0);
         bool aboveInside = (abovePos.y < HEIGHT - 1);
         uint aboveIndex = getIndex(abovePos);
-        uint aboveType = aboveInside ? getType(grid[aboveIndex]) : 0u;
+        uint aboveType = aboveInside ? getType(readCell(aboveIndex)) : 0u;
 
         // A trunk counts as open sky here, not as something resting on top. A tree grows OUT of its
         // grass rather than over it -- the block keeps its turf, and keeps growing it back if it is
@@ -1469,17 +1495,17 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
 void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentSleep, uint currentAge, float randVal) {
     if (currentSleep > tuning.wakeSleepThreshold) {
         bool wake = false;
-        if (pos.y > 1 && getType(grid[getIndex(pos + ivec3(0, -1, 0))]) == 0u) {
+        if (pos.y > 1 && getType(readCell(getIndex(pos + ivec3(0, -1, 0)))) == 0u) {
             wake = true;
         } else {
-            bool hasPressure = (pos.y < HEIGHT - 2) ? (getType(grid[getIndex(pos + ivec3(0, 1, 0))]) != 0u) : false;
-            bool isStackedOnWater = (pos.y > 1) ? (getType(grid[getIndex(pos + ivec3(0, -1, 0))]) == 2u) : false;
+            bool hasPressure = (pos.y < HEIGHT - 2) ? (getType(readCell(getIndex(pos + ivec3(0, 1, 0)))) != 0u) : false;
+            bool isStackedOnWater = (pos.y > 1) ? (getType(readCell(getIndex(pos + ivec3(0, -1, 0)))) == 2u) : false;
 
             for(int d = 0; d < 8; d++) {
                 ivec3 nPos = pos + getHDir(d);
                 if (nPos.x > 0 && nPos.x < WIDTH - 1 && nPos.z > 0 && nPos.z < DEPTH - 1) {
-                    if (getType(grid[getIndex(nPos)]) == 0u) {
-                        uint belowNeighbor = getType(grid[getIndex(nPos + ivec3(0, -1, 0))]);
+                    if (getType(readCell(getIndex(nPos))) == 0u) {
+                        uint belowNeighbor = getType(readCell(getIndex(nPos + ivec3(0, -1, 0))));
                         if (belowNeighbor == 0u || hasPressure || isStackedOnWater || belowNeighbor == 2u) {
                             wake = true;
                             break;
@@ -1497,7 +1523,7 @@ void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
 
     if (pos.y > 1) {
         ivec3 belowPos = pos + ivec3(0, -1, 0);
-        if (getType(grid[getIndex(belowPos)]) == 0u) {
+        if (getType(readCell(getIndex(belowPos))) == 0u) {
             if (tryMove(currentIndex, rawValue, getIndex(belowPos), pack(2u, 0u, 0u, newAge))) return;
         }
     }
@@ -1524,7 +1550,7 @@ void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
         
         ivec3 stepPos = pos + getHDir(int(diagDir) - 1);
         if (stepPos.x > 0 && stepPos.x < WIDTH - 1 && stepPos.z > 0 && stepPos.z < DEPTH - 1) {
-            if (getType(grid[getIndex(stepPos)]) == 0u) {
+            if (getType(readCell(getIndex(stepPos))) == 0u) {
                 uint newValue = pack(2u, newDir, 0u, newAge);
                 if (tryMove(currentIndex, rawValue, getIndex(stepPos), newValue)) return;
             }
@@ -1551,9 +1577,9 @@ void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
             if ((blockedMask & (1u << d)) == 0u) {
                 ivec3 c = pos + getHDir(d) * r;
                 
-                if (c.x <= 0 || c.x >= WIDTH - 1 || c.z <= 0 || c.z >= DEPTH - 1 || getType(grid[getIndex(c)]) != 0u) {
+                if (c.x <= 0 || c.x >= WIDTH - 1 || c.z <= 0 || c.z >= DEPTH - 1 || getType(readCell(getIndex(c))) != 0u) {
                     blockedMask |= (1u << d);
-                } else if (c.y > 1 && getType(grid[getIndex(c + ivec3(0, -1, 0))]) == 0u) {
+                } else if (c.y > 1 && getType(readCell(getIndex(c + ivec3(0, -1, 0)))) == 0u) {
                     bestDropPos = c; 
                     foundDrop = true; 
                     break;
@@ -1567,14 +1593,14 @@ void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
         uint newValue = pack(2u, 0u, 0u, 0u); 
         if (tryMove(currentIndex, rawValue, getIndex(bestDropPos), newValue)) return;
     } else {
-        bool hasPressure = (pos.y < HEIGHT - 2) ? (getType(grid[getIndex(pos + ivec3(0, 1, 0))]) != 0u) : false;
-        bool isStackedOnWater = (pos.y > 1) ? (getType(grid[getIndex(pos + ivec3(0, -1, 0))]) == 2u) : false;
+        bool hasPressure = (pos.y < HEIGHT - 2) ? (getType(readCell(getIndex(pos + ivec3(0, 1, 0)))) != 0u) : false;
+        bool isStackedOnWater = (pos.y > 1) ? (getType(readCell(getIndex(pos + ivec3(0, -1, 0)))) == 2u) : false;
         
         bool canStepOntoPool = false;
         for(int d = 0; d < 8; d++) {
             ivec3 nPos = pos + getHDir(d);
             if(nPos.x > 0 && nPos.x < WIDTH - 1 && nPos.z > 0 && nPos.z < DEPTH - 1) {
-                if(getType(grid[getIndex(nPos)]) == 0u && pos.y > 1 && getType(grid[getIndex(nPos + ivec3(0,-1,0))]) == 2u) {
+                if(getType(readCell(getIndex(nPos))) == 0u && pos.y > 1 && getType(readCell(getIndex(nPos + ivec3(0,-1,0)))) == 2u) {
                     canStepOntoPool = true; 
                     break;
                 }
@@ -1587,7 +1613,7 @@ void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
                 int d = (startSpreadDir + i) % 8;
                 ivec3 targetPos = pos + getHDir(d);
                 if (targetPos.x > 0 && targetPos.x < WIDTH - 1 && targetPos.z > 0 && targetPos.z < DEPTH - 1) {
-                    if (getType(grid[getIndex(targetPos)]) == 0u) {
+                    if (getType(readCell(getIndex(targetPos))) == 0u) {
                         uint newValue = pack(2u, uint(d + 1), 0u, newAge);
                         if (tryMove(currentIndex, rawValue, getIndex(targetPos), newValue)) return;
                     }
@@ -1616,7 +1642,7 @@ void lavaInteract(ivec3 pos, inout uint coolness, float randVal) {
             nPos.z <= 0 || nPos.z >= DEPTH - 1) continue;
 
         uint nIndex = getIndex(nPos);
-        uint nVal = grid[nIndex];
+        uint nVal = readCell(nIndex);
         uint nType = getType(nVal);
 
         if (nType == 2u) {
@@ -1656,7 +1682,7 @@ void lavaInteract(ivec3 pos, inout uint coolness, float randVal) {
             // does not need its own copy of how burning works.
             if (nType == 4u && flora > 10u && flora <= 100u) {
                 ivec3 abovePos = nPos + ivec3(0, 1, 0);
-                if (abovePos.y < HEIGHT - 1 && getType(grid[getIndex(abovePos)]) == 0u &&
+                if (abovePos.y < HEIGHT - 1 && getType(readCell(getIndex(abovePos))) == 0u &&
                     fract(randVal * 41.0f) < tuning.lavaIgniteChance) {
                     if (atomicCompSwap(grid[getIndex(abovePos)], 0u, pack(5u, 0u, 0u, 0u)) == 0u) return;
                 }
@@ -1737,7 +1763,7 @@ void updateLava(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
     if (fract(randVal * 89.0f) < tuning.lavaViscosity) {
         if (pos.y > 1) {
             ivec3 belowPos = pos + ivec3(0, -1, 0);
-            if (getType(grid[getIndex(belowPos)]) == 0u) {
+            if (getType(readCell(getIndex(belowPos))) == 0u) {
                 if (tryMove(currentIndex, rawValue, getIndex(belowPos), pack(newType, currentDir, 0u, coolness))) return;
             }
         }
@@ -1753,7 +1779,7 @@ void updateLava(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
             for (int s = 0; s < 2; s++) {
                 ivec3 sPos = slide[s];
                 if (sPos.x > 0 && sPos.x < WIDTH - 1 && sPos.z > 0 && sPos.z < DEPTH - 1) {
-                    if (getType(grid[getIndex(sPos)]) == 0u) {
+                    if (getType(readCell(getIndex(sPos))) == 0u) {
                         if (tryMove(currentIndex, rawValue, getIndex(sPos), pack(newType, currentDir, 0u, coolness))) return;
                     }
                 }
@@ -1776,9 +1802,9 @@ void updateLava(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
 
                     ivec3 c = pos + getHDir(d) * r;
                     if (c.x <= 0 || c.x >= WIDTH - 1 || c.z <= 0 || c.z >= DEPTH - 1 ||
-                        getType(grid[getIndex(c)]) != 0u) {
+                        getType(readCell(getIndex(c))) != 0u) {
                         blockedMask |= (1u << d);
-                    } else if (c.y > 1 && getType(grid[getIndex(c + ivec3(0, -1, 0))]) == 0u) {
+                    } else if (c.y > 1 && getType(readCell(getIndex(c + ivec3(0, -1, 0)))) == 0u) {
                         if (tryMove(currentIndex, rawValue, getIndex(c), pack(newType, 0u, 0u, coolness))) return;
                         blockedMask |= (1u << d);
                     }
@@ -1787,8 +1813,8 @@ void updateLava(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
 
             // Nowhere to fall, so level out under pressure -- the same condition water settles by,
             // which is what lets a lava pool find a flat top before it freezes in place.
-            bool hasPressure = (pos.y < HEIGHT - 2) ? (getType(grid[getIndex(pos + ivec3(0, 1, 0))]) != 0u) : false;
-            bool stackedOnLava = (pos.y > 1) ? isLava(getType(grid[getIndex(pos + ivec3(0, -1, 0))])) : false;
+            bool hasPressure = (pos.y < HEIGHT - 2) ? (getType(readCell(getIndex(pos + ivec3(0, 1, 0)))) != 0u) : false;
+            bool stackedOnLava = (pos.y > 1) ? isLava(getType(readCell(getIndex(pos + ivec3(0, -1, 0))))) : false;
 
             if (hasPressure || stackedOnLava) {
                 int spreadStart = int(fract(randVal * 8.0f) * 8.0f);
@@ -1796,7 +1822,7 @@ void updateLava(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
                     int d = (spreadStart + i) % 8;
                     ivec3 targetPos = pos + getHDir(d);
                     if (targetPos.x > 0 && targetPos.x < WIDTH - 1 && targetPos.z > 0 && targetPos.z < DEPTH - 1) {
-                        if (getType(grid[getIndex(targetPos)]) == 0u) {
+                        if (getType(readCell(getIndex(targetPos))) == 0u) {
                             if (tryMove(currentIndex, rawValue, getIndex(targetPos), pack(newType, uint(d + 1), 0u, coolness))) return;
                         }
                     }
@@ -1823,7 +1849,7 @@ void updateLava(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
 void updateDarkStone(ivec3 pos, uint currentIndex, uint rawValue, uint currentAge, float randVal) {
     if (pos.y > 1) {
         ivec3 belowPos = pos + ivec3(0, -1, 0);
-        if (getType(grid[getIndex(belowPos)]) == 0u) {
+        if (getType(readCell(getIndex(belowPos))) == 0u) {
             // Age carries the trapped water across the move -- a falling slab must not forget how
             // close it is to being reclaimed just because the ground moved out from under it.
             if (tryMove(currentIndex, rawValue, getIndex(belowPos), pack(DARK_STONE, 0u, 0u, currentAge))) return;
@@ -1868,7 +1894,7 @@ void updateTrunk(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
             if (!treeInBounds(c)) continue;
 
             uint idx = getIndex(c);
-            uint v = grid[idx];
+            uint v = readCell(idx);
             if (getType(v) != 4u) continue;
 
             uint moisture = getAge(v);
@@ -1900,7 +1926,7 @@ void updateTrunk(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
     uint upIndex = 0u;
     if (treeInBounds(upPos)) {
         upIndex = getIndex(upPos);
-        upValue = grid[upIndex];
+        upValue = readCell(upIndex);
         upIsTrunk = (getType(upValue) == TREE_TRUNK);
     }
 
@@ -1935,7 +1961,7 @@ void updateTrunk(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
             if (!treeInBounds(c)) continue;
 
             uint idx = getIndex(c);
-            if (grid[idx] != 0u) continue;
+            if (readCell(idx) != 0u) continue;
             if (atomicCompSwap(grid[idx], 0u, pack(TREE_LEAF, 0u, 0u, 1u)) == 0u) {
                 water -= tuning.treeLeafCost;
                 changed = true;
@@ -1955,8 +1981,8 @@ void updateTrunk(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
             if (!treeInBounds(c)) continue;
 
             uint idx = getIndex(c);
-            if (grid[idx] != 0u) continue;
-            if (!isGrassBlock(grid[getIndex(c + ivec3(0, -1, 0))])) continue;
+            if (readCell(idx) != 0u) continue;
+            if (!isGrassBlock(readCell(getIndex(c + ivec3(0, -1, 0))))) continue;
 
             if (atomicCompSwap(grid[idx], 0u, pack(TREE_TRUNK, 0u, 0u, 0u)) == 0u) {
                 water -= tuning.treeSpreadCost;
@@ -1991,7 +2017,7 @@ void updateLeaf(ivec3 pos, uint currentIndex, uint rawValue, uint currentAge, fl
     // floor in green, and it would be the only thing here that accumulates without ever clearing.
     if (currentAge == LEAF_DETACHED) {
         ivec3 belowPos = pos + ivec3(0, -1, 0);
-        if (treeInBounds(belowPos) && grid[getIndex(belowPos)] == 0u) {
+        if (treeInBounds(belowPos) && readCell(getIndex(belowPos)) == 0u) {
             if (tryMove(currentIndex, rawValue, getIndex(belowPos),
                         pack(TREE_LEAF, 0u, 0u, LEAF_DETACHED))) return;
         }
@@ -2013,7 +2039,7 @@ void updateLeaf(ivec3 pos, uint currentIndex, uint rawValue, uint currentAge, fl
         ivec3 c = pos + tree26((start + i) % 26);
         if (!treeInBounds(c)) continue;
 
-        uint v = grid[getIndex(c)];
+        uint v = readCell(getIndex(c));
         uint t = getType(v);
 
         // Only the CROWN anchors a canopy, not any trunk voxel. Letting the whole column anchor is
@@ -2077,7 +2103,7 @@ void locustBud(ivec3 pos, float randVal) {
         if (!locustInBounds(c)) continue;
 
         uint idx = getIndex(c);
-        if (grid[idx] != 0u) continue;
+        if (readCell(idx) != 0u) continue;
         if (atomicCompSwap(grid[idx], 0u, pack(locustTypeFor(bud), 0u, 0u, bud)) == 0u) return;
     }
 }
@@ -2105,7 +2131,7 @@ void updateLocust(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, 
     uint count = currentAge;
     ivec3 belowPos = pos + ivec3(0, -1, 0);
     uint belowIndex = getIndex(belowPos);
-    uint belowValue = grid[belowIndex];
+    uint belowValue = readCell(belowIndex);
 
     // --- Grazing --------------------------------------------------------------------------------
     // Standing on grass is the whole of the feeding rule: no stored "am I eating" flag, just the
@@ -2190,7 +2216,7 @@ void updateLocust(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, 
             for (int rise = 0; rise < 3; rise++) {
                 ivec3 t = c + ivec3(0, (rise == 1) ? 1 : ((rise == 2) ? -1 : 0), 0);
                 if (!locustInBounds(t)) continue;
-                if (grid[getIndex(t)] != 0u) continue;
+                if (readCell(getIndex(t)) != 0u) continue;
                 if (!locustFoodAt(t + ivec3(0, -1, 0))) continue;
                 // Arrives with a zeroed dir byte because it is landing on grass: the meal starts now.
                 if (tryMove(currentIndex, rawValue, getIndex(t), pack(newType, 0u, 0u, count))) return;
@@ -2203,7 +2229,7 @@ void updateLocust(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, 
 
     // --- Advance along the heading ----------------------------------------------------------------
     ivec3 target = pos + getHDir(int(heading));
-    bool blocked = !locustInBounds(target) || grid[getIndex(target)] != 0u;
+    bool blocked = !locustInBounds(target) || readCell(getIndex(target)) != 0u;
 
     if (!blocked) {
         // Cliff rule: a clear cell with nothing under it is a drop, and a swarm turns back rather
@@ -2213,7 +2239,7 @@ void updateLocust(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, 
         // drop. Without it a swarm walking at y=1 reads every direction as a cliff, turns on the
         // spot until it starves, and the bottom layer of the world becomes quietly lethal.
         ivec3 footing = target + ivec3(0, -1, 0);
-        if (locustInBounds(footing) && grid[getIndex(footing)] == 0u) {
+        if (locustInBounds(footing) && readCell(getIndex(footing)) == 0u) {
             // "Prefer to turn around" is a preference, not a reflex, and it has to be written as one.
             // Reversing unconditionally makes a swarm on a ledge flip between the same two headings
             // forever: both are cliffs, each turn produces the other, and it never rolls one of the
@@ -2225,8 +2251,8 @@ void updateLocust(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, 
             uint back = locustReverse(heading);
             ivec3 backPos = pos + getHDir(int(back));
             ivec3 backFoot = backPos + ivec3(0, -1, 0);
-            bool backOpen = locustInBounds(backPos) && grid[getIndex(backPos)] == 0u &&
-                            !(locustInBounds(backFoot) && grid[getIndex(backFoot)] == 0u);
+            bool backOpen = locustInBounds(backPos) && readCell(getIndex(backPos)) == 0u &&
+                            !(locustInBounds(backFoot) && readCell(getIndex(backFoot)) == 0u);
 
             uint turnedNav = backOpen
                 ? locustPackNav(back, steps)
@@ -2247,14 +2273,14 @@ void updateLocust(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, 
             // step of the run and is counted as one -- where climbing a wall face is not progress
             // along anything and leaves the run where it was.
             ivec3 overTop = target + ivec3(0, 1, 0);
-            if (locustInBounds(overTop) && grid[getIndex(overTop)] == 0u) {
+            if (locustInBounds(overTop) && readCell(getIndex(overTop)) == 0u) {
                 uint nav = locustPackNav(heading, steps - 1u);
                 if (tryMove(currentIndex, rawValue, getIndex(overTop),
                             pack(newType, locustArriveDir(overTop, nav), 0u, count))) return;
             }
 
             ivec3 up = pos + ivec3(0, 1, 0);
-            if (locustInBounds(up) && grid[getIndex(up)] == 0u) {
+            if (locustInBounds(up) && readCell(getIndex(up)) == 0u) {
                 uint nav = locustPackNav(heading, steps);
                 if (tryMove(currentIndex, rawValue, getIndex(up),
                             pack(newType, locustArriveDir(up, nav), 0u, count))) return;
@@ -2280,7 +2306,7 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
         ivec3 nPos = pos + getOrthoDir(i);
         if (nPos.x > 0 && nPos.x < WIDTH-1 && nPos.y > 0 && nPos.y < HEIGHT-1 && nPos.z > 0 && nPos.z < DEPTH-1) {
             uint nIndex = getIndex(nPos);
-            uint nVal = grid[nIndex];
+            uint nVal = readCell(nIndex);
             if (getType(nVal) == 2u) {
                 if (atomicCompSwap(grid[nIndex], nVal, pack(6u, 0u, 0u, 0u)) == nVal) {
                     decWater(); // water voxel became steam; it is no longer a water voxel
@@ -2314,7 +2340,7 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
             if (!treeInBounds(nPos)) continue;
 
             uint nIndex = getIndex(nPos);
-            uint nVal = grid[nIndex];
+            uint nVal = readCell(nIndex);
             uint nType = getType(nVal);
             if (nType != TREE_LEAF && nType != TREE_TRUNK) continue;
 
@@ -2329,7 +2355,7 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
     if (pos.y > 1) {
         ivec3 belowPos = pos + ivec3(0, -1, 0);
         uint belowIndex = getIndex(belowPos);
-        uint belowValue = grid[belowIndex];
+        uint belowValue = readCell(belowIndex);
         uint belowType = getType(belowValue);
 
         if (belowType == 0u) {
@@ -2364,9 +2390,9 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
                     ivec3 targetPos = pos + getHDir(d);
                     if (targetPos.x > 0 && targetPos.x < WIDTH-1 && targetPos.z > 0 && targetPos.z < DEPTH-1) {
                         uint targetIndex = getIndex(targetPos);
-                        if (getType(grid[targetIndex]) == 0u) {
+                        if (getType(readCell(targetIndex)) == 0u) {
                             ivec3 targetBelow = targetPos + ivec3(0, -1, 0);
-                            uint tBelowVal = grid[getIndex(targetBelow)];
+                            uint tBelowVal = readCell(getIndex(targetBelow));
                             if (getType(tBelowVal) == 4u) {
                                 uint tFlora = (tBelowVal >> 8) & 0xFFu;
                                 if (tFlora > 10u && tFlora <= 100u) {
@@ -2410,7 +2436,7 @@ void updateSimState() {
         if (code == 0u) continue;
 
         uint voxel = code & BH_INDEX_MASK;
-        if (getType(grid[voxel]) != 7u) {
+        if (getType(readCell(voxel)) != 7u) {
             blackHoles[i] = 0u;
             continue;
         }
@@ -2436,7 +2462,7 @@ void updateSimState() {
                 // Nothing left to shed and nothing coming in: the hole evaporates. Clearing the
                 // voxel and the slot together is what keeps this from leaving an untracked black
                 // voxel behind -- and doing it from the sweep means it happens exactly once.
-                grid[voxel] = 0u;
+                writeCell(voxel, 0u);
                 blackHoles[i] = 0u;
                 continue;
             }
@@ -2541,7 +2567,7 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
         int d = int(fract(randVal * 13.0f) * 6.0f);
         ivec3 scatterPos = pos + getOrthoDir(d);
         if (scatterPos.x > 0 && scatterPos.x < WIDTH - 1 && scatterPos.y > 0 && scatterPos.y < HEIGHT - 1 && scatterPos.z > 0 && scatterPos.z < DEPTH - 1) {
-            uint sType = getType(grid[getIndex(scatterPos)]);
+            uint sType = getType(readCell(getIndex(scatterPos)));
             if (sType == 0u || sType == 5u) {
                 if (tryMove(currentIndex, rawValue, getIndex(scatterPos), pack(6u, 0u, 0u, newAge))) return;
             }
@@ -2562,7 +2588,7 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
         ivec3 cPos = checkPos[i];
         if (cPos.x > 0 && cPos.x < WIDTH - 1 && cPos.z > 0 && cPos.z < DEPTH - 1) {
             uint cIndex = getIndex(cPos);
-            uint cVal = grid[cIndex];
+            uint cVal = readCell(cIndex);
             uint cType = getType(cVal);
             
             if (cType == 1u || cType == 4u) {
@@ -2582,7 +2608,7 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
     for (int i = 0; i < 3; i++) {
         ivec3 sPos = checkPos[i];
         if (sPos.x > 0 && sPos.x < WIDTH - 1 && sPos.z > 0 && sPos.z < DEPTH - 1) {
-            uint sType = getType(grid[getIndex(sPos)]);
+            uint sType = getType(readCell(getIndex(sPos)));
             if (sType == 0u || sType == 5u) {
                 if (tryMove(currentIndex, rawValue, getIndex(sPos), pack(6u, 0u, 0u, newAge))) return;
             }
@@ -2608,7 +2634,7 @@ void main() {
 
     if (pc.spawnActive == 1 && inBrush(pos)) {
         uint spawnIndex = getIndex(pos);
-        uint oldType = getType(grid[spawnIndex]);
+        uint oldType = getType(readCell(spawnIndex));
         uint newType = uint(pc.spawnType);
 
         // Clicking an existing black hole is the one no-op: re-placing it would burn a second table
@@ -2630,7 +2656,7 @@ void main() {
             // from the dropdown would carry coolness 0 and be retyped straight back to stage 0 on
             // its first update, and a placed swarm would be a swarm of nobody and die immediately.
             uint seedAge = isLocust(newType) ? locustSpawnCount(newType) : lavaSpawnCoolness(newType);
-            grid[spawnIndex] = pack(newType, 0u, 0u, seedAge);
+            writeCell(spawnIndex, pack(newType, 0u, 0u, seedAge));
 
             if (newType == 7u) {
                 // The voxel is published BEFORE the slot is claimed, and the barrier is what makes
@@ -2640,7 +2666,7 @@ void main() {
                 // pulls on nothing.
                 memoryBarrierBuffer();
                 if (!bhRegister(pos)) {
-                    grid[spawnIndex] = 0u; // table full: roll back rather than leave an inert hole
+                    writeCell(spawnIndex, 0u); // table full: roll back rather than leave an inert hole
                 }
             }
         }
@@ -2653,7 +2679,7 @@ void main() {
     }
 
     uint currentIndex = getIndex(pos);
-    uint rawValue = grid[currentIndex];
+    uint rawValue = readCell(currentIndex);
     uint currentType = getType(rawValue);
 
     // --- RAIN: while draining, void cells at the top boundary (same layer steam vents from)
