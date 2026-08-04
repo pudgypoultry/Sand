@@ -2677,7 +2677,23 @@ void main() {
                 // this code, and it frees any slot whose voxel is not a hole -- so a slot becoming
                 // visible ahead of its voxel would get reaped instantly, leaving a black cube that
                 // pulls on nothing.
+                //
+                // There is no web equivalent, and this is not a translation gap that can be closed.
+                // GLSL's memoryBarrierBuffer orders THIS invocation's memory operations and
+                // synchronises nothing, so it is legal here, inside a per-voxel branch. WGSL's
+                // nearest spelling, storageBarrier, is a different instrument: a workgroup
+                // execution barrier every invocation must reach, and therefore illegal in divergent
+                // control flow -- Tint rejects it outright with "must only be called from uniform
+                // control flow". WGSL has no memory fence without the rendezvous.
+                //
+                // So the web build goes without, and the race it guards is live there: a black hole
+                // placed on the same dispatch its table sweep runs could be reaped between the two
+                // writes and leave an inert black voxel. Narrow, and currently unreachable anyway
+                // because placing blocks needs the mouse raycast, which the web renderer has not
+                // ported yet. Worth revisiting when it is.
+#ifndef SAND_WEB
                 memoryBarrierBuffer();
+#endif
                 if (!bhRegister(pos)) {
                     writeCell(spawnIndex, 0u); // table full: roll back rather than leave an inert hole
                 }
