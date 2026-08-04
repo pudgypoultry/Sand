@@ -198,6 +198,10 @@ if(EMSCRIPTEN)
         "-sEXPORTED_RUNTIME_METHODS=['UTF8ToString','stringToUTF8','lengthBytesUTF8']"
         "-sEXPORTED_FUNCTIONS=['_main','_malloc','_free']"
         "-sSTACK_SIZE=1048576"
+        # On while the port is being brought up. Without it an abort prints "Aborted(undefined)"
+        # and the actual reason is discarded, which has already cost several rounds of guessing.
+        # Worth the size until the web build stops surprising us.
+        "-sASSERTIONS=1"
         # SHELL: keeps the flag and its argument together as one entry.
         #
         # Without it they are two list items, and target_link_options DE-DUPLICATES: a second

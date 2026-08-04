@@ -41,6 +41,16 @@ WGPUStringView sv(const char* s) {
     return v;
 }
 
+// The same, but with the length given rather than left to the WGPU_STRLEN sentinel. Used for
+// shader source: it is a third of a megabyte, the length is already known, and passing it avoids
+// asking the other side of the boundary to go and find the terminator.
+WGPUStringView svn(const std::string& s) {
+    WGPUStringView v = WGPU_STRING_VIEW_INIT;
+    v.data = s.data();
+    v.length = s.size();
+    return v;
+}
+
 // Messages come back as a view too, and it is NOT guaranteed to be NUL-terminated -- printing it
 // with %s would run off the end. The length has to be honoured.
 std::string toString(WGPUStringView v) {
@@ -68,6 +78,38 @@ std::string readTextFile(const std::string& path) {
     std::ostringstream ss;
     ss << in.rdbuf();
     return ss.str();
+}
+
+// Asks a shader module for its compilation log and prints it.
+//
+// Worth doing explicitly rather than relying on the uncaptured-error callback: that one fires when
+// something USES the bad module, so the message arrives attached to a pipeline failure and only if
+// a pipeline is attempted. This asks the module itself, which reports warnings as well as errors
+// and does so whether or not anything downstream ever runs.
+void dumpCompilationInfo(WGPUShaderModule module, const char* label) {
+    WGPUCompilationInfoCallbackInfo info = WGPU_COMPILATION_INFO_CALLBACK_INFO_INIT;
+    info.mode = WGPUCallbackMode_AllowSpontaneous;
+    info.userdata1 = const_cast<char*>(label);
+    info.callback = [](WGPUCompilationInfoRequestStatus status,
+                       WGPUCompilationInfo const* compilationInfo, void* userdata1, void*) {
+        const char* who = static_cast<const char*>(userdata1);
+        if (status != WGPUCompilationInfoRequestStatus_Success || !compilationInfo) {
+            std::fprintf(stderr, "[shader] %s: no compilation info (status %d)\n", who, (int)status);
+            return;
+        }
+        if (compilationInfo->messageCount == 0) {
+            std::printf("[shader] %s: compiled clean\n", who);
+            return;
+        }
+        for (size_t i = 0; i < compilationInfo->messageCount; i++) {
+            const WGPUCompilationMessage& m = compilationInfo->messages[i];
+            std::fprintf(stderr, "[shader] %s %s:%llu:%llu: %s\n", who,
+                         m.type == WGPUCompilationMessageType_Error ? "error" : "warning",
+                         (unsigned long long)m.lineNum, (unsigned long long)m.linePos,
+                         toString(m.message).c_str());
+        }
+    };
+    wgpuShaderModuleGetCompilationInfo(module, info);
 }
 
 } // namespace
@@ -339,7 +381,7 @@ void WebGpuRenderer::createRaymarchPipeline() {
 
     auto makeModule = [&](const std::string& code, const char* label) {
         WGPUShaderSourceWGSL wgsl = WGPU_SHADER_SOURCE_WGSL_INIT;
-        wgsl.code = sv(code.c_str());
+        wgsl.code = svn(code);
         WGPUShaderModuleDescriptor desc = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
         desc.nextInChain = &wgsl.chain;
         desc.label = sv(label);
@@ -434,12 +476,14 @@ void WebGpuRenderer::createSimulatePipeline() {
     std::printf("[sand]   read %s: %zu bytes\n", path.c_str(), src.size());
 
     WGPUShaderSourceWGSL wgsl = WGPU_SHADER_SOURCE_WGSL_INIT;
-    wgsl.code = sv(src.c_str());
+    wgsl.code = svn(src);
     WGPUShaderModuleDescriptor modDesc = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
     modDesc.nextInChain = &wgsl.chain;
     modDesc.label = sv("falling_sand.wgsl");
     WGPUShaderModule module = wgpuDeviceCreateShaderModule(device, &modDesc);
     if (!module) throw std::runtime_error("falling_sand.wgsl did not compile.");
+    std::printf("[sand]   module created\n");
+    dumpCompilationInfo(module, "falling_sand.wgsl");
 
     // The same four buffers as the render pass, but the grid and the stats are read_write here.
     // That is the whole reason for a second layout: a fragment shader may not bind a read-write
@@ -468,6 +512,7 @@ void WebGpuRenderer::createSimulatePipeline() {
     layoutDesc.entryCount = 4;
     layoutDesc.entries = entries;
     computeBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
+    std::printf("[sand]   compute bind group layout\n");
 
     WGPUBindGroupEntry bound[4] = {};
     for (auto& b : bound) b = WGPU_BIND_GROUP_ENTRY_INIT;
@@ -482,6 +527,7 @@ void WebGpuRenderer::createSimulatePipeline() {
     bgDesc.entryCount = 4;
     bgDesc.entries = bound;
     computeBindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
+    std::printf("[sand]   compute bind group\n");
 
     WGPUPipelineLayoutDescriptor plDesc = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
     plDesc.bindGroupLayoutCount = 1;
@@ -493,8 +539,10 @@ void WebGpuRenderer::createSimulatePipeline() {
     pipeDesc.layout = pipelineLayout;
     pipeDesc.compute.module = module;
     pipeDesc.compute.entryPoint = sv("main");
+    std::printf("[sand]   creating compute pipeline (Tint compiles the shader here)\n");
     simulatePipeline = wgpuDeviceCreateComputePipeline(device, &pipeDesc);
     if (!simulatePipeline) throw std::runtime_error("Compute pipeline creation returned null.");
+    std::printf("[sand]   compute pipeline ok\n");
 
     wgpuPipelineLayoutRelease(pipelineLayout);
     wgpuShaderModuleRelease(module);
