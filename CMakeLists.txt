@@ -286,6 +286,20 @@ if(EMSCRIPTEN AND SAND_HAVE_EXECUTABLE)
         target_link_options(${SAND_TARGET} PRIVATE
             "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/shaders@/shaders")
     endif()
+
+    # LINK_DEPENDS, and it is load-bearing rather than tidiness.
+    #
+    # Preloaded files are baked into Sand.data at LINK time, but they are arguments to a flag, not
+    # inputs the generator knows about -- and add_dependencies(target sand_shaders) only creates an
+    # ORDER-ONLY edge in Ninja. So the copy would run, put a new shader in the directory, and the
+    # link would be considered up to date and not repackage it. Editing a shader then changed
+    # nothing observable, and the page silently kept running the previous build's copy -- which is
+    # exactly the failure the source-sha256 guard exists to prevent, arriving by a different route
+    # and past that guard, since the file on disk was correct all along.
+    #
+    # LINK_DEPENDS makes them real inputs, so touching any of them relinks.
+    set_property(TARGET ${SAND_TARGET} APPEND PROPERTY
+                 LINK_DEPENDS "${SAND_SHADER_OUTPUTS};${SAND_DIR}/config.txt")
 elseif(NOT EMSCRIPTEN AND SAND_HAVE_EXECUTABLE)
     add_custom_command(TARGET ${SAND_TARGET} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
