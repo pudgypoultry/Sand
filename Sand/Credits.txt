@@ -9,11 +9,10 @@ with the executable and not this file is the one way to actually be in breach of
 Neither library is modified. GLFW is linked as a static library; Dear ImGui's source files are
 compiled directly into the executable.
 
-  VERIFY THE COPYRIGHT LINES AGAINST YOUR VENDORED COPIES. The licence bodies below are the standard
-  zlib and MIT texts and do not change, but the copyright YEAR RANGES advance with each release of
-  each library, and vendor/ is not in this repository so they could not be read directly. Open
-  vendor/glfw/LICENSE.md and vendor/imgui/LICENSE.txt and make the two "Copyright (c)" lines here
-  match what is actually in them.
+  Checked against vendor/glfw/LICENSE.md and vendor/imgui/LICENSE.txt, which are in this repository
+  -- both bodies below match those files verbatim and the copyright lines are copied from them. The
+  YEAR RANGES advance with each upstream release, so re-check them whenever either dependency is
+  updated; that is the only part of this file that goes stale.
 
 
 -------------------------------------------------------------------------------
@@ -53,7 +52,7 @@ MIT licence
 
 The MIT License (MIT)
 
-Copyright (c) 2014-2024 Omar Cornut
+Copyright (c) 2014-2026 Omar Cornut
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -88,6 +87,29 @@ GLM header or names anything in the glm namespace. It is therefore not part of t
 deliberately not credited here -- a notice for code that is not actually present is its own small
 inaccuracy. It has since been removed from AdditionalIncludeDirectories in Sand.vcxproj and from the
 vendor list in BUILDING.md, so the include path and this file now agree.
+
+
+-------------------------------------------------------------------------------
+The web build ships something different, and this file does not yet cover it
+-------------------------------------------------------------------------------
+
+Everything above describes the Windows executable. Publishing the browser build -- Sand.html,
+Sand.js, Sand.wasm, Sand.data -- is also a distribution, and it is NOT the same set of
+dependencies:
+
+  * GLFW's code is not in it. The web build never links vendor/glfw/lib-vc2022/glfw3.lib; it uses
+    Emscripten's own implementation of the GLFW API, which is a reimplementation by the Emscripten
+    authors rather than GLFW's source. So the zlib notice above may not apply to the page at all,
+    while Emscripten's own licence does.
+  * Dear ImGui IS in it, compiled into the wasm exactly as it is compiled into the .exe, so the MIT
+    notice above applies unchanged.
+  * The WebGPU implementation comes from Emscripten's emdawnwebgpu port, which is Dawn. That is a
+    third dependency with its own terms and no entry here.
+
+Settle those two before the page goes anywhere public, and serve the result alongside it -- a zip
+carries Credits.txt next to the executable, but a web page carries nothing unless it is linked.
+Flagged rather than answered because it needs the actual licence files for Emscripten and Dawn read
+the way GLFW's and ImGui's were, and neither is vendored here.
 
 
 -------------------------------------------------------------------------------
