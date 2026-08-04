@@ -280,12 +280,13 @@ if(EMSCRIPTEN AND SAND_HAVE_EXECUTABLE)
     target_link_options(${SAND_TARGET} PRIVATE
         "SHELL:--preload-file ${SAND_DIR}/config.txt@/config.txt")
 
-    # Only when there are some. Until the WGSL exists this directory is empty, and there is nothing
-    # to be gained by packing it.
-    if(SAND_SHADER_OUTPUTS)
-        target_link_options(${SAND_TARGET} PRIVATE
-            "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/shaders@/shaders")
-    endif()
+    # One --preload-file per shader, naming the real file, rather than one naming a directory. A
+    # directory is opaque to the generator: it cannot tell that the contents changed, so the link
+    # never re-ran and the package kept its old copy. Naming the files makes them dependencies that
+    # actually work.
+    foreach(preload IN LISTS SAND_SHADER_PRELOADS)
+        target_link_options(${SAND_TARGET} PRIVATE "SHELL:--preload-file ${preload}")
+    endforeach()
 
     # LINK_DEPENDS, and it is load-bearing rather than tidiness.
     #

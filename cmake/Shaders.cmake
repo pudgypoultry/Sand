@@ -39,6 +39,7 @@ function(sand_add_shaders target)
     endif()
 
     set(outputs "")
+    set(preloads "")
 
     foreach(shader IN LISTS SAND_SHADER_STAGES)
         set(glsl "${shader_src}/${shader}")
@@ -101,12 +102,19 @@ function(sand_add_shaders target)
                 endif()
             endif()
 
-            add_custom_command(
-                OUTPUT "${wgsl}"
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${committed}" "${wgsl}"
-                DEPENDS "${committed}"
-                COMMENT "wgsl ${stem} (committed translation)"
-                VERBATIM)
+            # Preloaded straight from the source tree, with no copy into the build directory.
+            #
+            # The copy that used to be here caused a real and very confusing failure. Preloaded
+            # files are baked in at LINK time; the copy is a separate build step; and in any build
+            # where a .cpp also changed, the link ran AFTER the copy and left Sand.data newer than
+            # the file it was supposed to depend on. From then on the package looked up to date
+            # permanently, and the page kept serving a shader that had been fixed two commits ago
+            # -- past the source-sha256 guard, because the file on disk was correct and only the
+            # package was stale. Removing the intermediate removes the whole class of problem: the
+            # thing the link depends on is now the thing a person edits.
+            list(APPEND preloads "${committed}@/shaders/${stem}.wgsl")
+            list(APPEND outputs "${committed}")
+            continue()
         elseif(SAND_TINT)
             add_custom_command(
                 OUTPUT "${wgsl}"
@@ -114,6 +122,7 @@ function(sand_add_shaders target)
                 DEPENDS "${spv}"
                 COMMENT "tint ${stem} (translated from SPIR-V)"
                 VERBATIM)
+            list(APPEND preloads "${wgsl}@/shaders/${stem}.wgsl")
         else()
             # Skipped rather than fatal. The port is milestone by milestone: the first renderer
             # clears the canvas and draws the UI and loads no shaders at all, so demanding a WGSL
@@ -135,4 +144,8 @@ function(sand_add_shaders target)
     # skip above -- and the caller needs to know so it does not ask the file packager to preload an
     # empty directory.
     set(SAND_SHADER_OUTPUTS "${outputs}" PARENT_SCOPE)
+
+    # Each shader as "realpath@/virtualpath", so the caller preloads them individually rather than
+    # packing a directory. A directory is opaque to the generator; a file it can depend on.
+    set(SAND_SHADER_PRELOADS "${preloads}" PARENT_SCOPE)
 endfunction()
