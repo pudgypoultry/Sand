@@ -1,4 +1,4 @@
-// WebGpuRenderer.cpp -- milestone 1: canvas, clear, UI. No simulation, no raymarching.
+// WebGpuRenderer.cpp -- the WebGPU backend: simulate, raymarch, draw the UI.
 
 #include "GfxBackend.hpp"
 
@@ -187,6 +187,7 @@ void WebGpuRenderer::onDeviceReady(WGPUDevice newDevice) {
     uploadTuning();
     seedWorld();
     createRaymarchPipeline();
+    createSimulatePipeline();
 
     // Context before backend, same ordering rule as the Vulkan path: ImGui_ImplWGPU_Init writes
     // into the context and needs it to exist.
@@ -354,7 +355,7 @@ void WebGpuRenderer::createRaymarchPipeline() {
     layoutDesc.label = sv("raymarch bindings");
     layoutDesc.entryCount = 4;
     layoutDesc.entries = entries;
-    bindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
+    renderBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
 
     WGPUBindGroupEntry bound[4] = {};
     for (auto& b : bound) b = WGPU_BIND_GROUP_ENTRY_INIT;
@@ -365,14 +366,14 @@ void WebGpuRenderer::createRaymarchPipeline() {
 
     WGPUBindGroupDescriptor bgDesc = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
     bgDesc.label = sv("raymarch bind group");
-    bgDesc.layout = bindGroupLayout;
+    bgDesc.layout = renderBindGroupLayout;
     bgDesc.entryCount = 4;
     bgDesc.entries = bound;
-    bindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
+    renderBindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
 
     WGPUPipelineLayoutDescriptor plDesc = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
     plDesc.bindGroupLayoutCount = 1;
-    plDesc.bindGroupLayouts = &bindGroupLayout;
+    plDesc.bindGroupLayouts = &renderBindGroupLayout;
     WGPUPipelineLayout pipelineLayout = wgpuDeviceCreatePipelineLayout(device, &plDesc);
 
     WGPUColorTargetState colorTarget = WGPU_COLOR_TARGET_STATE_INIT;
@@ -402,6 +403,74 @@ void WebGpuRenderer::createRaymarchPipeline() {
     wgpuPipelineLayoutRelease(pipelineLayout);
     wgpuShaderModuleRelease(vertModule);
     wgpuShaderModuleRelease(fragModule);
+}
+
+void WebGpuRenderer::createSimulatePipeline() {
+    const std::string src = readTextFile(resolveAssetPath("shaders/falling_sand.wgsl"));
+
+    WGPUShaderSourceWGSL wgsl = WGPU_SHADER_SOURCE_WGSL_INIT;
+    wgsl.code = sv(src.c_str());
+    WGPUShaderModuleDescriptor modDesc = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
+    modDesc.nextInChain = &wgsl.chain;
+    modDesc.label = sv("falling_sand.wgsl");
+    WGPUShaderModule module = wgpuDeviceCreateShaderModule(device, &modDesc);
+
+    // The same four buffers as the render pass, but the grid and the stats are read_write here.
+    // That is the whole reason for a second layout: a fragment shader may not bind a read-write
+    // storage buffer at all, so the two stages cannot share one.
+    WGPUBindGroupLayoutEntry entries[4] = {};
+    for (auto& e : entries) e = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
+
+    entries[0].binding = 0;
+    entries[0].visibility = WGPUShaderStage_Compute;
+    entries[0].buffer.type = WGPUBufferBindingType_Storage;
+
+    entries[1].binding = 1;
+    entries[1].visibility = WGPUShaderStage_Compute;
+    entries[1].buffer.type = WGPUBufferBindingType_Storage;
+
+    entries[2].binding = 2;
+    entries[2].visibility = WGPUShaderStage_Compute;
+    entries[2].buffer.type = WGPUBufferBindingType_Uniform;
+
+    entries[3].binding = 3;
+    entries[3].visibility = WGPUShaderStage_Compute;
+    entries[3].buffer.type = WGPUBufferBindingType_Uniform;
+
+    WGPUBindGroupLayoutDescriptor layoutDesc = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
+    layoutDesc.label = sv("simulate bindings");
+    layoutDesc.entryCount = 4;
+    layoutDesc.entries = entries;
+    computeBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
+
+    WGPUBindGroupEntry bound[4] = {};
+    for (auto& b : bound) b = WGPU_BIND_GROUP_ENTRY_INIT;
+    bound[0].binding = 0; bound[0].buffer = gridBuffer;   bound[0].size = wgpuBufferGetSize(gridBuffer);
+    bound[1].binding = 1; bound[1].buffer = statsBuffer;  bound[1].size = wgpuBufferGetSize(statsBuffer);
+    bound[2].binding = 2; bound[2].buffer = tuningBuffer; bound[2].size = wgpuBufferGetSize(tuningBuffer);
+    bound[3].binding = 3; bound[3].buffer = frameBuffer;  bound[3].size = wgpuBufferGetSize(frameBuffer);
+
+    WGPUBindGroupDescriptor bgDesc = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
+    bgDesc.label = sv("simulate bind group");
+    bgDesc.layout = computeBindGroupLayout;
+    bgDesc.entryCount = 4;
+    bgDesc.entries = bound;
+    computeBindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
+
+    WGPUPipelineLayoutDescriptor plDesc = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
+    plDesc.bindGroupLayoutCount = 1;
+    plDesc.bindGroupLayouts = &computeBindGroupLayout;
+    WGPUPipelineLayout pipelineLayout = wgpuDeviceCreatePipelineLayout(device, &plDesc);
+
+    WGPUComputePipelineDescriptor pipeDesc = WGPU_COMPUTE_PIPELINE_DESCRIPTOR_INIT;
+    pipeDesc.label = sv("simulate");
+    pipeDesc.layout = pipelineLayout;
+    pipeDesc.compute.module = module;
+    pipeDesc.compute.entryPoint = sv("main");
+    simulatePipeline = wgpuDeviceCreateComputePipeline(device, &pipeDesc);
+
+    wgpuPipelineLayoutRelease(pipelineLayout);
+    wgpuShaderModuleRelease(module);
 }
 
 void WebGpuRenderer::configureSurface(uint32_t width, uint32_t height) {
@@ -455,6 +524,14 @@ void WebGpuRenderer::frame() {
     frameConstants.camZ = window->getCamZ();
     frameConstants.fovDistance = uiManager.getFovDistance();
     frameConstants.perspectiveBlend = uiManager.getPerspectiveBlend();
+
+    // -1, not 0. An out-of-bounds spawn position is how "draw no cursor" is expressed: the shader
+    // gates the cursor on the coordinates being inside the world and never looks at spawnActive,
+    // which governs only whether a click PLACES something. Zero-initialising these put a cursor at
+    // the world origin every frame -- the desktop renderer sets -1 for exactly this reason.
+    frameConstants.spawnX = -1;
+    frameConstants.spawnY = -1;
+    frameConstants.spawnZ = -1;
     frameConstants.spawnActive = 0;
     uploadFrameConstants();
 
@@ -496,12 +573,43 @@ void WebGpuRenderer::drawFrame() {
     pass.colorAttachments = &colour;
 
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, nullptr);
+
+    // Simulation first, then the render pass reads what it produced. No barrier between them:
+    // WebGPU inserts the dependency itself at pass boundaries, which is one of the few places it
+    // asks for less than Vulkan rather than more.
+    {
+        WGPUComputePassDescriptor computePass = WGPU_COMPUTE_PASS_DESCRIPTOR_INIT;
+        computePass.label = sv("simulate");
+        WGPUComputePassEncoder sim = wgpuCommandEncoderBeginComputePass(encoder, &computePass);
+        wgpuComputePassEncoderSetPipeline(sim, simulatePipeline);
+        wgpuComputePassEncoderSetBindGroup(sim, 0, computeBindGroup, 0, nullptr);
+
+        // Rounded up so a grid size that is not a multiple of the workgroup still covers its last
+        // partial group; main() drops the overshoot. Z divides by 4 rather than 8 because the
+        // workgroup is 8x8x4 -- these two numbers are a pair with the layout in the shader, and
+        // getting them out of step silently stops simulating the top of the world.
+        const uint32_t gx = (config.tuning.gridWidth  + 7) / 8;
+        const uint32_t gy = (config.tuning.gridHeight + 7) / 8;
+        const uint32_t gz = (config.tuning.gridDepth  + 3) / 4;
+
+        // Several dispatches per frame is how the speed slider works, exactly as on the desktop:
+        // the simulation is one step per dispatch, so more dispatches is a faster world rather than
+        // a larger one.
+        const int steps = uiManager.getSimulationSpeed();
+        for (int i = 0; i < steps; i++) {
+            wgpuComputePassEncoderDispatchWorkgroups(sim, gx, gy, gz);
+        }
+
+        wgpuComputePassEncoderEnd(sim);
+        wgpuComputePassEncoderRelease(sim);
+    }
+
     WGPURenderPassEncoder renderPass = wgpuCommandEncoderBeginRenderPass(encoder, &pass);
 
     // The world, then the UI over it. Six vertices and no vertex buffer: screen.wgsl indexes a
     // hardcoded array of positions by vertex index.
     wgpuRenderPassEncoderSetPipeline(renderPass, raymarchPipeline);
-    wgpuRenderPassEncoderSetBindGroup(renderPass, 0, bindGroup, 0, nullptr);
+    wgpuRenderPassEncoderSetBindGroup(renderPass, 0, renderBindGroup, 0, nullptr);
     wgpuRenderPassEncoderDraw(renderPass, 6, 1, 0, 0);
 
     UiBackendWebGpu::render(renderPass);

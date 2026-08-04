@@ -48,6 +48,7 @@ private:
 
     void createWorldBuffers();
     void createRaymarchPipeline();
+    void createSimulatePipeline();
     void seedWorld();
     void uploadTuning();
     void uploadFrameConstants();
@@ -82,9 +83,16 @@ private:
     WGPUBuffer tuningBuffer = nullptr;  // binding 2, uniform: TuningParams
     WGPUBuffer frameBuffer  = nullptr;  // binding 3, uniform: FrameConstants
 
-    WGPUBindGroupLayout bindGroupLayout = nullptr;
-    WGPUBindGroup       bindGroup       = nullptr;
-    WGPURenderPipeline  raymarchPipeline = nullptr;
+    // Two of each, because the grid's usage differs by stage and a bind group is only valid with
+    // the layout it was created against. The render pass binds it read-only -- WebGPU permits
+    // nothing else in a fragment shader -- while the compute pass needs read_write.
+    WGPUBindGroupLayout renderBindGroupLayout = nullptr;
+    WGPUBindGroup       renderBindGroup       = nullptr;
+    WGPURenderPipeline  raymarchPipeline      = nullptr;
+
+    WGPUBindGroupLayout computeBindGroupLayout = nullptr;
+    WGPUBindGroup       computeBindGroup       = nullptr;
+    WGPUComputePipeline simulatePipeline       = nullptr;
 
     // Written every frame from the camera and cursor, then uploaded to frameBuffer. Kept as a
     // member rather than a local so the upload and the values are obviously the same object.

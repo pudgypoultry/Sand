@@ -149,23 +149,29 @@ only, so `SimStats` in `raymarch.frag` is now `readonly`. It never wrote to it, 
 the more accurate declaration; the SPIR-V gains 15 `NonWritable` decorations and *loses* three
 loads, the optimiser doing slightly better for knowing.
 
-`falling_sand.comp` cannot be one of them. **WGSL forbids a storage buffer being both atomic and
-non-atomic**: a binding is `array<atomic<u32>>` or `array<u32>`, never both, with no reinterpreting
-between them. The shader reads the grid plainly in 76 places and atomically in 72, so there is no
-legal WGSL a translator can emit — the resolution is a decision (route the plain reads through
-`atomicLoad`) rather than a transformation.
+`falling_sand.comp` was expected to be the exception, and it was not. **WGSL forbids a storage
+buffer being both atomic and non-atomic**: a binding is `array<atomic<u32>>` or `array<u32>`, never
+both, with no reinterpreting between them. This shader reads the grid plainly in 76 places and
+atomically in 72, so there is no *direct* translation of what it says.
 
-That decision is now **two function bodies**. Every plain access goes through `readCell`/`writeCell`:
+I concluded from that it would need hand-writing — that resolving the conflict was a decision rather
+than a transformation. **That was wrong.** naga resolves it the way a person would have: it declares
+the binding `array<atomic<u32>>` and routes every plain read through `atomicLoad` and every plain
+write through `atomicStore`. The output validates. The rule is real; the inference that no tool could
+satisfy it was not, and it went unchecked for several commits because it sounded right.
+
+The `readCell`/`writeCell` accessors added earlier were justified on the same mistaken grounds:
 
 ```glsl
 uint readCell(uint index) { return grid[index]; }
 void writeCell(uint index, uint value) { grid[index] = value; }
 ```
 
-which become `atomicLoad(&grid[index])` and `atomicStore(&grid[index], value)` in WGSL. Verified
-that this changed nothing: compiled before and after with `glslangValidator -Os`, and all 13,306
-instructions of the function bodies are identical, with the preamble differing only as a
-permutation from id renumbering.
+They were not necessary. They are still mildly worth having — the generated WGSL routes through two
+translated functions rather than scattering atomics through 76 inline sites, and in the GLSL they
+name what is a plain read and what is a claim — but that is a readability argument, not the
+correctness one originally given for them. Verified at the time that they changed nothing:
+`glslangValidator -Os` before and after gave 13,306 identical function-body instructions.
 
 The fragment shader needs no such treatment. It binds the grid `readonly` and touches it in one
 place, and a WGSL module's view of a buffer is per-module — so the compute module can declare
@@ -250,8 +256,11 @@ Sequenced so the boring parts are proven before the hard part is started.
    the `std140` → WGSL uniform layout are right, that reads as a neat row of correctly coloured
    columns; if `TuningParams` is misaligned by one field the world extents are wrong and it does
    not.
-3. **`falling_sand.comp`.** The atomic split, the workgroup size, and the `std140` → WGSL uniform
-   layout re-verification. All the difficulty is here.
+3. **~~`falling_sand.comp`.~~ TRANSLATED AND WIRED UP.** Expected to be the bulk of the work and
+   was not: naga handles the atomic split, the workgroup was already fixed, and the uniform layout
+   was proved by milestone 2. The renderer runs a compute pass before the render pass, dispatching
+   once per step of the speed slider. What remains unproven is whether it *behaves* — validating as
+   WGSL is not the same as simulating correctly.
 4. **Storage and limits.** Confirm `localStorage` round-trips the config; clamp `grid_size`.
 
 Step 1 took an afternoon. Step 3 is the bulk. Two to four weeks overall for someone doing it

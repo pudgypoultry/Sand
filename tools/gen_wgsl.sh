@@ -5,10 +5,12 @@
 # make every clone install a shader translator, the translated output is committed and this script
 # is what refreshes it. Run it after changing raymarch.frag or screen.vert.
 #
-# falling_sand.comp is deliberately NOT here. WGSL forbids a storage buffer being both atomic and
-# non-atomic, and that shader reads the grid both ways, so no translator can emit legal WGSL for it
-# -- resolving that is a decision (route the plain reads through atomicLoad) rather than a
-# transformation. Its WGSL is hand-maintained; see docs/WEB_BUILD.md section 4.1.
+# All three shaders, falling_sand.comp included. That last one was expected to need hand-writing:
+# WGSL forbids a storage buffer being both atomic and non-atomic, and the shader reads the grid both
+# ways, so there is no direct translation of what it says. naga resolves it the way a person would
+# have had to -- declares the binding array<atomic<u32>> and routes the plain reads through
+# atomicLoad and the plain writes through atomicStore -- and the result validates. The rule was real;
+# the conclusion that no tool could satisfy it was not.
 #
 # Requires:
 #   glslangValidator   from the Vulkan SDK
@@ -23,7 +25,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 mkdir -p "$out"
 
-for pair in screen.vert:vert raymarch.frag:frag; do
+for pair in screen.vert:vert raymarch.frag:frag falling_sand.comp:comp; do
     glsl="${pair%%:*}"
     stage="${pair##*:}"
     stem="${glsl%.*}"
