@@ -330,8 +330,12 @@ void WebGpuRenderer::seedWorld() {
 void WebGpuRenderer::createRaymarchPipeline() {
     // Two modules from two files, both entry points named "main" -- which is what naga emits from
     // GLSL, where main is the only name a stage can have.
-    const std::string vertSrc = readTextFile(resolveAssetPath("shaders/screen.wgsl"));
-    const std::string fragSrc = readTextFile(resolveAssetPath("shaders/raymarch.wgsl"));
+    const std::string vertPath = resolveAssetPath("shaders/screen.wgsl");
+    const std::string fragPath = resolveAssetPath("shaders/raymarch.wgsl");
+    const std::string vertSrc = readTextFile(vertPath);
+    const std::string fragSrc = readTextFile(fragPath);
+    std::printf("[sand]   read %s: %zu bytes\n", vertPath.c_str(), vertSrc.size());
+    std::printf("[sand]   read %s: %zu bytes\n", fragPath.c_str(), fragSrc.size());
 
     auto makeModule = [&](const std::string& code, const char* label) {
         WGPUShaderSourceWGSL wgsl = WGPU_SHADER_SOURCE_WGSL_INIT;
@@ -422,7 +426,12 @@ void WebGpuRenderer::createRaymarchPipeline() {
 }
 
 void WebGpuRenderer::createSimulatePipeline() {
-    const std::string src = readTextFile(resolveAssetPath("shaders/falling_sand.wgsl"));
+    const std::string path = resolveAssetPath("shaders/falling_sand.wgsl");
+    const std::string src = readTextFile(path);
+    // Printed BEFORE anything else can fail, so "the file is missing" and "the file is there but
+    // the module was rejected" are distinguishable. The first version printed this after module
+    // creation and the two looked identical from the console.
+    std::printf("[sand]   read %s: %zu bytes\n", path.c_str(), src.size());
 
     WGPUShaderSourceWGSL wgsl = WGPU_SHADER_SOURCE_WGSL_INIT;
     wgsl.code = sv(src.c_str());
@@ -431,7 +440,6 @@ void WebGpuRenderer::createSimulatePipeline() {
     modDesc.label = sv("falling_sand.wgsl");
     WGPUShaderModule module = wgpuDeviceCreateShaderModule(device, &modDesc);
     if (!module) throw std::runtime_error("falling_sand.wgsl did not compile.");
-    std::printf("[sand]   falling_sand.wgsl: %zu bytes\n", src.size());
 
     // The same four buffers as the render pass, but the grid and the stats are read_write here.
     // That is the whole reason for a second layout: a fragment shader may not bind a read-write

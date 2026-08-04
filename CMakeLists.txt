@@ -171,7 +171,14 @@ if(EMSCRIPTEN)
     # Only the port is a compile option. It has to be, because it is what puts webgpu.h on the
     # include path. -sUSE_GLFW=3 is link-only -- Emscripten's GLFW headers are in the sysroot
     # unconditionally -- and passing it here earns a warning on every translation unit.
-    target_compile_options(${SAND_TARGET} PRIVATE "--use-port=emdawnwebgpu")
+    # -fwasm-exceptions, on both sides, because Emscripten disables exception CATCHING by default:
+    # try/catch compiles, and then `throw` calls abort() and the handler never runs. The symptom is
+    # "Aborted(undefined)" with the real message -- the one the throw was carrying -- never printed.
+    # Every error path in this renderer is a throw, so without this they are all silent aborts.
+    #
+    # The wasm form rather than the JS one: it is the modern mechanism, needs no JS glue, and costs
+    # very little when nothing is thrown. Chrome and Edge have had it since 95.
+    target_compile_options(${SAND_TARGET} PRIVATE "--use-port=emdawnwebgpu" "-fwasm-exceptions")
 
     # Everything below produces a page, so it belongs to the executable and not to a static library
     # that has nothing to link yet.
@@ -179,6 +186,7 @@ if(EMSCRIPTEN)
     target_link_options(${SAND_TARGET} PRIVATE
         "-sUSE_GLFW=3"
         "--use-port=emdawnwebgpu"
+        "-fwasm-exceptions"
         # The grid is the dominant allocation and it scales with the cube of the world size, so a
         # fixed heap would have to be sized for the largest world anyone might configure. Growth
         # costs a bounds check per access in exchange for not reserving a gigabyte on a page that

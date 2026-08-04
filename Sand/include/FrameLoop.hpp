@@ -15,16 +15,13 @@ namespace FrameLoop {
 
 // Runs `frame` repeatedly while `keepGoing` returns true.
 //
-// This does not return in either configuration, which is deliberate -- so a caller cannot be
-// written that only happens to work on one platform. On the desktop it returns after the loop
-// ends, exactly as the while loop it replaces did. On a driven platform it does not return at all:
-// the callback is registered and the stack is unwound out from under the caller, so anything
-// written after the call would silently never run.
+// On the desktop this returns when the loop ends, exactly as the while loop it replaces did.
 //
-// The consequence worth knowing: on a driven platform, destructors between here and main() do not
-// run and no cleanup path executes. Nothing is leaked that matters, because the process is a tab
-// and the tab is being closed, but a shutdown that has to happen must be attached to the page's
-// unload rather than placed after this call.
+// On a driven platform it returns IMMEDIATELY, having registered the callback -- the frames happen
+// afterwards, driven by the browser. So anything written after the call runs before the first
+// frame, not after the last one, and a cleanup path placed there would tear down a renderer that
+// is about to be used. There is no teardown here for that reason; the tab closing is the teardown,
+// and anything that genuinely must happen at the end belongs on the page's unload event.
 void run(std::function<bool()> keepGoing, std::function<void()> frame);
 
 } // namespace FrameLoop
