@@ -236,6 +236,7 @@ void WebGpuRenderer::onDeviceReady(WGPUDevice newDevice) try {
     std::printf("[sand] seeding world\n");           seedWorld();
     std::printf("[sand] raymarch pipeline\n");       createRaymarchPipeline();
     std::printf("[sand] simulate pipeline\n");       createSimulatePipeline();
+    std::printf("[sand] bind groups\n");             createBindGroups();
 
     // Context before backend, same ordering rule as the Vulkan path: ImGui_ImplWGPU_Init writes
     // into the context and needs it to exist.
@@ -698,6 +699,15 @@ void WebGpuRenderer::drawFrame() {
     // Asking an unconfigured surface for a texture fails, and the failure is per-frame -- sixty
     // identical lines a second, which buries whatever actually went wrong. If it is not configured
     // there is nothing to draw into, so say so once and stop.
+    if (!computeBindGroup || !renderBindGroup) {
+        static bool complained = false;
+        if (!complained) {
+            std::fprintf(stderr, "[sand] bind groups were never created; not drawing.\n");
+            complained = true;
+        }
+        return;
+    }
+
     if (configuredWidth == 0 || configuredHeight == 0) {
         static bool complained = false;
         if (!complained) {
