@@ -9,7 +9,7 @@
 
 #include <imgui.h>
 
-#include <cfloat>   // FLT_MAX, for ImGui's "no mouse" sentinel
+#include <GLFW/glfw3.h>   // glfwGetCursorPos, for the mouse-space correction in newFrame
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_wgpu.h>
 
@@ -23,6 +23,10 @@ ImVec2 g_displaySize{};
 ImVec2 g_framebufferScale{};
 ImVec2 g_mouseScale{1.0f, 1.0f};
 bool   g_haveMetrics = false;
+
+// Kept from init so newFrame can re-read the cursor. The ImGui backend holds its own copy but does
+// not expose it.
+GLFWwindow* g_window = nullptr;
 
 } // namespace
 
@@ -43,6 +47,7 @@ void init(const InitInfo& info) {
     // metrics. Under Emscripten the "window" is a canvas element and there is no surface for GLFW
     // to create, so asking it for a Vulkan-flavoured init would be asking for something that does
     // not exist on this platform.
+    g_window = info.window;
     ImGui_ImplGlfw_InitForOther(info.window, true);
 
     ImGui_ImplWGPU_InitInfo init_info;
@@ -81,15 +86,28 @@ void newFrame() {
         io.DisplaySize = g_displaySize;
         io.DisplayFramebufferScale = g_framebufferScale;
 
-        // The GLFW backend has just set MousePos from glfwGetCursorPos, which on this platform is
-        // scaled to the window size GLFW believes in rather than the canvas. Rescale it into the
-        // space DisplaySize is now expressed in.
+        // The mouse position needs the same correction, in the opposite direction: the GLFW backend
+        // reports it in GLFW's window space, and DisplaySize above is the canvas.
         //
-        // Guarded on the sentinel: ImGui uses -FLT_MAX for "the mouse is not available", and
-        // multiplying that produces a position rather than preserving the absence of one.
-        if (io.MousePos.x > -FLT_MAX && io.MousePos.y > -FLT_MAX) {
-            io.MousePos.x *= g_mouseScale.x;
-            io.MousePos.y *= g_mouseScale.y;
+        // It has to be done by QUEUEING AN EVENT, not by assigning io.MousePos. The backend does not
+        // write that field either -- it calls io.AddMousePosEvent (imgui_impl_glfw.cpp:853), and the
+        // queue is not drained until ImGui::NewFrame, which runs after this. Assigning the field
+        // here therefore does nothing at all: the queued event lands on top of it moments later.
+        // That is exactly what happened, and the symptom was a UI drawn in one place and clickable
+        // in another.
+        //
+        // Ours is queued after theirs and the later event wins, so this supersedes it. ImGui filters
+        // duplicate positions, which is harmless -- a duplicate would mean the scale was 1.
+        //
+        // Queued unconditionally, including when the backend just signalled "no mouse" by queueing
+        // -FLT_MAX for an unfocused window. Mirroring that test would mean trusting Emscripten's
+        // GLFW to report focus correctly, and if it ever said no the UI would stop responding
+        // entirely. The cost of not mirroring it is a hover highlight that persists after the
+        // pointer leaves the page, which is the better failure by some margin.
+        if (g_window) {
+            double mx = 0.0, my = 0.0;
+            glfwGetCursorPos(g_window, &mx, &my);
+            io.AddMousePosEvent((float)(mx * g_mouseScale.x), (float)(my * g_mouseScale.y));
         }
     }
 }
@@ -97,6 +115,8 @@ void newFrame() {
 void shutdown() {
     ImGui_ImplWGPU_Shutdown();
     ImGui_ImplGlfw_Shutdown();
+    g_window = nullptr;
+    g_haveMetrics = false;
 }
 
 } // namespace UiBackend
