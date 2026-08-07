@@ -48,6 +48,7 @@ void buildFrameConstants(const Window& window,
 
     fc.spawnSize = brushSize;
     fc.spawnShape = static_cast<int>(ui.getCursorShape());
+    fc.showCloudBlocks = ui.showCloudBlocks() ? 1 : 0;
     fc.fovDistance = ui.getFovDistance();
     fc.perspectiveBlend = ui.getPerspectiveBlend();
 

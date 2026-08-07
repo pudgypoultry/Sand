@@ -406,7 +406,7 @@ void WebGpuRenderer::createRaymarchPipeline() {
     // The layout is written out rather than inferred from the shader. Automatic layout would work
     // for this pass and then quietly disagree with the compute pass in milestone 3, which binds the
     // same grid read_write -- and a bind group is only usable with the layout it was made for.
-    WGPUBindGroupLayoutEntry entries[4] = {};
+    WGPUBindGroupLayoutEntry entries[5] = {};
     for (auto& e : entries) e = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
 
     entries[0].binding = 0;
@@ -425,9 +425,15 @@ void WebGpuRenderer::createRaymarchPipeline() {
     entries[3].visibility = WGPUShaderStage_Fragment;
     entries[3].buffer.type = WGPUBufferBindingType_Uniform;
 
+    // Read-only, and only for the debug view -- a fragment shader may not bind a read-write storage
+    // buffer at all, which is why the compute stage needs a layout of its own.
+    entries[4].binding = 4;
+    entries[4].visibility = WGPUShaderStage_Fragment;
+    entries[4].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+
     WGPUBindGroupLayoutDescriptor layoutDesc = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
     layoutDesc.label = sv("raymarch bindings");
-    layoutDesc.entryCount = 4;
+    layoutDesc.entryCount = 5;
     layoutDesc.entries = entries;
     renderBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
 
@@ -555,11 +561,10 @@ void WebGpuRenderer::createBindGroups() {
     WGPUBindGroupDescriptor bgDesc = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
     bgDesc.entries = bound;
 
-    // The render group gets four entries and the compute group five. A bind group must match its
-    // layout exactly -- listing the cloud field in the render group would be rejected, because
-    // raymarch.frag does not declare it. It draws clouds from the per-column census in SimStats
-    // instead, which is one number per column rather than one per voxel.
-    bgDesc.entryCount = 4;
+    // Five entries for both groups now. The render pass binds the cloud field read-only purely for
+    // the "show cloud blocks" debug view; the clouds it draws in normal play come from the
+    // per-column census in SimStats, which is one number per column rather than one per voxel.
+    bgDesc.entryCount = 5;
 
     if (renderBindGroup)  { wgpuBindGroupRelease(renderBindGroup);  renderBindGroup = nullptr; }
     if (computeBindGroup) { wgpuBindGroupRelease(computeBindGroup); computeBindGroup = nullptr; }
@@ -568,7 +573,6 @@ void WebGpuRenderer::createBindGroups() {
     bgDesc.layout = renderBindGroupLayout;
     renderBindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
 
-    bgDesc.entryCount = 5;
     bgDesc.label = sv("simulate bind group");
     bgDesc.layout = computeBindGroupLayout;
     computeBindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);

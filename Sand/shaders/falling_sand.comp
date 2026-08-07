@@ -238,6 +238,7 @@ layout(push_constant) uniform Constants {
     // every field before it correctly and then diverge for anything added later.
     float aspectScaleX;
     float aspectScaleY;
+    int showCloudBlocks; // debug view: draw the invisible cloud blocks as solid voxels
 } pc;
 
 // World extents. Macros rather than constants because they come from the UBO now -- every use below
@@ -320,6 +321,14 @@ uint getCloudSleep(uint v) { return (v >> 10) & 0xFFu; }
 // Where a column's four census words start. x and z only -- the whole point is that the renderer
 // can answer "how much cloud is over this spot" without marching the column.
 uint cloudColumnBase(int x, int z) { return uint(x + z * WIDTH) * 4u; }
+
+// FUNCTION: cloudIsAtRest
+// A cloud block that has stopped moving. Steam condenses onto these, so it has to mean "settled"
+// rather than merely "present": condensing against a block that is still on its way up would turn
+// a rising column into cloud from the bottom, and the sky would fill from the wrong end.
+bool cloudIsAtRest(uint v) {
+    return getCloudKind(v) != CLOUD_NONE && getCloudSleep(v) >= tuning.wakeSleepThreshold;
+}
 
 // FUNCTION: hash
 float hash(vec3 p) {
@@ -2528,7 +2537,27 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
         checkPos[1] = pos + ivec3(0, 1, dir); checkPos[2] = pos + ivec3(dir, 1, 0);
     }
 
-    // 2. Check for moisture-absorbing blocks (Sand = 1u, Dirt = 4u)
+    // 2. Condense onto the underside of the cloud layer.
+    //
+    // This is the other half of how cloud forms, and without it the layer could only ever be one
+    // voxel deep: steam became cloud only at HEIGHT-2, so once that single row was full every
+    // further wisp had nowhere to go and simply milled about forever, which is what made steam look
+    // like a liquid that never settles. Rain was a drip for the same reason -- a storm can only
+    // return as many drops as there were blocks, and there were almost none.
+    //
+    // Rising into a settled cloud block turns this steam into cloud where it stands, so the layer
+    // thickens downward from the roof as more moisture arrives.
+    {
+        ivec3 upPos = pos + ivec3(0, 1, 0);
+        if (upPos.y < HEIGHT && cloudIsAtRest(cloudCells[getIndex(upPos)])) {
+            if (atomicCompSwap(cloudCells[currentIndex], 0u, packCloud(CLOUD_CALM, 0u, 0u)) == 0u) {
+                atomicExchange(grid[currentIndex], 0u);
+            }
+            return;
+        }
+    }
+
+    // 3. Check for moisture-absorbing blocks (Sand = 1u, Dirt = 4u)
     for (int i = 0; i < 3; i++) {
         ivec3 cPos = checkPos[i];
         if (cPos.x > 0 && cPos.x < WIDTH - 1 && cPos.z > 0 && cPos.z < DEPTH - 1) {
@@ -2629,7 +2658,16 @@ void updateCloudBlock(ivec3 pos) {
 
     if (pos.y >= HEIGHT - 2) {
         // At the ceiling. A calm cloud just sits here; a storm block counts down and then rains.
-        if (kind != CLOUD_STORM) return;
+        if (kind != CLOUD_STORM) {
+            // Saturate the sleep counter rather than returning straight away. There is no cell above
+            // to rise into, so this block is settled by construction -- and steam condensing on it
+            // (see updateSteam) tests exactly that, so leaving it reading "awake" forever would stop
+            // the cloud layer ever growing downward from the roof.
+            if (getCloudSleep(cell) < 255u) {
+                atomicCompSwap(cloudCells[idx], cell, packCloud(kind, getCloudWait(cell), 255u));
+            }
+            return;
+        }
 
         uint wait = getCloudWait(cell);
         if (wait > 0u) {

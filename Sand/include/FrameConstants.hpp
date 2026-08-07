@@ -41,9 +41,18 @@ struct FrameConstants {
     // copy of it in GLSL to drift out of step and put the cursor somewhere the picture is not.
     float aspectScaleX;
     float aspectScaleY;
+
+    // Debug view: draw the cloud field's blocks as solid voxels. They are invisible in normal play
+    // -- only the cloud drawn above each column is meant to be seen -- so this exists to answer
+    // "is there any cloud there at all", which is otherwise only inferable from the cloud itself.
+    //
+    // Here rather than in TuningParams deliberately: a tunable is applied by the options screen's
+    // Apply, which reloads and wipes the world, and a debug view you can only turn on by destroying
+    // the thing you wanted to look at is no use.
+    int showCloudBlocks;
 };
 
-static_assert(sizeof(FrameConstants) == 68,
-              "FrameConstants must stay 17 tightly-packed 4-byte scalars: the shaders' Constants "
+static_assert(sizeof(FrameConstants) == 72,
+              "FrameConstants must stay 18 tightly-packed 4-byte scalars: the shaders' Constants "
               "block assumes that layout, and padding here would silently shift every field the "
               "GPU reads after it.");

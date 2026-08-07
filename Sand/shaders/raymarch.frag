@@ -39,6 +39,13 @@ layout(std430, binding = 1) readonly buffer SimStats {
     uint cloudColumn[];
 };
 
+// The cloud field, read-only. Bound purely for the "show cloud blocks" debug view -- the clouds
+// actually drawn come from the per-column census in SimStats, which is one number per column rather
+// than one per voxel, so normal rendering never touches this.
+layout(std430, binding = 4) readonly buffer CloudGrid {
+    uint cloudCells[];
+};
+
 layout(std140, binding = 2) uniform TuningParams {
     uint gridWidth;
     uint gridHeight;
@@ -180,6 +187,7 @@ layout(push_constant) uniform Constants {
     // around. Applied to screenSpace in main. See FrameConstants.hpp.
     float aspectScaleX;
     float aspectScaleY;
+    int showCloudBlocks; // debug view: draw the invisible cloud blocks as solid voxels
 } pc;
 
 // World extents, from the UBO. Must agree with falling_sand.comp.
@@ -206,6 +214,9 @@ vec3 worldExtent() { return vec3(float(WIDTH), float(HEIGHT), float(DEPTH)); }
 // cell in the dispatch that published it. Adding 2 therefore leaves at least one guaranteed-empty
 // cell above the highest matter -- which is also what keeps the DDA's face normal correct, since a
 // ray entering the clipped box always takes a step before it can hit anything.
+// The debug view's stand-in material. Far above every real id, so it can never collide with one.
+const uint CLOUD_DEBUG_TYPE = 200u;
+
 int marchCeiling() {
     return min(HEIGHT, int(maxOccupiedY) + 2);
 }
@@ -1155,6 +1166,19 @@ void main() {
         uint rawVoxel = getVoxel(voxelPos);
         hitType = rawVoxel & 0xFFu;
 
+        // Debug view. Tested before the ordinary hit so a cloud block sharing a cell with matter is
+        // hidden by it rather than replacing it -- the two fields genuinely coexist, and drawing the
+        // cloud over the stone would misrepresent that.
+        if (pc.showCloudBlocks != 0 && hitType == 0u) {
+            uint c = cloudCells[uint(voxelPos.x + voxelPos.y * WIDTH + voxelPos.z * WIDTH * HEIGHT)];
+            if ((c & 3u) != 0u) {
+                hitType = CLOUD_DEBUG_TYPE;
+                hitRawVoxel = c;
+                hit = true;
+                break;
+            }
+        }
+
         // A black hole's centre voxel must not register as a solid cube: the body is drawn as a
         // smooth ball after this loop, and at level 0 the voxel cube is strictly larger than the
         // radius-0.5 ball inside it, so letting it hit here would draw a cube over the sphere and
@@ -1258,6 +1282,14 @@ void main() {
         
         vec3 finalVoxelColor = vec3(1.0f, 0.0f, 1.0f) * baseLighting; 
         
+        if (hitType == CLOUD_DEBUG_TYPE) {
+            // Storm blocks read warm, calm blocks cool, so a storm sweeping the field is visible as
+            // it happens rather than only in the rain that follows.
+            vec3 calm  = vec3(0.35f, 0.65f, 1.00f);
+            vec3 storm = vec3(1.00f, 0.55f, 0.25f);
+            finalVoxelColor = mix(calm, storm, ((hitRawVoxel & 3u) == 2u) ? 1.0f : 0.0f) * baseLighting;
+        }
+
         switch (hitType) {
             case 1u:
                 finalVoxelColor = renderSand(hitRawVoxel, baseLighting);

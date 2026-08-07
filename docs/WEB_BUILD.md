@@ -236,7 +236,7 @@ The shaders declare five bindings, and the numbering is shared rather than per-b
 | 1 | SimStats | compute + fragment | scalars, black-hole table, then a **runtime-sized** per-column cloud census |
 | 2 | TuningParams | compute + fragment | uniform |
 | 3 | FrameConstants | compute + fragment | **web only** — the desktop uses push constants and leaves the number unused |
-| 4 | cloud field | compute only | one `uint` per voxel, parallel to the grid |
+| 4 | cloud field | compute + fragment | one `uint` per voxel, parallel to the grid; the fragment stage reads it read-only, and only for the "show cloud blocks" debug view |
 
 Binding 3 being web-only is why the cloud field is 4 and not 3: one set of numbers then serves both
 backends without an `#ifdef` on every declaration.

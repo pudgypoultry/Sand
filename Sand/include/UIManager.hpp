@@ -193,6 +193,17 @@ public:
 
             ImGui::Separator();
             buildFrameBreakdown();
+
+            ImGui::Separator();
+            ImGui::Checkbox("Show cloud blocks", &m_showCloudBlocks);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Draws the cloud field's blocks as solid voxels.\n\n"
+                    "They are invisible in normal play -- what you see is the cloud drawn above\n"
+                    "each column, sized from how many are stacked there. This shows the blocks\n"
+                    "themselves, which is the only way to tell an empty sky from one whose cloud\n"
+                    "is simply too thin to draw.");
+            }
             ImGui::End();
         }
 
@@ -203,6 +214,9 @@ public:
 
     int getBrushSize() const { return m_brushSize; }
     CursorShape getCursorShape() const { return m_cursorShape; }
+
+    // Debug view toggle, off by default -- cloud blocks are meant to be invisible.
+    bool showCloudBlocks() const { return m_showCloudBlocks; }
     float getPerspectiveBlend() const { return m_perspectiveBlend; }
     MaterialType getCurrentMaterial() const { return m_currentMaterial; }
     int getSimulationSpeed() const { return m_simulationSpeed; }
@@ -271,6 +285,7 @@ private:
     float m_fovDistance = 1.2f; // matches the original hardcoded raymarch FOV distance
     float m_perspectiveBlend = 1.0f; // 1.0 = perspective (original behavior), 0.0 = orthographic
     bool m_showProfiler = true;
+    bool m_showCloudBlocks = false;
     bool m_showOptions = false;
     bool m_firstFrame = true; // drives the one-shot startup window placement in buildUI
 

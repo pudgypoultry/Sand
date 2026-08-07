@@ -133,9 +133,9 @@ void VulkanPipeline::createComputePipeline() {
     cloudGridBinding.binding = 4;
     cloudGridBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     cloudGridBinding.descriptorCount = 1;
-    // Compute only. The fragment stage draws clouds from the per-column census in SimStats, not from
-    // the cloud voxels themselves, so it never binds this.
-    cloudGridBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    // Both stages. The fragment shader draws clouds from the per-column census in SimStats, not from
+    // the cloud voxels -- but the "show cloud blocks" debug view reads the voxels directly.
+    cloudGridBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutBinding bindings[] = { sboLayoutBinding, cloudStatsBinding, tuningBinding,
                                                 cloudGridBinding };

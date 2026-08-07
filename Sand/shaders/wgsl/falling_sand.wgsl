@@ -4,7 +4,7 @@
 // Edit falling_sand.comp and re-run that script instead; edits here are overwritten and, worse,
 // silently diverge from the shader the desktop build uses.
 //
-// source-sha256: bdd4c5fb7dd0c84f01cbe1068eab395625bd97192444e0322d95e8d811125362
+// source-sha256: 26e4f76aeb3ddbbcdb60c5cae7bbc56051452ba34848e3ba8eff51dac4361b05
 
 struct VoxelGrid {
     grid: array<u32>,
@@ -157,6 +157,7 @@ struct Constants {
     spawnShape: i32,
     aspectScaleX: f32,
     aspectScaleY: f32,
+    showCloudBlocks: i32,
 }
 
 struct CloudGrid {
@@ -254,8 +255,8 @@ fn tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b(currentIndex: ptr<function,
     var currentType: u32;
     var param_2: u32;
     var actual: u32;
-    var phi_1515_: bool;
-    var phi_1524_: bool;
+    var phi_1534_: bool;
+    var phi_1543_: bool;
 
     let _e209 = (*targetIndex);
     param = _e209;
@@ -271,21 +272,21 @@ fn tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b(currentIndex: ptr<function,
     currentType = _e214;
     let _e215 = targetType;
     let _e216 = (_e215 == 0u);
-    phi_1515_ = _e216;
+    phi_1534_ = _e216;
     if !(_e216) {
         let _e218 = currentType;
         let _e220 = currentType;
         let _e223 = targetType;
-        phi_1515_ = (((_e218 == 1u) || (_e220 == 4u)) && (_e223 == 2u));
+        phi_1534_ = (((_e218 == 1u) || (_e220 == 4u)) && (_e223 == 2u));
     }
-    let _e227 = phi_1515_;
-    phi_1524_ = _e227;
+    let _e227 = phi_1534_;
+    phi_1543_ = _e227;
     if !(_e227) {
         let _e229 = currentType;
         let _e231 = targetType;
-        phi_1524_ = ((_e229 == 6u) && (_e231 == 5u));
+        phi_1543_ = ((_e229 == 6u) && (_e231 == 5u));
     }
-    let _e235 = phi_1524_;
+    let _e235 = phi_1543_;
     if _e235 {
         let _e236 = (*currentIndex);
         let _e239 = (*currentValue);
@@ -336,47 +337,47 @@ fn getIndex_u0028_vi3_u003b(pos: ptr<function, vec3<i32>>) -> u32 {
 }
 
 fn treeInBounds_u0028_vi3_u003b(p: ptr<function, vec3<i32>>) -> bool {
-    var phi_1006_: bool;
-    var phi_1012_: bool;
-    var phi_1022_: bool;
-    var phi_1028_: bool;
-    var phi_1038_: bool;
+    var phi_1025_: bool;
+    var phi_1031_: bool;
+    var phi_1041_: bool;
+    var phi_1047_: bool;
+    var phi_1057_: bool;
 
     let _e200 = (*p)[0u];
     let _e201 = (_e200 > 0i);
-    phi_1006_ = _e201;
+    phi_1025_ = _e201;
     if _e201 {
         let _e203 = (*p)[0u];
         let _e205 = tuning.gridWidth;
-        phi_1006_ = (_e203 < (bitcast<i32>(_e205) - 1i));
+        phi_1025_ = (_e203 < (bitcast<i32>(_e205) - 1i));
     }
-    let _e210 = phi_1006_;
-    phi_1012_ = _e210;
+    let _e210 = phi_1025_;
+    phi_1031_ = _e210;
     if _e210 {
         let _e212 = (*p)[1u];
-        phi_1012_ = (_e212 > 0i);
+        phi_1031_ = (_e212 > 0i);
     }
-    let _e215 = phi_1012_;
-    phi_1022_ = _e215;
+    let _e215 = phi_1031_;
+    phi_1041_ = _e215;
     if _e215 {
         let _e217 = (*p)[1u];
         let _e219 = tuning.gridHeight;
-        phi_1022_ = (_e217 < (bitcast<i32>(_e219) - 1i));
+        phi_1041_ = (_e217 < (bitcast<i32>(_e219) - 1i));
     }
-    let _e224 = phi_1022_;
-    phi_1028_ = _e224;
+    let _e224 = phi_1041_;
+    phi_1047_ = _e224;
     if _e224 {
         let _e226 = (*p)[2u];
-        phi_1028_ = (_e226 > 0i);
+        phi_1047_ = (_e226 > 0i);
     }
-    let _e229 = phi_1028_;
-    phi_1038_ = _e229;
+    let _e229 = phi_1047_;
+    phi_1057_ = _e229;
     if _e229 {
         let _e231 = (*p)[2u];
         let _e233 = tuning.gridDepth;
-        phi_1038_ = (_e231 < (bitcast<i32>(_e233) - 1i));
+        phi_1057_ = (_e231 < (bitcast<i32>(_e233) - 1i));
     }
-    let _e238 = phi_1038_;
+    let _e238 = phi_1057_;
     return _e238;
 }
 
@@ -427,9 +428,9 @@ fn updateLeaf_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1: ptr<fun
     var param_32: u32;
     var param_33: u32;
     var param_34: u32;
-    var phi_6626_: bool;
-    var phi_6710_: bool;
-    var phi_6792_: bool;
+    var phi_6644_: bool;
+    var phi_6728_: bool;
+    var phi_6810_: bool;
 
     let _e249 = (*randVal);
     let _e253 = tuning.treeLeafTickChance;
@@ -443,16 +444,16 @@ fn updateLeaf_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1: ptr<fun
         let _e259 = belowPos;
         param_3 = _e259;
         let _e260 = treeInBounds_u0028_vi3_u003b((&param_3));
-        phi_6626_ = _e260;
+        phi_6644_ = _e260;
         if _e260 {
             let _e261 = belowPos;
             param_4 = _e261;
             let _e262 = getIndex_u0028_vi3_u003b((&param_4));
             param_5 = _e262;
             let _e263 = readCell_u0028_u1_u003b((&param_5));
-            phi_6626_ = (_e263 == 0u);
+            phi_6644_ = (_e263 == 0u);
         }
-        let _e266 = phi_6626_;
+        let _e266 = phi_6644_;
         if _e266 {
             let _e267 = belowPos;
             param_6 = _e267;
@@ -516,15 +517,15 @@ fn updateLeaf_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1: ptr<fun
             t = _e308;
             let _e309 = t;
             let _e310 = (_e309 == 18u);
-            phi_6710_ = _e310;
+            phi_6728_ = _e310;
             if _e310 {
                 let _e311 = v;
                 param_20 = _e311;
                 let _e312 = getDir_u0028_u1_u003b((&param_20));
                 let _e315 = tuning.treeMaxHeight;
-                phi_6710_ = ((_e312 + 1u) >= _e315);
+                phi_6728_ = ((_e312 + 1u) >= _e315);
             }
-            let _e318 = phi_6710_;
+            let _e318 = phi_6728_;
             if _e318 {
                 touchesTrunk = true;
             } else {
@@ -591,13 +592,13 @@ fn updateLeaf_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1: ptr<fun
     let _e359 = tuning.treeLeafReach;
     let _e361 = haveSpot;
     let _e362 = ((_e357 < _e359) && _e361);
-    phi_6792_ = _e362;
+    phi_6810_ = _e362;
     if _e362 {
         let _e363 = (*randVal);
         let _e367 = tuning.treeLeafSpreadChance;
-        phi_6792_ = (fract((_e363 * 89f)) < _e367);
+        phi_6810_ = (fract((_e363 * 89f)) < _e367);
     }
-    let _e370 = phi_6792_;
+    let _e370 = phi_6810_;
     if _e370 {
         let _e371 = spot;
         param_26 = _e371;
@@ -758,12 +759,12 @@ fn updateTrunk_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_
     var param_86: u32;
     var param_87: u32;
     var param_88: u32;
-    var phi_6180_: bool;
-    var phi_6324_: bool;
-    var phi_6334_: bool;
-    var phi_6379_: bool;
-    var phi_6430_: bool;
-    var phi_6509_: bool;
+    var phi_6198_: bool;
+    var phi_6342_: bool;
+    var phi_6352_: bool;
+    var phi_6397_: bool;
+    var phi_6448_: bool;
+    var phi_6527_: bool;
 
     let _e284 = (*currentDir);
     height = _e284;
@@ -773,13 +774,13 @@ fn updateTrunk_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_
     let _e286 = water;
     let _e288 = tuning.treeWaterMax;
     let _e289 = (_e286 < _e288);
-    phi_6180_ = _e289;
+    phi_6198_ = _e289;
     if _e289 {
         let _e290 = (*randVal_1);
         let _e294 = tuning.treeDrinkChance;
-        phi_6180_ = (fract((_e290 * 13f)) < _e294);
+        phi_6198_ = (fract((_e290 * 13f)) < _e294);
     }
-    let _e297 = phi_6180_;
+    let _e297 = phi_6198_;
     if _e297 {
         let _e298 = (*randVal_1);
         start_1 = i32((fract((_e298 * 101f)) * 17f));
@@ -901,21 +902,21 @@ fn updateTrunk_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_
     let _e380 = upIsTrunk;
     let _e381 = water;
     let _e383 = (_e380 && (_e381 > 0u));
-    phi_6324_ = _e383;
+    phi_6342_ = _e383;
     if _e383 {
         let _e384 = upValue;
         param_53 = _e384;
         let _e385 = getAge_u0028_u1_u003b((&param_53));
-        phi_6324_ = (_e385 < 255u);
+        phi_6342_ = (_e385 < 255u);
     }
-    let _e388 = phi_6324_;
-    phi_6334_ = _e388;
+    let _e388 = phi_6342_;
+    phi_6352_ = _e388;
     if _e388 {
         let _e389 = (*randVal_1);
         let _e393 = tuning.treeFlowChance;
-        phi_6334_ = (fract((_e389 * 29f)) < _e393);
+        phi_6352_ = (fract((_e389 * 29f)) < _e393);
     }
-    let _e396 = phi_6334_;
+    let _e396 = phi_6352_;
     if _e396 {
         let _e397 = upValue;
         param_54 = _e397;
@@ -946,14 +947,14 @@ fn updateTrunk_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_
         let _e419 = water;
         let _e421 = tuning.treeGrowCost;
         let _e422 = (_e419 >= _e421);
-        phi_6379_ = _e422;
+        phi_6397_ = _e422;
         if _e422 {
             let _e423 = upPos;
             param_60 = _e423;
             let _e424 = treeInBounds_u0028_vi3_u003b((&param_60));
-            phi_6379_ = _e424;
+            phi_6397_ = _e424;
         }
-        let _e426 = phi_6379_;
+        let _e426 = phi_6397_;
         if _e426 {
             let _e427 = upValue;
             param_61 = _e427;
@@ -986,13 +987,13 @@ fn updateTrunk_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_
         let _e450 = water;
         let _e452 = tuning.treeLeafCost;
         let _e453 = (_e450 >= _e452);
-        phi_6430_ = _e453;
+        phi_6448_ = _e453;
         if _e453 {
             let _e454 = (*randVal_1);
             let _e458 = tuning.treeLeafChance;
-            phi_6430_ = (fract((_e454 * 37f)) < _e458);
+            phi_6448_ = (fract((_e454 * 37f)) < _e458);
         }
-        let _e461 = phi_6430_;
+        let _e461 = phi_6448_;
         if _e461 {
             let _e462 = (*randVal_1);
             start_2 = i32((fract((_e462 * 43f)) * 26f));
@@ -1051,13 +1052,13 @@ fn updateTrunk_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_
     let _e503 = water;
     let _e505 = tuning.treeSpreadCost;
     let _e506 = (_e503 >= _e505);
-    phi_6509_ = _e506;
+    phi_6527_ = _e506;
     if _e506 {
         let _e507 = (*randVal_1);
         let _e511 = tuning.treeSpreadChance;
-        phi_6509_ = (fract((_e507 * 59f)) < _e511);
+        phi_6527_ = (fract((_e507 * 59f)) < _e511);
     }
-    let _e514 = phi_6509_;
+    let _e514 = phi_6527_;
     if _e514 {
         let _e515 = (*randVal_1);
         start_3 = i32((fract((_e515 * 61f)) * 8f));
@@ -1184,19 +1185,19 @@ fn locustRunSteps_u0028_() -> u32 {
 fn isLocustFood_u0028_u1_u003b(value_1: ptr<function, u32>) -> bool {
     var param_89: u32;
     var param_90: u32;
-    var phi_797_: bool;
+    var phi_816_: bool;
 
     let _e201 = (*value_1);
     param_89 = _e201;
     let _e202 = isGrassBlock_u0028_u1_u003b((&param_89));
-    phi_797_ = _e202;
+    phi_816_ = _e202;
     if !(_e202) {
         let _e204 = (*value_1);
         param_90 = _e204;
         let _e205 = getType_u0028_u1_u003b((&param_90));
-        phi_797_ = (_e205 == 19u);
+        phi_816_ = (_e205 == 19u);
     }
-    let _e208 = phi_797_;
+    let _e208 = phi_816_;
     return _e208;
 }
 
@@ -1204,47 +1205,47 @@ fn locustFoodAt_u0028_vi3_u003b(p_1: ptr<function, vec3<i32>>) -> bool {
     var param_91: vec3<i32>;
     var param_92: u32;
     var param_93: u32;
-    var phi_812_: bool;
-    var phi_819_: bool;
-    var phi_829_: bool;
-    var phi_836_: bool;
-    var phi_846_: bool;
+    var phi_831_: bool;
+    var phi_838_: bool;
+    var phi_848_: bool;
+    var phi_855_: bool;
+    var phi_865_: bool;
 
     let _e203 = (*p_1)[0u];
     let _e204 = (_e203 < 0i);
-    phi_812_ = _e204;
+    phi_831_ = _e204;
     if !(_e204) {
         let _e207 = (*p_1)[0u];
         let _e209 = tuning.gridWidth;
-        phi_812_ = (_e207 >= bitcast<i32>(_e209));
+        phi_831_ = (_e207 >= bitcast<i32>(_e209));
     }
-    let _e213 = phi_812_;
-    phi_819_ = _e213;
+    let _e213 = phi_831_;
+    phi_838_ = _e213;
     if !(_e213) {
         let _e216 = (*p_1)[1u];
-        phi_819_ = (_e216 < 0i);
+        phi_838_ = (_e216 < 0i);
     }
-    let _e219 = phi_819_;
-    phi_829_ = _e219;
+    let _e219 = phi_838_;
+    phi_848_ = _e219;
     if !(_e219) {
         let _e222 = (*p_1)[1u];
         let _e224 = tuning.gridHeight;
-        phi_829_ = (_e222 >= bitcast<i32>(_e224));
+        phi_848_ = (_e222 >= bitcast<i32>(_e224));
     }
-    let _e228 = phi_829_;
-    phi_836_ = _e228;
+    let _e228 = phi_848_;
+    phi_855_ = _e228;
     if !(_e228) {
         let _e231 = (*p_1)[2u];
-        phi_836_ = (_e231 < 0i);
+        phi_855_ = (_e231 < 0i);
     }
-    let _e234 = phi_836_;
-    phi_846_ = _e234;
+    let _e234 = phi_855_;
+    phi_865_ = _e234;
     if !(_e234) {
         let _e237 = (*p_1)[2u];
         let _e239 = tuning.gridDepth;
-        phi_846_ = (_e237 >= bitcast<i32>(_e239));
+        phi_865_ = (_e237 >= bitcast<i32>(_e239));
     }
-    let _e243 = phi_846_;
+    let _e243 = phi_865_;
     if _e243 {
         return false;
     }
@@ -1284,9 +1285,9 @@ fn locustHasGrip_u0028_vi3_u003b(pos_3: ptr<function, vec3<i32>>) -> bool {
     var param_95: i32;
     var param_96: vec3<i32>;
     var param_97: u32;
-    var phi_950_: bool;
-    var phi_957_: bool;
-    var phi_968_: bool;
+    var phi_969_: bool;
+    var phi_976_: bool;
+    var phi_987_: bool;
 
     d_2 = 0i;
     loop {
@@ -1299,26 +1300,26 @@ fn locustHasGrip_u0028_vi3_u003b(pos_3: ptr<function, vec3<i32>>) -> bool {
             n = (_e206 + _e208);
             let _e211 = n[0u];
             let _e212 = (_e211 <= 0i);
-            phi_950_ = _e212;
+            phi_969_ = _e212;
             if !(_e212) {
                 let _e215 = n[0u];
                 let _e217 = tuning.gridWidth;
-                phi_950_ = (_e215 >= (bitcast<i32>(_e217) - 1i));
+                phi_969_ = (_e215 >= (bitcast<i32>(_e217) - 1i));
             }
-            let _e222 = phi_950_;
-            phi_957_ = _e222;
+            let _e222 = phi_969_;
+            phi_976_ = _e222;
             if !(_e222) {
                 let _e225 = n[2u];
-                phi_957_ = (_e225 <= 0i);
+                phi_976_ = (_e225 <= 0i);
             }
-            let _e228 = phi_957_;
-            phi_968_ = _e228;
+            let _e228 = phi_976_;
+            phi_987_ = _e228;
             if !(_e228) {
                 let _e231 = n[2u];
                 let _e233 = tuning.gridDepth;
-                phi_968_ = (_e231 >= (bitcast<i32>(_e233) - 1i));
+                phi_987_ = (_e231 >= (bitcast<i32>(_e233) - 1i));
             }
-            let _e238 = phi_968_;
+            let _e238 = phi_987_;
             if _e238 {
                 continue;
             }
@@ -1343,47 +1344,47 @@ fn locustHasGrip_u0028_vi3_u003b(pos_3: ptr<function, vec3<i32>>) -> bool {
 }
 
 fn locustInBounds_u0028_vi3_u003b(p_2: ptr<function, vec3<i32>>) -> bool {
-    var phi_733_: bool;
-    var phi_739_: bool;
-    var phi_749_: bool;
-    var phi_755_: bool;
-    var phi_765_: bool;
+    var phi_752_: bool;
+    var phi_758_: bool;
+    var phi_768_: bool;
+    var phi_774_: bool;
+    var phi_784_: bool;
 
     let _e200 = (*p_2)[0u];
     let _e201 = (_e200 > 0i);
-    phi_733_ = _e201;
+    phi_752_ = _e201;
     if _e201 {
         let _e203 = (*p_2)[0u];
         let _e205 = tuning.gridWidth;
-        phi_733_ = (_e203 < (bitcast<i32>(_e205) - 1i));
+        phi_752_ = (_e203 < (bitcast<i32>(_e205) - 1i));
     }
-    let _e210 = phi_733_;
-    phi_739_ = _e210;
+    let _e210 = phi_752_;
+    phi_758_ = _e210;
     if _e210 {
         let _e212 = (*p_2)[1u];
-        phi_739_ = (_e212 > 0i);
+        phi_758_ = (_e212 > 0i);
     }
-    let _e215 = phi_739_;
-    phi_749_ = _e215;
+    let _e215 = phi_758_;
+    phi_768_ = _e215;
     if _e215 {
         let _e217 = (*p_2)[1u];
         let _e219 = tuning.gridHeight;
-        phi_749_ = (_e217 < (bitcast<i32>(_e219) - 1i));
+        phi_768_ = (_e217 < (bitcast<i32>(_e219) - 1i));
     }
-    let _e224 = phi_749_;
-    phi_755_ = _e224;
+    let _e224 = phi_768_;
+    phi_774_ = _e224;
     if _e224 {
         let _e226 = (*p_2)[2u];
-        phi_755_ = (_e226 > 0i);
+        phi_774_ = (_e226 > 0i);
     }
-    let _e229 = phi_755_;
-    phi_765_ = _e229;
+    let _e229 = phi_774_;
+    phi_784_ = _e229;
     if _e229 {
         let _e231 = (*p_2)[2u];
         let _e233 = tuning.gridDepth;
-        phi_765_ = (_e231 < (bitcast<i32>(_e233) - 1i));
+        phi_784_ = (_e231 < (bitcast<i32>(_e233) - 1i));
     }
-    let _e238 = phi_765_;
+    let _e238 = phi_784_;
     return _e238;
 }
 
@@ -1711,15 +1712,15 @@ fn updateLocust_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_
     var param_241: u32;
     var param_242: u32;
     var param_243: u32;
-    var phi_7091_: bool;
-    var phi_7098_: bool;
-    var phi_7259_: bool;
-    var phi_7278_: bool;
-    var phi_7307_: bool;
-    var phi_7321_: bool;
-    var phi_7323_: bool;
-    var phi_7415_: bool;
-    var phi_7464_: bool;
+    var phi_7109_: bool;
+    var phi_7116_: bool;
+    var phi_7277_: bool;
+    var phi_7296_: bool;
+    var phi_7325_: bool;
+    var phi_7339_: bool;
+    var phi_7341_: bool;
+    var phi_7433_: bool;
+    var phi_7482_: bool;
 
     let _e382 = (*rawValue_2);
     param_107 = _e382;
@@ -1891,22 +1892,22 @@ fn updateLocust_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_
     param_141 = _e508;
     let _e509 = getType_u0028_u1_u003b((&param_141));
     let _e510 = (_e509 == 0u);
-    phi_7091_ = _e510;
+    phi_7109_ = _e510;
     if _e510 {
         let _e511 = belowPos_1;
         param_142 = _e511;
         let _e512 = locustInBounds_u0028_vi3_u003b((&param_142));
-        phi_7091_ = _e512;
+        phi_7109_ = _e512;
     }
-    let _e514 = phi_7091_;
-    phi_7098_ = _e514;
+    let _e514 = phi_7109_;
+    phi_7116_ = _e514;
     if _e514 {
         let _e515 = (*pos_5);
         param_143 = _e515;
         let _e516 = locustHasGrip_u0028_vi3_u003b((&param_143));
-        phi_7098_ = !(_e516);
+        phi_7116_ = !(_e516);
     }
-    let _e519 = phi_7098_;
+    let _e519 = phi_7116_;
     if _e519 {
         let _e520 = belowPos_1;
         param_144 = _e520;
@@ -2043,16 +2044,16 @@ fn updateLocust_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_
     param_171 = _e603;
     let _e604 = locustInBounds_u0028_vi3_u003b((&param_171));
     let _e605 = !(_e604);
-    phi_7259_ = _e605;
+    phi_7277_ = _e605;
     if !(_e605) {
         let _e607 = target_;
         param_172 = _e607;
         let _e608 = getIndex_u0028_vi3_u003b((&param_172));
         param_173 = _e608;
         let _e609 = readCell_u0028_u1_u003b((&param_173));
-        phi_7259_ = (_e609 != 0u);
+        phi_7277_ = (_e609 != 0u);
     }
-    let _e612 = phi_7259_;
+    let _e612 = phi_7277_;
     blocked = _e612;
     let _e613 = blocked;
     if !(_e613) {
@@ -2061,16 +2062,16 @@ fn updateLocust_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_
         let _e617 = footing;
         param_174 = _e617;
         let _e618 = locustInBounds_u0028_vi3_u003b((&param_174));
-        phi_7278_ = _e618;
+        phi_7296_ = _e618;
         if _e618 {
             let _e619 = footing;
             param_175 = _e619;
             let _e620 = getIndex_u0028_vi3_u003b((&param_175));
             param_176 = _e620;
             let _e621 = readCell_u0028_u1_u003b((&param_176));
-            phi_7278_ = (_e621 == 0u);
+            phi_7296_ = (_e621 == 0u);
         }
-        let _e624 = phi_7278_;
+        let _e624 = phi_7296_;
         if _e624 {
             let _e625 = heading_1;
             param_177 = _e625;
@@ -2086,34 +2087,34 @@ fn updateLocust_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_
             let _e634 = backPos;
             param_179 = _e634;
             let _e635 = locustInBounds_u0028_vi3_u003b((&param_179));
-            phi_7307_ = _e635;
+            phi_7325_ = _e635;
             if _e635 {
                 let _e636 = backPos;
                 param_180 = _e636;
                 let _e637 = getIndex_u0028_vi3_u003b((&param_180));
                 param_181 = _e637;
                 let _e638 = readCell_u0028_u1_u003b((&param_181));
-                phi_7307_ = (_e638 == 0u);
+                phi_7325_ = (_e638 == 0u);
             }
-            let _e641 = phi_7307_;
-            phi_7323_ = _e641;
+            let _e641 = phi_7325_;
+            phi_7341_ = _e641;
             if _e641 {
                 let _e642 = backFoot;
                 param_182 = _e642;
                 let _e643 = locustInBounds_u0028_vi3_u003b((&param_182));
-                phi_7321_ = _e643;
+                phi_7339_ = _e643;
                 if _e643 {
                     let _e644 = backFoot;
                     param_183 = _e644;
                     let _e645 = getIndex_u0028_vi3_u003b((&param_183));
                     param_184 = _e645;
                     let _e646 = readCell_u0028_u1_u003b((&param_184));
-                    phi_7321_ = (_e646 == 0u);
+                    phi_7339_ = (_e646 == 0u);
                 }
-                let _e649 = phi_7321_;
-                phi_7323_ = !(_e649);
+                let _e649 = phi_7339_;
+                phi_7341_ = !(_e649);
             }
-            let _e652 = phi_7323_;
+            let _e652 = phi_7341_;
             backOpen = _e652;
             let _e653 = backOpen;
             if _e653 {
@@ -2186,16 +2187,16 @@ fn updateLocust_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_
             let _e699 = overTop;
             param_206 = _e699;
             let _e700 = locustInBounds_u0028_vi3_u003b((&param_206));
-            phi_7415_ = _e700;
+            phi_7433_ = _e700;
             if _e700 {
                 let _e701 = overTop;
                 param_207 = _e701;
                 let _e702 = getIndex_u0028_vi3_u003b((&param_207));
                 param_208 = _e702;
                 let _e703 = readCell_u0028_u1_u003b((&param_208));
-                phi_7415_ = (_e703 == 0u);
+                phi_7433_ = (_e703 == 0u);
             }
-            let _e706 = phi_7415_;
+            let _e706 = phi_7433_;
             if _e706 {
                 let _e707 = steps_1;
                 let _e709 = heading_1;
@@ -2234,16 +2235,16 @@ fn updateLocust_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_
             let _e724 = up;
             param_222 = _e724;
             let _e725 = locustInBounds_u0028_vi3_u003b((&param_222));
-            phi_7464_ = _e725;
+            phi_7482_ = _e725;
             if _e725 {
                 let _e726 = up;
                 param_223 = _e726;
                 let _e727 = getIndex_u0028_vi3_u003b((&param_223));
                 param_224 = _e727;
                 let _e728 = readCell_u0028_u1_u003b((&param_224));
-                phi_7464_ = (_e728 == 0u);
+                phi_7482_ = (_e728 == 0u);
             }
-            let _e731 = phi_7464_;
+            let _e731 = phi_7482_;
             if _e731 {
                 let _e732 = heading_1;
                 param_225 = _e732;
@@ -2319,7 +2320,7 @@ fn updateDarkStone_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_6: pt
     var param_257: u32;
     var param_258: u32;
     var param_259: u32;
-    var phi_6147_: bool;
+    var phi_6165_: bool;
 
     let _e221 = (*pos_6)[1u];
     if (_e221 > 1i) {
@@ -2356,13 +2357,13 @@ fn updateDarkStone_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_6: pt
     }
     let _e237 = (*currentAge_3);
     let _e238 = (_e237 > 0u);
-    phi_6147_ = _e238;
+    phi_6165_ = _e238;
     if _e238 {
         let _e239 = (*randVal_4);
         let _e243 = tuning.darkStoneDryChance;
-        phi_6147_ = (fract((_e239 * 23f)) < _e243);
+        phi_6165_ = (fract((_e239 * 23f)) < _e243);
     }
-    let _e246 = phi_6147_;
+    let _e246 = phi_6165_;
     if _e246 {
         let _e247 = (*currentIndex_4);
         let _e250 = (*rawValue_3);
@@ -2489,13 +2490,13 @@ fn lavaInteract_u0028_vi3_u003b_u1_u003b_f1_u003b(pos_7: ptr<function, vec3<i32>
     var param_301: u32;
     var param_302: u32;
     var param_303: u32;
-    var phi_5201_: bool;
-    var phi_5208_: bool;
     var phi_5219_: bool;
     var phi_5226_: bool;
     var phi_5237_: bool;
-    var phi_5376_: bool;
-    var phi_5387_: bool;
+    var phi_5244_: bool;
+    var phi_5255_: bool;
+    var phi_5394_: bool;
+    var phi_5405_: bool;
 
     let _e266 = (*randVal_5);
     startDir = i32((fract((_e266 * 17f)) * 6f));
@@ -2514,39 +2515,39 @@ fn lavaInteract_u0028_vi3_u003b_u1_u003b_f1_u003b(pos_7: ptr<function, vec3<i32>
             nPos = (_e283 + _e285);
             let _e288 = nPos[0u];
             let _e289 = (_e288 <= 0i);
-            phi_5201_ = _e289;
+            phi_5219_ = _e289;
             if !(_e289) {
                 let _e292 = nPos[0u];
                 let _e294 = tuning.gridWidth;
-                phi_5201_ = (_e292 >= (bitcast<i32>(_e294) - 1i));
+                phi_5219_ = (_e292 >= (bitcast<i32>(_e294) - 1i));
             }
-            let _e299 = phi_5201_;
-            phi_5208_ = _e299;
+            let _e299 = phi_5219_;
+            phi_5226_ = _e299;
             if !(_e299) {
                 let _e302 = nPos[1u];
-                phi_5208_ = (_e302 <= 0i);
+                phi_5226_ = (_e302 <= 0i);
             }
-            let _e305 = phi_5208_;
-            phi_5219_ = _e305;
+            let _e305 = phi_5226_;
+            phi_5237_ = _e305;
             if !(_e305) {
                 let _e308 = nPos[1u];
                 let _e310 = tuning.gridHeight;
-                phi_5219_ = (_e308 >= (bitcast<i32>(_e310) - 1i));
+                phi_5237_ = (_e308 >= (bitcast<i32>(_e310) - 1i));
             }
-            let _e315 = phi_5219_;
-            phi_5226_ = _e315;
+            let _e315 = phi_5237_;
+            phi_5244_ = _e315;
             if !(_e315) {
                 let _e318 = nPos[2u];
-                phi_5226_ = (_e318 <= 0i);
+                phi_5244_ = (_e318 <= 0i);
             }
-            let _e321 = phi_5226_;
-            phi_5237_ = _e321;
+            let _e321 = phi_5244_;
+            phi_5255_ = _e321;
             if !(_e321) {
                 let _e324 = nPos[2u];
                 let _e326 = tuning.gridDepth;
-                phi_5237_ = (_e324 >= (bitcast<i32>(_e326) - 1i));
+                phi_5255_ = (_e324 >= (bitcast<i32>(_e326) - 1i));
             }
-            let _e331 = phi_5237_;
+            let _e331 = phi_5255_;
             if _e331 {
                 continue;
             }
@@ -2641,7 +2642,7 @@ fn lavaInteract_u0028_vi3_u003b_u1_u003b_f1_u003b(pos_7: ptr<function, vec3<i32>
                                     let _e406 = abovePos[1u];
                                     let _e408 = tuning.gridHeight;
                                     let _e411 = (_e406 < (bitcast<i32>(_e408) - 1i));
-                                    phi_5376_ = _e411;
+                                    phi_5394_ = _e411;
                                     if _e411 {
                                         let _e412 = abovePos;
                                         param_278 = _e412;
@@ -2650,16 +2651,16 @@ fn lavaInteract_u0028_vi3_u003b_u1_u003b_f1_u003b(pos_7: ptr<function, vec3<i32>
                                         let _e414 = readCell_u0028_u1_u003b((&param_279));
                                         param_280 = _e414;
                                         let _e415 = getType_u0028_u1_u003b((&param_280));
-                                        phi_5376_ = (_e415 == 0u);
+                                        phi_5394_ = (_e415 == 0u);
                                     }
-                                    let _e418 = phi_5376_;
-                                    phi_5387_ = _e418;
+                                    let _e418 = phi_5394_;
+                                    phi_5405_ = _e418;
                                     if _e418 {
                                         let _e419 = (*randVal_5);
                                         let _e423 = tuning.lavaIgniteChance;
-                                        phi_5387_ = (fract((_e419 * 41f)) < _e423);
+                                        phi_5405_ = (fract((_e419 * 41f)) < _e423);
                                     }
-                                    let _e426 = phi_5387_;
+                                    let _e426 = phi_5405_;
                                     if _e426 {
                                         let _e427 = abovePos;
                                         param_281 = _e427;
@@ -2927,18 +2928,18 @@ fn updateLava_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
     var param_373: u32;
     var param_374: u32;
     var param_375: u32;
-    var phi_5595_: bool;
-    var phi_5733_: bool;
-    var phi_5739_: bool;
-    var phi_5749_: bool;
-    var phi_5861_: bool;
-    var phi_5868_: bool;
+    var phi_5613_: bool;
+    var phi_5751_: bool;
+    var phi_5757_: bool;
+    var phi_5767_: bool;
     var phi_5879_: bool;
-    var phi_5891_: bool;
-    var phi_5913_: bool;
-    var phi_6027_: bool;
-    var phi_6033_: bool;
-    var phi_6043_: bool;
+    var phi_5886_: bool;
+    var phi_5897_: bool;
+    var phi_5909_: bool;
+    var phi_5931_: bool;
+    var phi_6045_: bool;
+    var phi_6051_: bool;
+    var phi_6061_: bool;
 
     let _e300 = (*currentAge_4);
     coolness_2 = _e300;
@@ -2954,13 +2955,13 @@ fn updateLava_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
     let _e305 = (*currentSleep_1);
     let _e307 = tuning.wakeSleepThreshold;
     let _e308 = (_e305 > _e307);
-    phi_5595_ = _e308;
+    phi_5613_ = _e308;
     if _e308 {
         let _e309 = (*randVal_6);
         let _e313 = tuning.lavaRestCoolChance;
-        phi_5595_ = (fract((_e309 * 71f)) < _e313);
+        phi_5613_ = (fract((_e309 * 71f)) < _e313);
     }
-    let _e316 = phi_5595_;
+    let _e316 = phi_5613_;
     if _e316 {
         let _e317 = coolness_2;
         coolness_2 = min((_e317 + 1u), 255u);
@@ -3050,26 +3051,26 @@ fn updateLava_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                     sPos = _e394;
                     let _e396 = sPos[0u];
                     let _e397 = (_e396 > 0i);
-                    phi_5733_ = _e397;
+                    phi_5751_ = _e397;
                     if _e397 {
                         let _e399 = sPos[0u];
                         let _e401 = tuning.gridWidth;
-                        phi_5733_ = (_e399 < (bitcast<i32>(_e401) - 1i));
+                        phi_5751_ = (_e399 < (bitcast<i32>(_e401) - 1i));
                     }
-                    let _e406 = phi_5733_;
-                    phi_5739_ = _e406;
+                    let _e406 = phi_5751_;
+                    phi_5757_ = _e406;
                     if _e406 {
                         let _e408 = sPos[2u];
-                        phi_5739_ = (_e408 > 0i);
+                        phi_5757_ = (_e408 > 0i);
                     }
-                    let _e411 = phi_5739_;
-                    phi_5749_ = _e411;
+                    let _e411 = phi_5757_;
+                    phi_5767_ = _e411;
                     if _e411 {
                         let _e413 = sPos[2u];
                         let _e415 = tuning.gridDepth;
-                        phi_5749_ = (_e413 < (bitcast<i32>(_e415) - 1i));
+                        phi_5767_ = (_e413 < (bitcast<i32>(_e415) - 1i));
                     }
-                    let _e420 = phi_5749_;
+                    let _e420 = phi_5767_;
                     if _e420 {
                         let _e421 = sPos;
                         param_324 = _e421;
@@ -3150,27 +3151,27 @@ fn updateLava_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                             c_6 = (_e473 + (_e475 * vec3(_e476)));
                             let _e481 = c_6[0u];
                             let _e482 = (_e481 <= 0i);
-                            phi_5861_ = _e482;
+                            phi_5879_ = _e482;
                             if !(_e482) {
                                 let _e485 = c_6[0u];
                                 let _e487 = tuning.gridWidth;
-                                phi_5861_ = (_e485 >= (bitcast<i32>(_e487) - 1i));
+                                phi_5879_ = (_e485 >= (bitcast<i32>(_e487) - 1i));
                             }
-                            let _e492 = phi_5861_;
-                            phi_5868_ = _e492;
+                            let _e492 = phi_5879_;
+                            phi_5886_ = _e492;
                             if !(_e492) {
                                 let _e495 = c_6[2u];
-                                phi_5868_ = (_e495 <= 0i);
+                                phi_5886_ = (_e495 <= 0i);
                             }
-                            let _e498 = phi_5868_;
-                            phi_5879_ = _e498;
+                            let _e498 = phi_5886_;
+                            phi_5897_ = _e498;
                             if !(_e498) {
                                 let _e501 = c_6[2u];
                                 let _e503 = tuning.gridDepth;
-                                phi_5879_ = (_e501 >= (bitcast<i32>(_e503) - 1i));
+                                phi_5897_ = (_e501 >= (bitcast<i32>(_e503) - 1i));
                             }
-                            let _e508 = phi_5879_;
-                            phi_5891_ = _e508;
+                            let _e508 = phi_5897_;
+                            phi_5909_ = _e508;
                             if !(_e508) {
                                 let _e510 = c_6;
                                 param_337 = _e510;
@@ -3179,9 +3180,9 @@ fn updateLava_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                                 let _e512 = readCell_u0028_u1_u003b((&param_338));
                                 param_339 = _e512;
                                 let _e513 = getType_u0028_u1_u003b((&param_339));
-                                phi_5891_ = (_e513 != 0u);
+                                phi_5909_ = (_e513 != 0u);
                             }
-                            let _e516 = phi_5891_;
+                            let _e516 = phi_5909_;
                             if _e516 {
                                 let _e517 = d_7;
                                 let _e520 = blockedMask;
@@ -3189,7 +3190,7 @@ fn updateLava_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                             } else {
                                 let _e523 = c_6[1u];
                                 let _e524 = (_e523 > 1i);
-                                phi_5913_ = _e524;
+                                phi_5931_ = _e524;
                                 if _e524 {
                                     let _e525 = c_6;
                                     param_340 = (_e525 + vec3<i32>(0i, -1i, 0i));
@@ -3198,9 +3199,9 @@ fn updateLava_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                                     let _e528 = readCell_u0028_u1_u003b((&param_341));
                                     param_342 = _e528;
                                     let _e529 = getType_u0028_u1_u003b((&param_342));
-                                    phi_5913_ = (_e529 == 0u);
+                                    phi_5931_ = (_e529 == 0u);
                                 }
-                                let _e532 = phi_5913_;
+                                let _e532 = phi_5931_;
                                 if _e532 {
                                     let _e533 = c_6;
                                     param_343 = _e533;
@@ -3298,26 +3299,26 @@ fn updateLava_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                         targetPos = (_e594 + _e596);
                         let _e599 = targetPos[0u];
                         let _e600 = (_e599 > 0i);
-                        phi_6027_ = _e600;
+                        phi_6045_ = _e600;
                         if _e600 {
                             let _e602 = targetPos[0u];
                             let _e604 = tuning.gridWidth;
-                            phi_6027_ = (_e602 < (bitcast<i32>(_e604) - 1i));
+                            phi_6045_ = (_e602 < (bitcast<i32>(_e604) - 1i));
                         }
-                        let _e609 = phi_6027_;
-                        phi_6033_ = _e609;
+                        let _e609 = phi_6045_;
+                        phi_6051_ = _e609;
                         if _e609 {
                             let _e611 = targetPos[2u];
-                            phi_6033_ = (_e611 > 0i);
+                            phi_6051_ = (_e611 > 0i);
                         }
-                        let _e614 = phi_6033_;
-                        phi_6043_ = _e614;
+                        let _e614 = phi_6051_;
+                        phi_6061_ = _e614;
                         if _e614 {
                             let _e616 = targetPos[2u];
                             let _e618 = tuning.gridDepth;
-                            phi_6043_ = (_e616 < (bitcast<i32>(_e618) - 1i));
+                            phi_6061_ = (_e616 < (bitcast<i32>(_e618) - 1i));
                         }
-                        let _e623 = phi_6043_;
+                        let _e623 = phi_6061_;
                         if _e623 {
                             let _e624 = targetPos;
                             param_360 = _e624;
@@ -3379,6 +3380,37 @@ fn updateLava_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
     return;
 }
 
+fn getCloudSleep_u0028_u1_u003b(v_2: ptr<function, u32>) -> u32 {
+    let _e199 = (*v_2);
+    return ((_e199 >> bitcast<u32>(10i)) & 255u);
+}
+
+fn getCloudKind_u0028_u1_u003b(v_3: ptr<function, u32>) -> u32 {
+    let _e199 = (*v_3);
+    return (_e199 & 3u);
+}
+
+fn cloudIsAtRest_u0028_u1_u003b(v_4: ptr<function, u32>) -> bool {
+    var param_376: u32;
+    var param_377: u32;
+    var phi_572_: bool;
+
+    let _e201 = (*v_4);
+    param_376 = _e201;
+    let _e202 = getCloudKind_u0028_u1_u003b((&param_376));
+    let _e203 = (_e202 != 0u);
+    phi_572_ = _e203;
+    if _e203 {
+        let _e204 = (*v_4);
+        param_377 = _e204;
+        let _e205 = getCloudSleep_u0028_u1_u003b((&param_377));
+        let _e207 = tuning.wakeSleepThreshold;
+        phi_572_ = (_e205 >= _e207);
+    }
+    let _e210 = phi_572_;
+    return _e210;
+}
+
 fn packCloud_u0028_u1_u003b_u1_u003b_u1_u003b(kind: ptr<function, u32>, wait: ptr<function, u32>, sleep_1: ptr<function, u32>) -> u32 {
     let _e201 = (*kind);
     let _e203 = (*wait);
@@ -3387,257 +3419,293 @@ fn packCloud_u0028_u1_u003b_u1_u003b_u1_u003b(kind: ptr<function, u32>, wait: pt
 }
 
 fn updateSteam_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_9: ptr<function, vec3<i32>>, currentIndex_6: ptr<function, u32>, rawValue_5: ptr<function, u32>, currentSleep_2: ptr<function, u32>, currentAge_5: ptr<function, u32>, randVal_7: ptr<function, f32>) {
-    var param_376: u32;
-    var param_377: u32;
     var param_378: u32;
+    var param_379: u32;
+    var param_380: u32;
     var newAge: u32;
     var d_9: i32;
     var scatterPos: vec3<i32>;
-    var param_379: i32;
+    var param_381: i32;
     var sType: u32;
-    var param_380: vec3<i32>;
-    var param_381: u32;
-    var param_382: u32;
-    var param_383: vec3<i32>;
+    var param_382: vec3<i32>;
+    var param_383: u32;
     var param_384: u32;
-    var param_385: u32;
+    var param_385: vec3<i32>;
     var param_386: u32;
     var param_387: u32;
     var param_388: u32;
     var param_389: u32;
     var param_390: u32;
     var param_391: u32;
+    var param_392: u32;
+    var param_393: u32;
     var checkPos: array<vec3<i32>, 3>;
     var dir_1: i32;
+    var upPos_1: vec3<i32>;
+    var param_394: vec3<i32>;
+    var param_395: u32;
+    var param_396: u32;
+    var param_397: u32;
+    var param_398: u32;
     var i_10: i32;
     var cPos: vec3<i32>;
     var cIndex: u32;
-    var param_392: vec3<i32>;
+    var param_399: vec3<i32>;
     var cVal: u32;
-    var param_393: u32;
+    var param_400: u32;
     var cType: u32;
-    var param_394: u32;
+    var param_401: u32;
     var moisture_2: u32;
-    var param_395: u32;
+    var param_402: u32;
     var capacity: u32;
     var local_15: u32;
     var i_11: i32;
     var sPos_1: vec3<i32>;
     var sType_1: u32;
-    var param_396: vec3<i32>;
-    var param_397: u32;
-    var param_398: u32;
-    var param_399: vec3<i32>;
-    var param_400: u32;
-    var param_401: u32;
-    var param_402: u32;
-    var param_403: u32;
+    var param_403: vec3<i32>;
     var param_404: u32;
     var param_405: u32;
-    var param_406: u32;
+    var param_406: vec3<i32>;
     var param_407: u32;
-    var newSleep_1: u32;
     var param_408: u32;
     var param_409: u32;
     var param_410: u32;
     var param_411: u32;
-    var phi_8280_: bool;
-    var phi_8286_: bool;
-    var phi_8296_: bool;
-    var phi_8302_: bool;
-    var phi_8312_: bool;
-    var phi_8412_: bool;
-    var phi_8418_: bool;
-    var phi_8428_: bool;
-    var phi_8509_: bool;
-    var phi_8515_: bool;
-    var phi_8525_: bool;
+    var param_412: u32;
+    var param_413: u32;
+    var param_414: u32;
+    var newSleep_1: u32;
+    var param_415: u32;
+    var param_416: u32;
+    var param_417: u32;
+    var param_418: u32;
+    var phi_8298_: bool;
+    var phi_8304_: bool;
+    var phi_8314_: bool;
+    var phi_8320_: bool;
+    var phi_8330_: bool;
+    var phi_8424_: bool;
+    var phi_8465_: bool;
+    var phi_8471_: bool;
+    var phi_8481_: bool;
+    var phi_8562_: bool;
+    var phi_8568_: bool;
+    var phi_8578_: bool;
 
-    let _e259 = (*pos_9)[1u];
-    let _e261 = tuning.gridHeight;
-    if (_e259 >= (bitcast<i32>(_e261) - 2i)) {
-        let _e265 = (*currentIndex_6);
-        param_376 = 1u;
-        param_377 = 0u;
-        param_378 = 0u;
-        let _e268 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_376), (&param_377), (&param_378));
-        let _e269 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e265]), 0u, _e268);
-        if (_e269.old_value == 0u) {
-            let _e272 = (*currentIndex_6);
-            let _e275 = atomicExchange((&unnamed.grid[_e272]), 0u);
+    let _e265 = (*pos_9)[1u];
+    let _e267 = tuning.gridHeight;
+    if (_e265 >= (bitcast<i32>(_e267) - 2i)) {
+        let _e271 = (*currentIndex_6);
+        param_378 = 1u;
+        param_379 = 0u;
+        param_380 = 0u;
+        let _e274 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_378), (&param_379), (&param_380));
+        let _e275 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e271]), 0u, _e274);
+        if (_e275.old_value == 0u) {
+            let _e278 = (*currentIndex_6);
+            let _e281 = atomicExchange((&unnamed.grid[_e278]), 0u);
         }
         return;
     }
-    let _e276 = (*currentAge_5);
-    newAge = min((_e276 + 1u), 255u);
-    let _e279 = (*randVal_7);
-    let _e283 = tuning.steamScatterChance;
-    if (fract((_e279 * 88f)) < _e283) {
-        let _e285 = (*randVal_7);
-        d_9 = i32((fract((_e285 * 13f)) * 6f));
-        let _e290 = (*pos_9);
-        let _e291 = d_9;
-        param_379 = _e291;
-        let _e292 = getOrthoDir_u0028_i1_u003b((&param_379));
-        scatterPos = (_e290 + _e292);
-        let _e295 = scatterPos[0u];
-        let _e296 = (_e295 > 0i);
-        phi_8280_ = _e296;
-        if _e296 {
-            let _e298 = scatterPos[0u];
-            let _e300 = tuning.gridWidth;
-            phi_8280_ = (_e298 < (bitcast<i32>(_e300) - 1i));
+    let _e282 = (*currentAge_5);
+    newAge = min((_e282 + 1u), 255u);
+    let _e285 = (*randVal_7);
+    let _e289 = tuning.steamScatterChance;
+    if (fract((_e285 * 88f)) < _e289) {
+        let _e291 = (*randVal_7);
+        d_9 = i32((fract((_e291 * 13f)) * 6f));
+        let _e296 = (*pos_9);
+        let _e297 = d_9;
+        param_381 = _e297;
+        let _e298 = getOrthoDir_u0028_i1_u003b((&param_381));
+        scatterPos = (_e296 + _e298);
+        let _e301 = scatterPos[0u];
+        let _e302 = (_e301 > 0i);
+        phi_8298_ = _e302;
+        if _e302 {
+            let _e304 = scatterPos[0u];
+            let _e306 = tuning.gridWidth;
+            phi_8298_ = (_e304 < (bitcast<i32>(_e306) - 1i));
         }
-        let _e305 = phi_8280_;
-        phi_8286_ = _e305;
-        if _e305 {
-            let _e307 = scatterPos[1u];
-            phi_8286_ = (_e307 > 0i);
+        let _e311 = phi_8298_;
+        phi_8304_ = _e311;
+        if _e311 {
+            let _e313 = scatterPos[1u];
+            phi_8304_ = (_e313 > 0i);
         }
-        let _e310 = phi_8286_;
-        phi_8296_ = _e310;
-        if _e310 {
-            let _e312 = scatterPos[1u];
-            let _e314 = tuning.gridHeight;
-            phi_8296_ = (_e312 < (bitcast<i32>(_e314) - 1i));
+        let _e316 = phi_8304_;
+        phi_8314_ = _e316;
+        if _e316 {
+            let _e318 = scatterPos[1u];
+            let _e320 = tuning.gridHeight;
+            phi_8314_ = (_e318 < (bitcast<i32>(_e320) - 1i));
         }
-        let _e319 = phi_8296_;
-        phi_8302_ = _e319;
-        if _e319 {
-            let _e321 = scatterPos[2u];
-            phi_8302_ = (_e321 > 0i);
+        let _e325 = phi_8314_;
+        phi_8320_ = _e325;
+        if _e325 {
+            let _e327 = scatterPos[2u];
+            phi_8320_ = (_e327 > 0i);
         }
-        let _e324 = phi_8302_;
-        phi_8312_ = _e324;
-        if _e324 {
-            let _e326 = scatterPos[2u];
-            let _e328 = tuning.gridDepth;
-            phi_8312_ = (_e326 < (bitcast<i32>(_e328) - 1i));
+        let _e330 = phi_8320_;
+        phi_8330_ = _e330;
+        if _e330 {
+            let _e332 = scatterPos[2u];
+            let _e334 = tuning.gridDepth;
+            phi_8330_ = (_e332 < (bitcast<i32>(_e334) - 1i));
         }
-        let _e333 = phi_8312_;
-        if _e333 {
-            let _e334 = scatterPos;
-            param_380 = _e334;
-            let _e335 = getIndex_u0028_vi3_u003b((&param_380));
-            param_381 = _e335;
-            let _e336 = readCell_u0028_u1_u003b((&param_381));
-            param_382 = _e336;
-            let _e337 = getType_u0028_u1_u003b((&param_382));
-            sType = _e337;
-            let _e338 = sType;
-            let _e340 = sType;
-            if ((_e338 == 0u) || (_e340 == 5u)) {
-                let _e343 = scatterPos;
-                param_383 = _e343;
-                let _e344 = getIndex_u0028_vi3_u003b((&param_383));
-                param_384 = 6u;
-                param_385 = 0u;
-                param_386 = 0u;
-                let _e345 = newAge;
-                param_387 = _e345;
-                let _e346 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_384), (&param_385), (&param_386), (&param_387));
-                let _e347 = (*currentIndex_6);
-                param_388 = _e347;
-                let _e348 = (*rawValue_5);
-                param_389 = _e348;
-                param_390 = _e344;
-                param_391 = _e346;
-                let _e349 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_388), (&param_389), (&param_390), (&param_391));
-                if _e349 {
+        let _e339 = phi_8330_;
+        if _e339 {
+            let _e340 = scatterPos;
+            param_382 = _e340;
+            let _e341 = getIndex_u0028_vi3_u003b((&param_382));
+            param_383 = _e341;
+            let _e342 = readCell_u0028_u1_u003b((&param_383));
+            param_384 = _e342;
+            let _e343 = getType_u0028_u1_u003b((&param_384));
+            sType = _e343;
+            let _e344 = sType;
+            let _e346 = sType;
+            if ((_e344 == 0u) || (_e346 == 5u)) {
+                let _e349 = scatterPos;
+                param_385 = _e349;
+                let _e350 = getIndex_u0028_vi3_u003b((&param_385));
+                param_386 = 6u;
+                param_387 = 0u;
+                param_388 = 0u;
+                let _e351 = newAge;
+                param_389 = _e351;
+                let _e352 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_386), (&param_387), (&param_388), (&param_389));
+                let _e353 = (*currentIndex_6);
+                param_390 = _e353;
+                let _e354 = (*rawValue_5);
+                param_391 = _e354;
+                param_392 = _e350;
+                param_393 = _e352;
+                let _e355 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_390), (&param_391), (&param_392), (&param_393));
+                if _e355 {
                     return;
                 }
             }
         }
     }
-    let _e350 = (*pos_9);
-    checkPos[0i] = (_e350 + vec3<i32>(0i, 1i, 0i));
-    let _e353 = (*randVal_7);
-    dir_1 = select(-1i, 1i, (fract((_e353 * 10f)) > 0.5f));
-    let _e358 = (*randVal_7);
-    if (fract((_e358 * 100f)) > 0.5f) {
-        let _e362 = (*pos_9);
-        let _e363 = dir_1;
-        checkPos[1i] = (_e362 + vec3<i32>(_e363, 1i, 0i));
-        let _e367 = (*pos_9);
-        let _e368 = dir_1;
-        checkPos[2i] = (_e367 + vec3<i32>(0i, 1i, _e368));
+    let _e356 = (*pos_9);
+    checkPos[0i] = (_e356 + vec3<i32>(0i, 1i, 0i));
+    let _e359 = (*randVal_7);
+    dir_1 = select(-1i, 1i, (fract((_e359 * 10f)) > 0.5f));
+    let _e364 = (*randVal_7);
+    if (fract((_e364 * 100f)) > 0.5f) {
+        let _e368 = (*pos_9);
+        let _e369 = dir_1;
+        checkPos[1i] = (_e368 + vec3<i32>(_e369, 1i, 0i));
+        let _e373 = (*pos_9);
+        let _e374 = dir_1;
+        checkPos[2i] = (_e373 + vec3<i32>(0i, 1i, _e374));
     } else {
-        let _e372 = (*pos_9);
-        let _e373 = dir_1;
-        checkPos[1i] = (_e372 + vec3<i32>(0i, 1i, _e373));
-        let _e377 = (*pos_9);
-        let _e378 = dir_1;
-        checkPos[2i] = (_e377 + vec3<i32>(_e378, 1i, 0i));
+        let _e378 = (*pos_9);
+        let _e379 = dir_1;
+        checkPos[1i] = (_e378 + vec3<i32>(0i, 1i, _e379));
+        let _e383 = (*pos_9);
+        let _e384 = dir_1;
+        checkPos[2i] = (_e383 + vec3<i32>(_e384, 1i, 0i));
+    }
+    let _e388 = (*pos_9);
+    upPos_1 = (_e388 + vec3<i32>(0i, 1i, 0i));
+    let _e391 = upPos_1[1u];
+    let _e393 = tuning.gridHeight;
+    let _e395 = (_e391 < bitcast<i32>(_e393));
+    phi_8424_ = _e395;
+    if _e395 {
+        let _e396 = upPos_1;
+        param_394 = _e396;
+        let _e397 = getIndex_u0028_vi3_u003b((&param_394));
+        let _e400 = atomicLoad((&unnamed_2.cloudCells[_e397]));
+        param_395 = _e400;
+        let _e401 = cloudIsAtRest_u0028_u1_u003b((&param_395));
+        phi_8424_ = _e401;
+    }
+    let _e403 = phi_8424_;
+    if _e403 {
+        let _e404 = (*currentIndex_6);
+        param_396 = 1u;
+        param_397 = 0u;
+        param_398 = 0u;
+        let _e407 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_396), (&param_397), (&param_398));
+        let _e408 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e404]), 0u, _e407);
+        if (_e408.old_value == 0u) {
+            let _e411 = (*currentIndex_6);
+            let _e414 = atomicExchange((&unnamed.grid[_e411]), 0u);
+        }
+        return;
     }
     i_10 = 0i;
     loop {
-        let _e382 = i_10;
-        if (_e382 < 3i) {
-            let _e384 = i_10;
-            let _e386 = checkPos[_e384];
-            cPos = _e386;
-            let _e388 = cPos[0u];
-            let _e389 = (_e388 > 0i);
-            phi_8412_ = _e389;
-            if _e389 {
-                let _e391 = cPos[0u];
-                let _e393 = tuning.gridWidth;
-                phi_8412_ = (_e391 < (bitcast<i32>(_e393) - 1i));
+        let _e415 = i_10;
+        if (_e415 < 3i) {
+            let _e417 = i_10;
+            let _e419 = checkPos[_e417];
+            cPos = _e419;
+            let _e421 = cPos[0u];
+            let _e422 = (_e421 > 0i);
+            phi_8465_ = _e422;
+            if _e422 {
+                let _e424 = cPos[0u];
+                let _e426 = tuning.gridWidth;
+                phi_8465_ = (_e424 < (bitcast<i32>(_e426) - 1i));
             }
-            let _e398 = phi_8412_;
-            phi_8418_ = _e398;
-            if _e398 {
-                let _e400 = cPos[2u];
-                phi_8418_ = (_e400 > 0i);
+            let _e431 = phi_8465_;
+            phi_8471_ = _e431;
+            if _e431 {
+                let _e433 = cPos[2u];
+                phi_8471_ = (_e433 > 0i);
             }
-            let _e403 = phi_8418_;
-            phi_8428_ = _e403;
-            if _e403 {
-                let _e405 = cPos[2u];
-                let _e407 = tuning.gridDepth;
-                phi_8428_ = (_e405 < (bitcast<i32>(_e407) - 1i));
+            let _e436 = phi_8471_;
+            phi_8481_ = _e436;
+            if _e436 {
+                let _e438 = cPos[2u];
+                let _e440 = tuning.gridDepth;
+                phi_8481_ = (_e438 < (bitcast<i32>(_e440) - 1i));
             }
-            let _e412 = phi_8428_;
-            if _e412 {
-                let _e413 = cPos;
-                param_392 = _e413;
-                let _e414 = getIndex_u0028_vi3_u003b((&param_392));
-                cIndex = _e414;
-                let _e415 = cIndex;
-                param_393 = _e415;
-                let _e416 = readCell_u0028_u1_u003b((&param_393));
-                cVal = _e416;
-                let _e417 = cVal;
-                param_394 = _e417;
-                let _e418 = getType_u0028_u1_u003b((&param_394));
-                cType = _e418;
-                let _e419 = cType;
-                let _e421 = cType;
-                if ((_e419 == 1u) || (_e421 == 4u)) {
-                    let _e424 = cVal;
-                    param_395 = _e424;
-                    let _e425 = getAge_u0028_u1_u003b((&param_395));
-                    moisture_2 = _e425;
-                    let _e426 = cType;
-                    if (_e426 == 4u) {
-                        let _e429 = tuning.dirtMoistureCapacity;
-                        local_15 = _e429;
+            let _e445 = phi_8481_;
+            if _e445 {
+                let _e446 = cPos;
+                param_399 = _e446;
+                let _e447 = getIndex_u0028_vi3_u003b((&param_399));
+                cIndex = _e447;
+                let _e448 = cIndex;
+                param_400 = _e448;
+                let _e449 = readCell_u0028_u1_u003b((&param_400));
+                cVal = _e449;
+                let _e450 = cVal;
+                param_401 = _e450;
+                let _e451 = getType_u0028_u1_u003b((&param_401));
+                cType = _e451;
+                let _e452 = cType;
+                let _e454 = cType;
+                if ((_e452 == 1u) || (_e454 == 4u)) {
+                    let _e457 = cVal;
+                    param_402 = _e457;
+                    let _e458 = getAge_u0028_u1_u003b((&param_402));
+                    moisture_2 = _e458;
+                    let _e459 = cType;
+                    if (_e459 == 4u) {
+                        let _e462 = tuning.dirtMoistureCapacity;
+                        local_15 = _e462;
                     } else {
-                        let _e431 = tuning.sandMoistureCapacity;
-                        local_15 = _e431;
+                        let _e464 = tuning.sandMoistureCapacity;
+                        local_15 = _e464;
                     }
-                    let _e432 = local_15;
-                    capacity = _e432;
-                    let _e433 = moisture_2;
-                    let _e434 = capacity;
-                    if (_e433 < _e434) {
-                        let _e436 = (*currentIndex_6);
-                        let _e439 = (*rawValue_5);
-                        let _e440 = atomicCompareExchangeWeak((&unnamed.grid[_e436]), _e439, 0u);
-                        let _e442 = (*rawValue_5);
-                        if (_e440.old_value == _e442) {
-                            let _e444 = cIndex;
-                            let _e447 = atomicAdd((&unnamed.grid[_e444]), 16777216u);
+                    let _e465 = local_15;
+                    capacity = _e465;
+                    let _e466 = moisture_2;
+                    let _e467 = capacity;
+                    if (_e466 < _e467) {
+                        let _e469 = (*currentIndex_6);
+                        let _e472 = (*rawValue_5);
+                        let _e473 = atomicCompareExchangeWeak((&unnamed.grid[_e469]), _e472, 0u);
+                        let _e475 = (*rawValue_5);
+                        if (_e473.old_value == _e475) {
+                            let _e477 = cIndex;
+                            let _e480 = atomicAdd((&unnamed.grid[_e477]), 16777216u);
                             return;
                         }
                     }
@@ -3648,68 +3716,68 @@ fn updateSteam_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_
             break;
         }
         continuing {
-            let _e448 = i_10;
-            i_10 = (_e448 + 1i);
+            let _e481 = i_10;
+            i_10 = (_e481 + 1i);
         }
     }
     i_11 = 0i;
     loop {
-        let _e450 = i_11;
-        if (_e450 < 3i) {
-            let _e452 = i_11;
-            let _e454 = checkPos[_e452];
-            sPos_1 = _e454;
-            let _e456 = sPos_1[0u];
-            let _e457 = (_e456 > 0i);
-            phi_8509_ = _e457;
-            if _e457 {
-                let _e459 = sPos_1[0u];
-                let _e461 = tuning.gridWidth;
-                phi_8509_ = (_e459 < (bitcast<i32>(_e461) - 1i));
+        let _e483 = i_11;
+        if (_e483 < 3i) {
+            let _e485 = i_11;
+            let _e487 = checkPos[_e485];
+            sPos_1 = _e487;
+            let _e489 = sPos_1[0u];
+            let _e490 = (_e489 > 0i);
+            phi_8562_ = _e490;
+            if _e490 {
+                let _e492 = sPos_1[0u];
+                let _e494 = tuning.gridWidth;
+                phi_8562_ = (_e492 < (bitcast<i32>(_e494) - 1i));
             }
-            let _e466 = phi_8509_;
-            phi_8515_ = _e466;
-            if _e466 {
-                let _e468 = sPos_1[2u];
-                phi_8515_ = (_e468 > 0i);
+            let _e499 = phi_8562_;
+            phi_8568_ = _e499;
+            if _e499 {
+                let _e501 = sPos_1[2u];
+                phi_8568_ = (_e501 > 0i);
             }
-            let _e471 = phi_8515_;
-            phi_8525_ = _e471;
-            if _e471 {
-                let _e473 = sPos_1[2u];
-                let _e475 = tuning.gridDepth;
-                phi_8525_ = (_e473 < (bitcast<i32>(_e475) - 1i));
+            let _e504 = phi_8568_;
+            phi_8578_ = _e504;
+            if _e504 {
+                let _e506 = sPos_1[2u];
+                let _e508 = tuning.gridDepth;
+                phi_8578_ = (_e506 < (bitcast<i32>(_e508) - 1i));
             }
-            let _e480 = phi_8525_;
-            if _e480 {
-                let _e481 = sPos_1;
-                param_396 = _e481;
-                let _e482 = getIndex_u0028_vi3_u003b((&param_396));
-                param_397 = _e482;
-                let _e483 = readCell_u0028_u1_u003b((&param_397));
-                param_398 = _e483;
-                let _e484 = getType_u0028_u1_u003b((&param_398));
-                sType_1 = _e484;
-                let _e485 = sType_1;
-                let _e487 = sType_1;
-                if ((_e485 == 0u) || (_e487 == 5u)) {
-                    let _e490 = sPos_1;
-                    param_399 = _e490;
-                    let _e491 = getIndex_u0028_vi3_u003b((&param_399));
-                    param_400 = 6u;
-                    param_401 = 0u;
-                    param_402 = 0u;
-                    let _e492 = newAge;
-                    param_403 = _e492;
-                    let _e493 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_400), (&param_401), (&param_402), (&param_403));
-                    let _e494 = (*currentIndex_6);
-                    param_404 = _e494;
-                    let _e495 = (*rawValue_5);
-                    param_405 = _e495;
-                    param_406 = _e491;
-                    param_407 = _e493;
-                    let _e496 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_404), (&param_405), (&param_406), (&param_407));
-                    if _e496 {
+            let _e513 = phi_8578_;
+            if _e513 {
+                let _e514 = sPos_1;
+                param_403 = _e514;
+                let _e515 = getIndex_u0028_vi3_u003b((&param_403));
+                param_404 = _e515;
+                let _e516 = readCell_u0028_u1_u003b((&param_404));
+                param_405 = _e516;
+                let _e517 = getType_u0028_u1_u003b((&param_405));
+                sType_1 = _e517;
+                let _e518 = sType_1;
+                let _e520 = sType_1;
+                if ((_e518 == 0u) || (_e520 == 5u)) {
+                    let _e523 = sPos_1;
+                    param_406 = _e523;
+                    let _e524 = getIndex_u0028_vi3_u003b((&param_406));
+                    param_407 = 6u;
+                    param_408 = 0u;
+                    param_409 = 0u;
+                    let _e525 = newAge;
+                    param_410 = _e525;
+                    let _e526 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_407), (&param_408), (&param_409), (&param_410));
+                    let _e527 = (*currentIndex_6);
+                    param_411 = _e527;
+                    let _e528 = (*rawValue_5);
+                    param_412 = _e528;
+                    param_413 = _e524;
+                    param_414 = _e526;
+                    let _e529 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_411), (&param_412), (&param_413), (&param_414));
+                    if _e529 {
                         return;
                     }
                 }
@@ -3719,22 +3787,22 @@ fn updateSteam_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_
             break;
         }
         continuing {
-            let _e497 = i_11;
-            i_11 = (_e497 + 1i);
+            let _e530 = i_11;
+            i_11 = (_e530 + 1i);
         }
     }
-    let _e499 = (*currentSleep_2);
-    newSleep_1 = min((_e499 + 1u), 255u);
-    let _e502 = (*currentIndex_6);
-    let _e505 = (*rawValue_5);
-    param_408 = 6u;
-    param_409 = 0u;
-    let _e506 = newSleep_1;
-    param_410 = _e506;
-    let _e507 = newAge;
-    param_411 = _e507;
-    let _e508 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_408), (&param_409), (&param_410), (&param_411));
-    let _e509 = atomicCompareExchangeWeak((&unnamed.grid[_e502]), _e505, _e508);
+    let _e532 = (*currentSleep_2);
+    newSleep_1 = min((_e532 + 1u), 255u);
+    let _e535 = (*currentIndex_6);
+    let _e538 = (*rawValue_5);
+    param_415 = 6u;
+    param_416 = 0u;
+    let _e539 = newSleep_1;
+    param_417 = _e539;
+    let _e540 = newAge;
+    param_418 = _e540;
+    let _e541 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_415), (&param_416), (&param_417), (&param_418));
+    let _e542 = atomicCompareExchangeWeak((&unnamed.grid[_e535]), _e538, _e541);
     return;
 }
 
@@ -3743,96 +3811,96 @@ fn updateFire_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
     var isBurningGrass: bool;
     var i_12: i32;
     var nPos_1: vec3<i32>;
-    var param_412: i32;
+    var param_419: i32;
     var nIndex_1: u32;
-    var param_413: vec3<i32>;
+    var param_420: vec3<i32>;
     var nVal_1: u32;
-    var param_414: u32;
-    var param_415: u32;
-    var param_416: u32;
-    var param_417: u32;
-    var param_418: u32;
-    var param_419: u32;
+    var param_421: u32;
+    var param_422: u32;
+    var param_423: u32;
+    var param_424: u32;
+    var param_425: u32;
+    var param_426: u32;
     var burnRoll: f32;
     var start_6: i32;
     var i_13: i32;
     var nPos_2: vec3<i32>;
-    var param_420: i32;
-    var param_421: vec3<i32>;
+    var param_427: i32;
+    var param_428: vec3<i32>;
     var nIndex_2: u32;
-    var param_422: vec3<i32>;
+    var param_429: vec3<i32>;
     var nVal_2: u32;
-    var param_423: u32;
+    var param_430: u32;
     var nType_1: u32;
-    var param_424: u32;
+    var param_431: u32;
     var need_1: f32;
     var local_16: f32;
-    var param_425: u32;
-    var param_426: u32;
-    var param_427: u32;
-    var param_428: u32;
-    var belowPos_4: vec3<i32>;
-    var belowIndex_1: u32;
-    var param_429: vec3<i32>;
-    var belowValue_1: u32;
-    var param_430: u32;
-    var belowType: u32;
-    var param_431: u32;
     var param_432: u32;
     var param_433: u32;
     var param_434: u32;
     var param_435: u32;
-    var param_436: u32;
+    var belowPos_4: vec3<i32>;
+    var belowIndex_1: u32;
+    var param_436: vec3<i32>;
+    var belowValue_1: u32;
     var param_437: u32;
+    var belowType: u32;
     var param_438: u32;
     var param_439: u32;
-    var moisture_3: u32;
     var param_440: u32;
-    var newMoisture: u32;
-    var local_17: u32;
-    var newVal: u32;
     var param_441: u32;
     var param_442: u32;
     var param_443: u32;
     var param_444: u32;
     var param_445: u32;
-    var flora_3: u32;
-    var newFlora: u32;
-    var newVal_1: u32;
     var param_446: u32;
+    var moisture_3: u32;
     var param_447: u32;
+    var newMoisture: u32;
+    var local_17: u32;
+    var newVal: u32;
     var param_448: u32;
     var param_449: u32;
     var param_450: u32;
-    var d_10: i32;
-    var targetPos_1: vec3<i32>;
-    var param_451: i32;
-    var targetIndex_1: u32;
-    var param_452: vec3<i32>;
+    var param_451: u32;
+    var param_452: u32;
+    var flora_3: u32;
+    var newFlora: u32;
+    var newVal_1: u32;
     var param_453: u32;
     var param_454: u32;
-    var targetBelow: vec3<i32>;
-    var tBelowVal: u32;
-    var param_455: vec3<i32>;
+    var param_455: u32;
     var param_456: u32;
     var param_457: u32;
-    var tFlora: u32;
-    var param_458: u32;
-    var param_459: u32;
+    var d_10: i32;
+    var targetPos_1: vec3<i32>;
+    var param_458: i32;
+    var targetIndex_1: u32;
+    var param_459: vec3<i32>;
     var param_460: u32;
     var param_461: u32;
-    var param_462: u32;
+    var targetBelow: vec3<i32>;
+    var tBelowVal: u32;
+    var param_462: vec3<i32>;
     var param_463: u32;
     var param_464: u32;
+    var tFlora: u32;
     var param_465: u32;
-    var phi_7551_: bool;
-    var phi_7557_: bool;
-    var phi_7567_: bool;
-    var phi_7573_: bool;
-    var phi_7583_: bool;
-    var phi_7891_: bool;
-    var phi_7897_: bool;
-    var phi_7907_: bool;
+    var param_466: u32;
+    var param_467: u32;
+    var param_468: u32;
+    var param_469: u32;
+    var param_470: u32;
+    var param_471: u32;
+    var param_472: u32;
+    var phi_7569_: bool;
+    var phi_7575_: bool;
+    var phi_7585_: bool;
+    var phi_7591_: bool;
+    var phi_7601_: bool;
+    var phi_7909_: bool;
+    var phi_7915_: bool;
+    var phi_7925_: bool;
 
     let _e291 = (*currentAge_6);
     newAge_1 = (_e291 + 1u);
@@ -3843,64 +3911,64 @@ fn updateFire_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
         if (_e293 < 6i) {
             let _e295 = (*pos_10);
             let _e296 = i_12;
-            param_412 = _e296;
-            let _e297 = getOrthoDir_u0028_i1_u003b((&param_412));
+            param_419 = _e296;
+            let _e297 = getOrthoDir_u0028_i1_u003b((&param_419));
             nPos_1 = (_e295 + _e297);
             let _e300 = nPos_1[0u];
             let _e301 = (_e300 > 0i);
-            phi_7551_ = _e301;
+            phi_7569_ = _e301;
             if _e301 {
                 let _e303 = nPos_1[0u];
                 let _e305 = tuning.gridWidth;
-                phi_7551_ = (_e303 < (bitcast<i32>(_e305) - 1i));
+                phi_7569_ = (_e303 < (bitcast<i32>(_e305) - 1i));
             }
-            let _e310 = phi_7551_;
-            phi_7557_ = _e310;
+            let _e310 = phi_7569_;
+            phi_7575_ = _e310;
             if _e310 {
                 let _e312 = nPos_1[1u];
-                phi_7557_ = (_e312 > 0i);
+                phi_7575_ = (_e312 > 0i);
             }
-            let _e315 = phi_7557_;
-            phi_7567_ = _e315;
+            let _e315 = phi_7575_;
+            phi_7585_ = _e315;
             if _e315 {
                 let _e317 = nPos_1[1u];
                 let _e319 = tuning.gridHeight;
-                phi_7567_ = (_e317 < (bitcast<i32>(_e319) - 1i));
+                phi_7585_ = (_e317 < (bitcast<i32>(_e319) - 1i));
             }
-            let _e324 = phi_7567_;
-            phi_7573_ = _e324;
+            let _e324 = phi_7585_;
+            phi_7591_ = _e324;
             if _e324 {
                 let _e326 = nPos_1[2u];
-                phi_7573_ = (_e326 > 0i);
+                phi_7591_ = (_e326 > 0i);
             }
-            let _e329 = phi_7573_;
-            phi_7583_ = _e329;
+            let _e329 = phi_7591_;
+            phi_7601_ = _e329;
             if _e329 {
                 let _e331 = nPos_1[2u];
                 let _e333 = tuning.gridDepth;
-                phi_7583_ = (_e331 < (bitcast<i32>(_e333) - 1i));
+                phi_7601_ = (_e331 < (bitcast<i32>(_e333) - 1i));
             }
-            let _e338 = phi_7583_;
+            let _e338 = phi_7601_;
             if _e338 {
                 let _e339 = nPos_1;
-                param_413 = _e339;
-                let _e340 = getIndex_u0028_vi3_u003b((&param_413));
+                param_420 = _e339;
+                let _e340 = getIndex_u0028_vi3_u003b((&param_420));
                 nIndex_1 = _e340;
                 let _e341 = nIndex_1;
-                param_414 = _e341;
-                let _e342 = readCell_u0028_u1_u003b((&param_414));
+                param_421 = _e341;
+                let _e342 = readCell_u0028_u1_u003b((&param_421));
                 nVal_1 = _e342;
                 let _e343 = nVal_1;
-                param_415 = _e343;
-                let _e344 = getType_u0028_u1_u003b((&param_415));
+                param_422 = _e343;
+                let _e344 = getType_u0028_u1_u003b((&param_422));
                 if (_e344 == 2u) {
                     let _e346 = nIndex_1;
                     let _e349 = nVal_1;
-                    param_416 = 6u;
-                    param_417 = 0u;
-                    param_418 = 0u;
-                    param_419 = 0u;
-                    let _e350 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_416), (&param_417), (&param_418), (&param_419));
+                    param_423 = 6u;
+                    param_424 = 0u;
+                    param_425 = 0u;
+                    param_426 = 0u;
+                    let _e350 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_423), (&param_424), (&param_425), (&param_426));
                     let _e351 = atomicCompareExchangeWeak((&unnamed.grid[_e346]), _e349, _e350);
                     let _e353 = nVal_1;
                     if (_e351.old_value == _e353) {
@@ -3936,26 +4004,26 @@ fn updateFire_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                 let _e379 = start_6;
                 let _e380 = i_13;
                 let _e381 = (_e379 + _e380);
-                param_420 = (_e381 - (i32(floor((f32(_e381) / f32(26i)))) * 26i));
-                let _e389 = tree26_u0028_i1_u003b((&param_420));
+                param_427 = (_e381 - (i32(floor((f32(_e381) / f32(26i)))) * 26i));
+                let _e389 = tree26_u0028_i1_u003b((&param_427));
                 nPos_2 = (_e378 + _e389);
                 let _e391 = nPos_2;
-                param_421 = _e391;
-                let _e392 = treeInBounds_u0028_vi3_u003b((&param_421));
+                param_428 = _e391;
+                let _e392 = treeInBounds_u0028_vi3_u003b((&param_428));
                 if !(_e392) {
                     continue;
                 }
                 let _e394 = nPos_2;
-                param_422 = _e394;
-                let _e395 = getIndex_u0028_vi3_u003b((&param_422));
+                param_429 = _e394;
+                let _e395 = getIndex_u0028_vi3_u003b((&param_429));
                 nIndex_2 = _e395;
                 let _e396 = nIndex_2;
-                param_423 = _e396;
-                let _e397 = readCell_u0028_u1_u003b((&param_423));
+                param_430 = _e396;
+                let _e397 = readCell_u0028_u1_u003b((&param_430));
                 nVal_2 = _e397;
                 let _e398 = nVal_2;
-                param_424 = _e398;
-                let _e399 = getType_u0028_u1_u003b((&param_424));
+                param_431 = _e398;
+                let _e399 = getType_u0028_u1_u003b((&param_431));
                 nType_1 = _e399;
                 let _e400 = nType_1;
                 let _e402 = nType_1;
@@ -3977,11 +4045,11 @@ fn updateFire_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                 if (_e412 < _e413) {
                     let _e415 = nIndex_2;
                     let _e418 = nVal_2;
-                    param_425 = 5u;
-                    param_426 = 0u;
-                    param_427 = 0u;
-                    param_428 = 0u;
-                    let _e419 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_425), (&param_426), (&param_427), (&param_428));
+                    param_432 = 5u;
+                    param_433 = 0u;
+                    param_434 = 0u;
+                    param_435 = 0u;
+                    let _e419 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_432), (&param_433), (&param_434), (&param_435));
                     let _e420 = atomicCompareExchangeWeak((&unnamed.grid[_e415]), _e418, _e419);
                 }
                 break;
@@ -3999,33 +4067,33 @@ fn updateFire_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
         let _e427 = (*pos_10);
         belowPos_4 = (_e427 + vec3<i32>(0i, -1i, 0i));
         let _e429 = belowPos_4;
-        param_429 = _e429;
-        let _e430 = getIndex_u0028_vi3_u003b((&param_429));
+        param_436 = _e429;
+        let _e430 = getIndex_u0028_vi3_u003b((&param_436));
         belowIndex_1 = _e430;
         let _e431 = belowIndex_1;
-        param_430 = _e431;
-        let _e432 = readCell_u0028_u1_u003b((&param_430));
+        param_437 = _e431;
+        let _e432 = readCell_u0028_u1_u003b((&param_437));
         belowValue_1 = _e432;
         let _e433 = belowValue_1;
-        param_431 = _e433;
-        let _e434 = getType_u0028_u1_u003b((&param_431));
+        param_438 = _e433;
+        let _e434 = getType_u0028_u1_u003b((&param_438));
         belowType = _e434;
         let _e435 = belowType;
         if (_e435 == 0u) {
-            param_432 = 5u;
-            param_433 = 0u;
-            param_434 = 0u;
+            param_439 = 5u;
+            param_440 = 0u;
+            param_441 = 0u;
             let _e437 = newAge_1;
-            param_435 = _e437;
-            let _e438 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_432), (&param_433), (&param_434), (&param_435));
+            param_442 = _e437;
+            let _e438 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_439), (&param_440), (&param_441), (&param_442));
             let _e439 = (*currentIndex_7);
-            param_436 = _e439;
+            param_443 = _e439;
             let _e440 = (*rawValue_6);
-            param_437 = _e440;
+            param_444 = _e440;
             let _e441 = belowIndex_1;
-            param_438 = _e441;
-            param_439 = _e438;
-            let _e442 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_436), (&param_437), (&param_438), (&param_439));
+            param_445 = _e441;
+            param_446 = _e438;
+            let _e442 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_443), (&param_444), (&param_445), (&param_446));
             if _e442 {
                 return;
             }
@@ -4039,8 +4107,8 @@ fn updateFire_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                 let _e449 = belowType;
                 if (_e449 == 1u) {
                     let _e451 = belowValue_1;
-                    param_440 = _e451;
-                    let _e452 = getAge_u0028_u1_u003b((&param_440));
+                    param_447 = _e451;
+                    let _e452 = getAge_u0028_u1_u003b((&param_447));
                     moisture_3 = _e452;
                     let _e453 = moisture_3;
                     if (_e453 > 0u) {
@@ -4056,14 +4124,14 @@ fn updateFire_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                         let _e463 = local_17;
                         newMoisture = _e463;
                         let _e464 = belowValue_1;
-                        param_441 = _e464;
-                        let _e465 = getDir_u0028_u1_u003b((&param_441));
-                        param_442 = 1u;
-                        param_443 = _e465;
-                        param_444 = 0u;
+                        param_448 = _e464;
+                        let _e465 = getDir_u0028_u1_u003b((&param_448));
+                        param_449 = 1u;
+                        param_450 = _e465;
+                        param_451 = 0u;
                         let _e466 = newMoisture;
-                        param_445 = _e466;
-                        let _e467 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_442), (&param_443), (&param_444), (&param_445));
+                        param_452 = _e466;
+                        let _e467 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_449), (&param_450), (&param_451), (&param_452));
                         newVal = _e467;
                         let _e468 = belowIndex_1;
                         let _e471 = belowValue_1;
@@ -4092,14 +4160,14 @@ fn updateFire_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                                 let _e498 = flora_3;
                                 newFlora = (_e498 - 1u);
                                 let _e500 = belowValue_1;
-                                param_446 = _e500;
-                                let _e501 = getAge_u0028_u1_u003b((&param_446));
-                                param_447 = 4u;
+                                param_453 = _e500;
+                                let _e501 = getAge_u0028_u1_u003b((&param_453));
+                                param_454 = 4u;
                                 let _e502 = newFlora;
-                                param_448 = _e502;
-                                param_449 = 0u;
-                                param_450 = _e501;
-                                let _e503 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_447), (&param_448), (&param_449), (&param_450));
+                                param_455 = _e502;
+                                param_456 = 0u;
+                                param_457 = _e501;
+                                let _e503 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_454), (&param_455), (&param_456), (&param_457));
                                 newVal_1 = _e503;
                                 let _e504 = belowIndex_1;
                                 let _e507 = belowValue_1;
@@ -4113,53 +4181,53 @@ fn updateFire_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                                 d_10 = i32((fract((_e517 * 10f)) * 8f));
                                 let _e522 = (*pos_10);
                                 let _e523 = d_10;
-                                param_451 = _e523;
-                                let _e524 = getHDir_u0028_i1_u003b((&param_451));
+                                param_458 = _e523;
+                                let _e524 = getHDir_u0028_i1_u003b((&param_458));
                                 targetPos_1 = (_e522 + _e524);
                                 let _e527 = targetPos_1[0u];
                                 let _e528 = (_e527 > 0i);
-                                phi_7891_ = _e528;
+                                phi_7909_ = _e528;
                                 if _e528 {
                                     let _e530 = targetPos_1[0u];
                                     let _e532 = tuning.gridWidth;
-                                    phi_7891_ = (_e530 < (bitcast<i32>(_e532) - 1i));
+                                    phi_7909_ = (_e530 < (bitcast<i32>(_e532) - 1i));
                                 }
-                                let _e537 = phi_7891_;
-                                phi_7897_ = _e537;
+                                let _e537 = phi_7909_;
+                                phi_7915_ = _e537;
                                 if _e537 {
                                     let _e539 = targetPos_1[2u];
-                                    phi_7897_ = (_e539 > 0i);
+                                    phi_7915_ = (_e539 > 0i);
                                 }
-                                let _e542 = phi_7897_;
-                                phi_7907_ = _e542;
+                                let _e542 = phi_7915_;
+                                phi_7925_ = _e542;
                                 if _e542 {
                                     let _e544 = targetPos_1[2u];
                                     let _e546 = tuning.gridDepth;
-                                    phi_7907_ = (_e544 < (bitcast<i32>(_e546) - 1i));
+                                    phi_7925_ = (_e544 < (bitcast<i32>(_e546) - 1i));
                                 }
-                                let _e551 = phi_7907_;
+                                let _e551 = phi_7925_;
                                 if _e551 {
                                     let _e552 = targetPos_1;
-                                    param_452 = _e552;
-                                    let _e553 = getIndex_u0028_vi3_u003b((&param_452));
+                                    param_459 = _e552;
+                                    let _e553 = getIndex_u0028_vi3_u003b((&param_459));
                                     targetIndex_1 = _e553;
                                     let _e554 = targetIndex_1;
-                                    param_453 = _e554;
-                                    let _e555 = readCell_u0028_u1_u003b((&param_453));
-                                    param_454 = _e555;
-                                    let _e556 = getType_u0028_u1_u003b((&param_454));
+                                    param_460 = _e554;
+                                    let _e555 = readCell_u0028_u1_u003b((&param_460));
+                                    param_461 = _e555;
+                                    let _e556 = getType_u0028_u1_u003b((&param_461));
                                     if (_e556 == 0u) {
                                         let _e558 = targetPos_1;
                                         targetBelow = (_e558 + vec3<i32>(0i, -1i, 0i));
                                         let _e560 = targetBelow;
-                                        param_455 = _e560;
-                                        let _e561 = getIndex_u0028_vi3_u003b((&param_455));
-                                        param_456 = _e561;
-                                        let _e562 = readCell_u0028_u1_u003b((&param_456));
+                                        param_462 = _e560;
+                                        let _e561 = getIndex_u0028_vi3_u003b((&param_462));
+                                        param_463 = _e561;
+                                        let _e562 = readCell_u0028_u1_u003b((&param_463));
                                         tBelowVal = _e562;
                                         let _e563 = tBelowVal;
-                                        param_457 = _e563;
-                                        let _e564 = getType_u0028_u1_u003b((&param_457));
+                                        param_464 = _e563;
+                                        let _e564 = getType_u0028_u1_u003b((&param_464));
                                         if (_e564 == 4u) {
                                             let _e566 = tBelowVal;
                                             tFlora = ((_e566 >> bitcast<u32>(8i)) & 255u);
@@ -4167,11 +4235,11 @@ fn updateFire_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                                             let _e572 = tFlora;
                                             if ((_e570 > 10u) && (_e572 <= 100u)) {
                                                 let _e575 = targetIndex_1;
-                                                param_458 = 5u;
-                                                param_459 = 0u;
-                                                param_460 = 0u;
-                                                param_461 = 0u;
-                                                let _e578 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_458), (&param_459), (&param_460), (&param_461));
+                                                param_465 = 5u;
+                                                param_466 = 0u;
+                                                param_467 = 0u;
+                                                param_468 = 0u;
+                                                let _e578 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_465), (&param_466), (&param_467), (&param_468));
                                                 let _e579 = atomicCompareExchangeWeak((&unnamed.grid[_e575]), 0u, _e578);
                                             }
                                         }
@@ -4193,12 +4261,12 @@ fn updateFire_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
     }
     let _e589 = (*currentIndex_7);
     let _e592 = (*rawValue_6);
-    param_462 = 5u;
-    param_463 = 0u;
-    param_464 = 0u;
+    param_469 = 5u;
+    param_470 = 0u;
+    param_471 = 0u;
     let _e593 = newAge_1;
-    param_465 = _e593;
-    let _e594 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_462), (&param_463), (&param_464), (&param_465));
+    param_472 = _e593;
+    let _e594 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_469), (&param_470), (&param_471), (&param_472));
     let _e595 = atomicCompareExchangeWeak((&unnamed.grid[_e589]), _e592, _e594);
     return;
 }
@@ -4211,11 +4279,11 @@ fn isLocust_u0028_u1_u003b(type_36: ptr<function, u32>) -> bool {
 
 fn tryDisplace_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b(currentIndex_8: ptr<function, u32>, currentValue_1: ptr<function, u32>, targetIndex_2: ptr<function, u32>, targetValue_1: ptr<function, u32>, pushIndex: ptr<function, u32>) -> bool {
     var displacedValue: u32;
-    var param_466: u32;
-    var param_467: u32;
-    var param_468: u32;
-    var param_469: u32;
-    var param_470: u32;
+    var param_473: u32;
+    var param_474: u32;
+    var param_475: u32;
+    var param_476: u32;
+    var param_477: u32;
     var actualPush: u32;
     var actualTarget: u32;
 
@@ -4225,13 +4293,13 @@ fn tryDisplace_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b(currentIndex_8
     let _e217 = (*currentValue_1);
     if (_e215.old_value == _e217) {
         let _e219 = (*targetValue_1);
-        param_466 = _e219;
-        let _e220 = getType_u0028_u1_u003b((&param_466));
-        param_467 = _e220;
-        param_468 = 0u;
-        param_469 = 0u;
-        param_470 = 0u;
-        let _e221 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_467), (&param_468), (&param_469), (&param_470));
+        param_473 = _e219;
+        let _e220 = getType_u0028_u1_u003b((&param_473));
+        param_474 = _e220;
+        param_475 = 0u;
+        param_476 = 0u;
+        param_477 = 0u;
+        let _e221 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_474), (&param_475), (&param_476), (&param_477));
         displacedValue = _e221;
         let _e222 = (*pushIndex);
         let _e225 = displacedValue;
@@ -4267,12 +4335,12 @@ fn grainCanMove_u0028_vi3_u003b(pos_11: ptr<function, vec3<i32>>) -> bool {
     var local_18: i32;
     var local_19: i32;
     var t_3: u32;
-    var param_471: vec3<i32>;
-    var param_472: u32;
-    var param_473: u32;
-    var phi_2222_: bool;
-    var phi_2229_: bool;
-    var phi_2240_: bool;
+    var param_478: vec3<i32>;
+    var param_479: u32;
+    var param_480: u32;
+    var phi_2241_: bool;
+    var phi_2248_: bool;
+    var phi_2259_: bool;
 
     let _e208 = (*pos_11)[1u];
     if (_e208 <= 1i) {
@@ -4302,36 +4370,36 @@ fn grainCanMove_u0028_vi3_u003b(pos_11: ptr<function, vec3<i32>>) -> bool {
             target_1 = (_e212 + vec3<i32>(_e218, -1i, _e224));
             let _e228 = target_1[0u];
             let _e229 = (_e228 <= 0i);
-            phi_2222_ = _e229;
+            phi_2241_ = _e229;
             if !(_e229) {
                 let _e232 = target_1[0u];
                 let _e234 = tuning.gridWidth;
-                phi_2222_ = (_e232 >= (bitcast<i32>(_e234) - 1i));
+                phi_2241_ = (_e232 >= (bitcast<i32>(_e234) - 1i));
             }
-            let _e239 = phi_2222_;
-            phi_2229_ = _e239;
+            let _e239 = phi_2241_;
+            phi_2248_ = _e239;
             if !(_e239) {
                 let _e242 = target_1[2u];
-                phi_2229_ = (_e242 <= 0i);
+                phi_2248_ = (_e242 <= 0i);
             }
-            let _e245 = phi_2229_;
-            phi_2240_ = _e245;
+            let _e245 = phi_2248_;
+            phi_2259_ = _e245;
             if !(_e245) {
                 let _e248 = target_1[2u];
                 let _e250 = tuning.gridDepth;
-                phi_2240_ = (_e248 >= (bitcast<i32>(_e250) - 1i));
+                phi_2259_ = (_e248 >= (bitcast<i32>(_e250) - 1i));
             }
-            let _e255 = phi_2240_;
+            let _e255 = phi_2259_;
             if _e255 {
                 continue;
             }
             let _e256 = target_1;
-            param_471 = _e256;
-            let _e257 = getIndex_u0028_vi3_u003b((&param_471));
-            param_472 = _e257;
-            let _e258 = readCell_u0028_u1_u003b((&param_472));
-            param_473 = _e258;
-            let _e259 = getType_u0028_u1_u003b((&param_473));
+            param_478 = _e256;
+            let _e257 = getIndex_u0028_vi3_u003b((&param_478));
+            param_479 = _e257;
+            let _e258 = readCell_u0028_u1_u003b((&param_479));
+            param_480 = _e258;
+            let _e259 = getType_u0028_u1_u003b((&param_480));
             t_3 = _e259;
             let _e260 = t_3;
             let _e262 = t_3;
@@ -4357,200 +4425,200 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
     var i_15: i32;
     var d_11: i32;
     var nPos_3: vec3<i32>;
-    var param_474: i32;
+    var param_481: i32;
     var nIndex_3: u32;
-    var param_475: vec3<i32>;
+    var param_482: vec3<i32>;
     var nVal_3: u32;
-    var param_476: u32;
-    var param_477: u32;
+    var param_483: u32;
+    var param_484: u32;
     var d_12: i32;
     var nPos_4: vec3<i32>;
-    var param_478: i32;
+    var param_485: i32;
     var nIndex_4: u32;
-    var param_479: vec3<i32>;
+    var param_486: vec3<i32>;
     var nVal_4: u32;
-    var param_480: u32;
+    var param_487: u32;
     var nType_2: u32;
-    var param_481: u32;
+    var param_488: u32;
     var nMoisture: u32;
-    var param_482: u32;
+    var param_489: u32;
     var nCapacity: u32;
     var local_20: u32;
     var canMove: bool;
-    var param_483: vec3<i32>;
+    var param_490: vec3<i32>;
     var isClumped: bool;
     var emptyBelowCount: i32;
     var x: i32;
     var z: i32;
     var checkPos_1: vec3<i32>;
-    var param_484: vec3<i32>;
-    var param_485: u32;
-    var param_486: u32;
+    var param_491: vec3<i32>;
+    var param_492: u32;
+    var param_493: u32;
     var clumpCount: i32;
     var x_1: i32;
     var y: i32;
     var z_1: i32;
     var nPos_5: vec3<i32>;
-    var param_487: vec3<i32>;
-    var param_488: u32;
-    var param_489: u32;
-    var belowPos_5: vec3<i32>;
-    var param_490: vec3<i32>;
-    var param_491: u32;
-    var param_492: u32;
-    var param_493: vec3<i32>;
-    var param_494: u32;
+    var param_494: vec3<i32>;
     var param_495: u32;
     var param_496: u32;
-    var param_497: u32;
+    var belowPos_5: vec3<i32>;
+    var param_497: vec3<i32>;
     var param_498: u32;
     var param_499: u32;
-    var param_500: u32;
+    var param_500: vec3<i32>;
     var param_501: u32;
-    var dir_2: i32;
-    var slidePos1_: vec3<i32>;
-    var slidePos2_: vec3<i32>;
-    var param_502: vec3<i32>;
+    var param_502: u32;
     var param_503: u32;
     var param_504: u32;
-    var param_505: vec3<i32>;
+    var param_505: u32;
     var param_506: u32;
     var param_507: u32;
     var param_508: u32;
-    var param_509: u32;
+    var dir_2: i32;
+    var slidePos1_: vec3<i32>;
+    var slidePos2_: vec3<i32>;
+    var param_509: vec3<i32>;
     var param_510: u32;
     var param_511: u32;
-    var param_512: u32;
+    var param_512: vec3<i32>;
     var param_513: u32;
-    var param_514: vec3<i32>;
+    var param_514: u32;
     var param_515: u32;
     var param_516: u32;
-    var param_517: vec3<i32>;
+    var param_517: u32;
     var param_518: u32;
     var param_519: u32;
     var param_520: u32;
-    var param_521: u32;
+    var param_521: vec3<i32>;
     var param_522: u32;
     var param_523: u32;
-    var param_524: u32;
+    var param_524: vec3<i32>;
     var param_525: u32;
-    var belowPos_6: vec3<i32>;
-    var belowIndex_2: u32;
-    var param_526: vec3<i32>;
-    var belowValue_2: u32;
+    var param_526: u32;
     var param_527: u32;
     var param_528: u32;
+    var param_529: u32;
+    var param_530: u32;
+    var param_531: u32;
+    var param_532: u32;
+    var belowPos_6: vec3<i32>;
+    var belowIndex_2: u32;
+    var param_533: vec3<i32>;
+    var belowValue_2: u32;
+    var param_534: u32;
+    var param_535: u32;
     var startDir_2: i32;
     var i_16: i32;
     var d_13: i32;
     var pushPos: vec3<i32>;
-    var param_529: i32;
-    var param_530: u32;
-    var param_531: u32;
-    var param_532: u32;
-    var param_533: u32;
-    var param_534: vec3<i32>;
-    var param_535: u32;
-    var param_536: u32;
+    var param_536: i32;
     var param_537: u32;
     var param_538: u32;
     var param_539: u32;
     var param_540: u32;
-    var param_541: u32;
+    var param_541: vec3<i32>;
     var param_542: u32;
     var param_543: u32;
     var param_544: u32;
     var param_545: u32;
     var param_546: u32;
     var param_547: u32;
+    var param_548: u32;
+    var param_549: u32;
+    var param_550: u32;
+    var param_551: u32;
+    var param_552: u32;
+    var param_553: u32;
+    var param_554: u32;
     var dir_3: i32;
     var slidePos: array<vec3<i32>, 2>;
     var s_1: i32;
     var sPos_2: vec3<i32>;
     var sIndex: u32;
-    var param_548: vec3<i32>;
+    var param_555: vec3<i32>;
     var sValue: u32;
-    var param_549: u32;
-    var param_550: u32;
+    var param_556: u32;
+    var param_557: u32;
     var startDir_3: i32;
     var i_17: i32;
     var d_14: i32;
     var pushPos_1: vec3<i32>;
-    var param_551: i32;
-    var param_552: u32;
-    var param_553: u32;
-    var param_554: u32;
-    var param_555: u32;
-    var param_556: vec3<i32>;
-    var param_557: u32;
-    var param_558: u32;
+    var param_558: i32;
     var param_559: u32;
     var param_560: u32;
     var param_561: u32;
     var param_562: u32;
-    var param_563: u32;
+    var param_563: vec3<i32>;
     var param_564: u32;
     var param_565: u32;
     var param_566: u32;
     var param_567: u32;
     var param_568: u32;
     var param_569: u32;
-    var floraState: u32;
-    var abovePos_1: vec3<i32>;
-    var aboveInside: bool;
-    var aboveIndex: u32;
-    var param_570: vec3<i32>;
-    var aboveType: u32;
-    var local_21: u32;
+    var param_570: u32;
     var param_571: u32;
     var param_572: u32;
     var param_573: u32;
     var param_574: u32;
     var param_575: u32;
     var param_576: u32;
-    var param_577: u32;
-    var newSleep_2: u32;
+    var floraState: u32;
+    var abovePos_1: vec3<i32>;
+    var aboveInside: bool;
+    var aboveIndex: u32;
+    var param_577: vec3<i32>;
+    var aboveType: u32;
+    var local_21: u32;
     var param_578: u32;
     var param_579: u32;
     var param_580: u32;
     var param_581: u32;
-    var phi_3354_: bool;
-    var phi_3360_: bool;
-    var phi_3370_: bool;
-    var phi_3376_: bool;
-    var phi_3386_: bool;
-    var phi_3452_: bool;
-    var phi_3458_: bool;
-    var phi_3468_: bool;
-    var phi_3474_: bool;
-    var phi_3484_: bool;
-    var phi_3554_: bool;
-    var phi_3596_: bool;
-    var phi_3602_: bool;
-    var phi_3611_: bool;
-    var phi_3692_: bool;
-    var phi_3698_: bool;
-    var phi_3707_: bool;
-    var phi_3713_: bool;
-    var phi_3722_: bool;
-    var phi_3841_: bool;
-    var phi_3847_: bool;
-    var phi_3857_: bool;
-    var phi_3901_: bool;
-    var phi_3907_: bool;
-    var phi_3917_: bool;
-    var phi_4008_: bool;
-    var phi_4014_: bool;
-    var phi_4024_: bool;
-    var phi_4125_: bool;
-    var phi_4131_: bool;
-    var phi_4141_: bool;
-    var phi_4198_: bool;
-    var phi_4204_: bool;
-    var phi_4214_: bool;
-    var phi_4269_: bool;
-    var phi_4343_: bool;
-    var phi_4398_: bool;
+    var param_582: u32;
+    var param_583: u32;
+    var param_584: u32;
+    var newSleep_2: u32;
+    var param_585: u32;
+    var param_586: u32;
+    var param_587: u32;
+    var param_588: u32;
+    var phi_3372_: bool;
+    var phi_3378_: bool;
+    var phi_3388_: bool;
+    var phi_3394_: bool;
+    var phi_3404_: bool;
+    var phi_3470_: bool;
+    var phi_3476_: bool;
+    var phi_3486_: bool;
+    var phi_3492_: bool;
+    var phi_3502_: bool;
+    var phi_3572_: bool;
+    var phi_3614_: bool;
+    var phi_3620_: bool;
+    var phi_3629_: bool;
+    var phi_3710_: bool;
+    var phi_3716_: bool;
+    var phi_3725_: bool;
+    var phi_3731_: bool;
+    var phi_3740_: bool;
+    var phi_3859_: bool;
+    var phi_3865_: bool;
+    var phi_3875_: bool;
+    var phi_3919_: bool;
+    var phi_3925_: bool;
+    var phi_3935_: bool;
+    var phi_4026_: bool;
+    var phi_4032_: bool;
+    var phi_4042_: bool;
+    var phi_4143_: bool;
+    var phi_4149_: bool;
+    var phi_4159_: bool;
+    var phi_4216_: bool;
+    var phi_4222_: bool;
+    var phi_4232_: bool;
+    var phi_4287_: bool;
+    var phi_4361_: bool;
+    var phi_4416_: bool;
 
     let _e368 = (*currentAge_7);
     moisture_4 = _e368;
@@ -4570,56 +4638,56 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                 d_11 = (_e382 - (i32(floor((f32(_e382) / f32(6i)))) * 6i));
                 let _e390 = (*pos_12);
                 let _e391 = d_11;
-                param_474 = _e391;
-                let _e392 = getOrthoDir_u0028_i1_u003b((&param_474));
+                param_481 = _e391;
+                let _e392 = getOrthoDir_u0028_i1_u003b((&param_481));
                 nPos_3 = (_e390 + _e392);
                 let _e395 = nPos_3[0u];
                 let _e396 = (_e395 > 0i);
-                phi_3354_ = _e396;
+                phi_3372_ = _e396;
                 if _e396 {
                     let _e398 = nPos_3[0u];
                     let _e400 = tuning.gridWidth;
-                    phi_3354_ = (_e398 < (bitcast<i32>(_e400) - 1i));
+                    phi_3372_ = (_e398 < (bitcast<i32>(_e400) - 1i));
                 }
-                let _e405 = phi_3354_;
-                phi_3360_ = _e405;
+                let _e405 = phi_3372_;
+                phi_3378_ = _e405;
                 if _e405 {
                     let _e407 = nPos_3[1u];
-                    phi_3360_ = (_e407 > 0i);
+                    phi_3378_ = (_e407 > 0i);
                 }
-                let _e410 = phi_3360_;
-                phi_3370_ = _e410;
+                let _e410 = phi_3378_;
+                phi_3388_ = _e410;
                 if _e410 {
                     let _e412 = nPos_3[1u];
                     let _e414 = tuning.gridHeight;
-                    phi_3370_ = (_e412 < (bitcast<i32>(_e414) - 1i));
+                    phi_3388_ = (_e412 < (bitcast<i32>(_e414) - 1i));
                 }
-                let _e419 = phi_3370_;
-                phi_3376_ = _e419;
+                let _e419 = phi_3388_;
+                phi_3394_ = _e419;
                 if _e419 {
                     let _e421 = nPos_3[2u];
-                    phi_3376_ = (_e421 > 0i);
+                    phi_3394_ = (_e421 > 0i);
                 }
-                let _e424 = phi_3376_;
-                phi_3386_ = _e424;
+                let _e424 = phi_3394_;
+                phi_3404_ = _e424;
                 if _e424 {
                     let _e426 = nPos_3[2u];
                     let _e428 = tuning.gridDepth;
-                    phi_3386_ = (_e426 < (bitcast<i32>(_e428) - 1i));
+                    phi_3404_ = (_e426 < (bitcast<i32>(_e428) - 1i));
                 }
-                let _e433 = phi_3386_;
+                let _e433 = phi_3404_;
                 if _e433 {
                     let _e434 = nPos_3;
-                    param_475 = _e434;
-                    let _e435 = getIndex_u0028_vi3_u003b((&param_475));
+                    param_482 = _e434;
+                    let _e435 = getIndex_u0028_vi3_u003b((&param_482));
                     nIndex_3 = _e435;
                     let _e436 = nIndex_3;
-                    param_476 = _e436;
-                    let _e437 = readCell_u0028_u1_u003b((&param_476));
+                    param_483 = _e436;
+                    let _e437 = readCell_u0028_u1_u003b((&param_483));
                     nVal_3 = _e437;
                     let _e438 = nVal_3;
-                    param_477 = _e438;
-                    let _e439 = getType_u0028_u1_u003b((&param_477));
+                    param_484 = _e438;
+                    let _e439 = getType_u0028_u1_u003b((&param_484));
                     if (_e439 == 2u) {
                         let _e441 = nIndex_3;
                         let _e444 = nVal_3;
@@ -4652,63 +4720,63 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
         d_12 = i32((fract((_e464 * 31f)) * 6f));
         let _e469 = (*pos_12);
         let _e470 = d_12;
-        param_478 = _e470;
-        let _e471 = getOrthoDir_u0028_i1_u003b((&param_478));
+        param_485 = _e470;
+        let _e471 = getOrthoDir_u0028_i1_u003b((&param_485));
         nPos_4 = (_e469 + _e471);
         let _e474 = nPos_4[0u];
         let _e475 = (_e474 > 0i);
-        phi_3452_ = _e475;
+        phi_3470_ = _e475;
         if _e475 {
             let _e477 = nPos_4[0u];
             let _e479 = tuning.gridWidth;
-            phi_3452_ = (_e477 < (bitcast<i32>(_e479) - 1i));
+            phi_3470_ = (_e477 < (bitcast<i32>(_e479) - 1i));
         }
-        let _e484 = phi_3452_;
-        phi_3458_ = _e484;
+        let _e484 = phi_3470_;
+        phi_3476_ = _e484;
         if _e484 {
             let _e486 = nPos_4[1u];
-            phi_3458_ = (_e486 > 0i);
+            phi_3476_ = (_e486 > 0i);
         }
-        let _e489 = phi_3458_;
-        phi_3468_ = _e489;
+        let _e489 = phi_3476_;
+        phi_3486_ = _e489;
         if _e489 {
             let _e491 = nPos_4[1u];
             let _e493 = tuning.gridHeight;
-            phi_3468_ = (_e491 < (bitcast<i32>(_e493) - 1i));
+            phi_3486_ = (_e491 < (bitcast<i32>(_e493) - 1i));
         }
-        let _e498 = phi_3468_;
-        phi_3474_ = _e498;
+        let _e498 = phi_3486_;
+        phi_3492_ = _e498;
         if _e498 {
             let _e500 = nPos_4[2u];
-            phi_3474_ = (_e500 > 0i);
+            phi_3492_ = (_e500 > 0i);
         }
-        let _e503 = phi_3474_;
-        phi_3484_ = _e503;
+        let _e503 = phi_3492_;
+        phi_3502_ = _e503;
         if _e503 {
             let _e505 = nPos_4[2u];
             let _e507 = tuning.gridDepth;
-            phi_3484_ = (_e505 < (bitcast<i32>(_e507) - 1i));
+            phi_3502_ = (_e505 < (bitcast<i32>(_e507) - 1i));
         }
-        let _e512 = phi_3484_;
+        let _e512 = phi_3502_;
         if _e512 {
             let _e513 = nPos_4;
-            param_479 = _e513;
-            let _e514 = getIndex_u0028_vi3_u003b((&param_479));
+            param_486 = _e513;
+            let _e514 = getIndex_u0028_vi3_u003b((&param_486));
             nIndex_4 = _e514;
             let _e515 = nIndex_4;
-            param_480 = _e515;
-            let _e516 = readCell_u0028_u1_u003b((&param_480));
+            param_487 = _e515;
+            let _e516 = readCell_u0028_u1_u003b((&param_487));
             nVal_4 = _e516;
             let _e517 = nVal_4;
-            param_481 = _e517;
-            let _e518 = getType_u0028_u1_u003b((&param_481));
+            param_488 = _e517;
+            let _e518 = getType_u0028_u1_u003b((&param_488));
             nType_2 = _e518;
             let _e519 = nType_2;
             let _e521 = nType_2;
             if ((_e519 == 4u) || (_e521 == 1u)) {
                 let _e524 = nVal_4;
-                param_482 = _e524;
-                let _e525 = getAge_u0028_u1_u003b((&param_482));
+                param_489 = _e524;
+                let _e525 = getAge_u0028_u1_u003b((&param_489));
                 nMoisture = _e525;
                 let _e526 = nType_2;
                 if (_e526 == 4u) {
@@ -4739,18 +4807,18 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
         return;
     }
     let _e550 = (*pos_12);
-    param_483 = _e550;
-    let _e551 = grainCanMove_u0028_vi3_u003b((&param_483));
+    param_490 = _e550;
+    let _e551 = grainCanMove_u0028_vi3_u003b((&param_490));
     canMove = _e551;
     isClumped = false;
     let _e552 = canMove;
-    phi_3554_ = _e552;
+    phi_3572_ = _e552;
     if _e552 {
         let _e553 = (*currentSleep_4);
         let _e555 = tuning.wakeSleepThreshold;
-        phi_3554_ = (_e553 > _e555);
+        phi_3572_ = (_e553 > _e555);
     }
-    let _e558 = phi_3554_;
+    let _e558 = phi_3572_;
     if _e558 {
         emptyBelowCount = 0i;
         let _e560 = (*pos_12)[1u];
@@ -4769,34 +4837,34 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                             checkPos_1 = (_e566 + vec3<i32>(_e567, -1i, _e568));
                             let _e572 = checkPos_1[0u];
                             let _e573 = (_e572 >= 0i);
-                            phi_3596_ = _e573;
+                            phi_3614_ = _e573;
                             if _e573 {
                                 let _e575 = checkPos_1[0u];
                                 let _e577 = tuning.gridWidth;
-                                phi_3596_ = (_e575 < bitcast<i32>(_e577));
+                                phi_3614_ = (_e575 < bitcast<i32>(_e577));
                             }
-                            let _e581 = phi_3596_;
-                            phi_3602_ = _e581;
+                            let _e581 = phi_3614_;
+                            phi_3620_ = _e581;
                             if _e581 {
                                 let _e583 = checkPos_1[2u];
-                                phi_3602_ = (_e583 >= 0i);
+                                phi_3620_ = (_e583 >= 0i);
                             }
-                            let _e586 = phi_3602_;
-                            phi_3611_ = _e586;
+                            let _e586 = phi_3620_;
+                            phi_3629_ = _e586;
                             if _e586 {
                                 let _e588 = checkPos_1[2u];
                                 let _e590 = tuning.gridDepth;
-                                phi_3611_ = (_e588 < bitcast<i32>(_e590));
+                                phi_3629_ = (_e588 < bitcast<i32>(_e590));
                             }
-                            let _e594 = phi_3611_;
+                            let _e594 = phi_3629_;
                             if _e594 {
                                 let _e595 = checkPos_1;
-                                param_484 = _e595;
-                                let _e596 = getIndex_u0028_vi3_u003b((&param_484));
-                                param_485 = _e596;
-                                let _e597 = readCell_u0028_u1_u003b((&param_485));
-                                param_486 = _e597;
-                                let _e598 = getType_u0028_u1_u003b((&param_486));
+                                param_491 = _e595;
+                                let _e596 = getIndex_u0028_vi3_u003b((&param_491));
+                                param_492 = _e596;
+                                let _e597 = readCell_u0028_u1_u003b((&param_492));
+                                param_493 = _e597;
+                                let _e598 = getType_u0028_u1_u003b((&param_493));
                                 if (_e598 == 0u) {
                                     let _e600 = emptyBelowCount;
                                     emptyBelowCount = (_e600 + 1i);
@@ -4852,47 +4920,47 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                                     nPos_5 = (_e625 + vec3<i32>(_e626, _e627, _e628));
                                     let _e632 = nPos_5[0u];
                                     let _e633 = (_e632 >= 0i);
-                                    phi_3692_ = _e633;
+                                    phi_3710_ = _e633;
                                     if _e633 {
                                         let _e635 = nPos_5[0u];
                                         let _e637 = tuning.gridWidth;
-                                        phi_3692_ = (_e635 < bitcast<i32>(_e637));
+                                        phi_3710_ = (_e635 < bitcast<i32>(_e637));
                                     }
-                                    let _e641 = phi_3692_;
-                                    phi_3698_ = _e641;
+                                    let _e641 = phi_3710_;
+                                    phi_3716_ = _e641;
                                     if _e641 {
                                         let _e643 = nPos_5[1u];
-                                        phi_3698_ = (_e643 >= 0i);
+                                        phi_3716_ = (_e643 >= 0i);
                                     }
-                                    let _e646 = phi_3698_;
-                                    phi_3707_ = _e646;
+                                    let _e646 = phi_3716_;
+                                    phi_3725_ = _e646;
                                     if _e646 {
                                         let _e648 = nPos_5[1u];
                                         let _e650 = tuning.gridHeight;
-                                        phi_3707_ = (_e648 < bitcast<i32>(_e650));
+                                        phi_3725_ = (_e648 < bitcast<i32>(_e650));
                                     }
-                                    let _e654 = phi_3707_;
-                                    phi_3713_ = _e654;
+                                    let _e654 = phi_3725_;
+                                    phi_3731_ = _e654;
                                     if _e654 {
                                         let _e656 = nPos_5[2u];
-                                        phi_3713_ = (_e656 >= 0i);
+                                        phi_3731_ = (_e656 >= 0i);
                                     }
-                                    let _e659 = phi_3713_;
-                                    phi_3722_ = _e659;
+                                    let _e659 = phi_3731_;
+                                    phi_3740_ = _e659;
                                     if _e659 {
                                         let _e661 = nPos_5[2u];
                                         let _e663 = tuning.gridDepth;
-                                        phi_3722_ = (_e661 < bitcast<i32>(_e663));
+                                        phi_3740_ = (_e661 < bitcast<i32>(_e663));
                                     }
-                                    let _e667 = phi_3722_;
+                                    let _e667 = phi_3740_;
                                     if _e667 {
                                         let _e668 = nPos_5;
-                                        param_487 = _e668;
-                                        let _e669 = getIndex_u0028_vi3_u003b((&param_487));
-                                        param_488 = _e669;
-                                        let _e670 = readCell_u0028_u1_u003b((&param_488));
-                                        param_489 = _e670;
-                                        let _e671 = getType_u0028_u1_u003b((&param_489));
+                                        param_494 = _e668;
+                                        let _e669 = getIndex_u0028_vi3_u003b((&param_494));
+                                        param_495 = _e669;
+                                        let _e670 = readCell_u0028_u1_u003b((&param_495));
+                                        param_496 = _e670;
+                                        let _e671 = getType_u0028_u1_u003b((&param_496));
                                         if (_e671 == 4u) {
                                             let _e673 = clumpCount;
                                             clumpCount = (_e673 + 1i);
@@ -4940,29 +5008,29 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
             let _e693 = (*pos_12);
             belowPos_5 = (_e693 + vec3<i32>(0i, -1i, 0i));
             let _e695 = belowPos_5;
-            param_490 = _e695;
-            let _e696 = getIndex_u0028_vi3_u003b((&param_490));
-            param_491 = _e696;
-            let _e697 = readCell_u0028_u1_u003b((&param_491));
-            param_492 = _e697;
-            let _e698 = getType_u0028_u1_u003b((&param_492));
+            param_497 = _e695;
+            let _e696 = getIndex_u0028_vi3_u003b((&param_497));
+            param_498 = _e696;
+            let _e697 = readCell_u0028_u1_u003b((&param_498));
+            param_499 = _e697;
+            let _e698 = getType_u0028_u1_u003b((&param_499));
             if (_e698 == 0u) {
                 let _e700 = belowPos_5;
-                param_493 = _e700;
-                let _e701 = getIndex_u0028_vi3_u003b((&param_493));
-                param_494 = 4u;
-                param_495 = 0u;
-                param_496 = 0u;
+                param_500 = _e700;
+                let _e701 = getIndex_u0028_vi3_u003b((&param_500));
+                param_501 = 4u;
+                param_502 = 0u;
+                param_503 = 0u;
                 let _e702 = moisture_4;
-                param_497 = _e702;
-                let _e703 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_494), (&param_495), (&param_496), (&param_497));
+                param_504 = _e702;
+                let _e703 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_501), (&param_502), (&param_503), (&param_504));
                 let _e704 = (*currentIndex_9);
-                param_498 = _e704;
+                param_505 = _e704;
                 let _e705 = (*rawValue_7);
-                param_499 = _e705;
-                param_500 = _e701;
-                param_501 = _e703;
-                let _e706 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_498), (&param_499), (&param_500), (&param_501));
+                param_506 = _e705;
+                param_507 = _e701;
+                param_508 = _e703;
+                let _e706 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_505), (&param_506), (&param_507), (&param_508));
                 if _e706 {
                     return;
                 }
@@ -4990,51 +5058,51 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
             }
             let _e736 = slidePos1_[0u];
             let _e737 = (_e736 > 0i);
-            phi_3841_ = _e737;
+            phi_3859_ = _e737;
             if _e737 {
                 let _e739 = slidePos1_[0u];
                 let _e741 = tuning.gridWidth;
-                phi_3841_ = (_e739 < (bitcast<i32>(_e741) - 1i));
+                phi_3859_ = (_e739 < (bitcast<i32>(_e741) - 1i));
             }
-            let _e746 = phi_3841_;
-            phi_3847_ = _e746;
+            let _e746 = phi_3859_;
+            phi_3865_ = _e746;
             if _e746 {
                 let _e748 = slidePos1_[2u];
-                phi_3847_ = (_e748 > 0i);
+                phi_3865_ = (_e748 > 0i);
             }
-            let _e751 = phi_3847_;
-            phi_3857_ = _e751;
+            let _e751 = phi_3865_;
+            phi_3875_ = _e751;
             if _e751 {
                 let _e753 = slidePos1_[2u];
                 let _e755 = tuning.gridDepth;
-                phi_3857_ = (_e753 < (bitcast<i32>(_e755) - 1i));
+                phi_3875_ = (_e753 < (bitcast<i32>(_e755) - 1i));
             }
-            let _e760 = phi_3857_;
+            let _e760 = phi_3875_;
             if _e760 {
                 let _e761 = slidePos1_;
-                param_502 = _e761;
-                let _e762 = getIndex_u0028_vi3_u003b((&param_502));
-                param_503 = _e762;
-                let _e763 = readCell_u0028_u1_u003b((&param_503));
-                param_504 = _e763;
-                let _e764 = getType_u0028_u1_u003b((&param_504));
+                param_509 = _e761;
+                let _e762 = getIndex_u0028_vi3_u003b((&param_509));
+                param_510 = _e762;
+                let _e763 = readCell_u0028_u1_u003b((&param_510));
+                param_511 = _e763;
+                let _e764 = getType_u0028_u1_u003b((&param_511));
                 if (_e764 == 0u) {
                     let _e766 = slidePos1_;
-                    param_505 = _e766;
-                    let _e767 = getIndex_u0028_vi3_u003b((&param_505));
-                    param_506 = 4u;
-                    param_507 = 0u;
-                    param_508 = 0u;
+                    param_512 = _e766;
+                    let _e767 = getIndex_u0028_vi3_u003b((&param_512));
+                    param_513 = 4u;
+                    param_514 = 0u;
+                    param_515 = 0u;
                     let _e768 = moisture_4;
-                    param_509 = _e768;
-                    let _e769 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_506), (&param_507), (&param_508), (&param_509));
+                    param_516 = _e768;
+                    let _e769 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_513), (&param_514), (&param_515), (&param_516));
                     let _e770 = (*currentIndex_9);
-                    param_510 = _e770;
+                    param_517 = _e770;
                     let _e771 = (*rawValue_7);
-                    param_511 = _e771;
-                    param_512 = _e767;
-                    param_513 = _e769;
-                    let _e772 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_510), (&param_511), (&param_512), (&param_513));
+                    param_518 = _e771;
+                    param_519 = _e767;
+                    param_520 = _e769;
+                    let _e772 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_517), (&param_518), (&param_519), (&param_520));
                     if _e772 {
                         return;
                     }
@@ -5042,51 +5110,51 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
             }
             let _e774 = slidePos2_[0u];
             let _e775 = (_e774 > 0i);
-            phi_3901_ = _e775;
+            phi_3919_ = _e775;
             if _e775 {
                 let _e777 = slidePos2_[0u];
                 let _e779 = tuning.gridWidth;
-                phi_3901_ = (_e777 < (bitcast<i32>(_e779) - 1i));
+                phi_3919_ = (_e777 < (bitcast<i32>(_e779) - 1i));
             }
-            let _e784 = phi_3901_;
-            phi_3907_ = _e784;
+            let _e784 = phi_3919_;
+            phi_3925_ = _e784;
             if _e784 {
                 let _e786 = slidePos2_[2u];
-                phi_3907_ = (_e786 > 0i);
+                phi_3925_ = (_e786 > 0i);
             }
-            let _e789 = phi_3907_;
-            phi_3917_ = _e789;
+            let _e789 = phi_3925_;
+            phi_3935_ = _e789;
             if _e789 {
                 let _e791 = slidePos2_[2u];
                 let _e793 = tuning.gridDepth;
-                phi_3917_ = (_e791 < (bitcast<i32>(_e793) - 1i));
+                phi_3935_ = (_e791 < (bitcast<i32>(_e793) - 1i));
             }
-            let _e798 = phi_3917_;
+            let _e798 = phi_3935_;
             if _e798 {
                 let _e799 = slidePos2_;
-                param_514 = _e799;
-                let _e800 = getIndex_u0028_vi3_u003b((&param_514));
-                param_515 = _e800;
-                let _e801 = readCell_u0028_u1_u003b((&param_515));
-                param_516 = _e801;
-                let _e802 = getType_u0028_u1_u003b((&param_516));
+                param_521 = _e799;
+                let _e800 = getIndex_u0028_vi3_u003b((&param_521));
+                param_522 = _e800;
+                let _e801 = readCell_u0028_u1_u003b((&param_522));
+                param_523 = _e801;
+                let _e802 = getType_u0028_u1_u003b((&param_523));
                 if (_e802 == 0u) {
                     let _e804 = slidePos2_;
-                    param_517 = _e804;
-                    let _e805 = getIndex_u0028_vi3_u003b((&param_517));
-                    param_518 = 4u;
-                    param_519 = 0u;
-                    param_520 = 0u;
+                    param_524 = _e804;
+                    let _e805 = getIndex_u0028_vi3_u003b((&param_524));
+                    param_525 = 4u;
+                    param_526 = 0u;
+                    param_527 = 0u;
                     let _e806 = moisture_4;
-                    param_521 = _e806;
-                    let _e807 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_518), (&param_519), (&param_520), (&param_521));
+                    param_528 = _e806;
+                    let _e807 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_525), (&param_526), (&param_527), (&param_528));
                     let _e808 = (*currentIndex_9);
-                    param_522 = _e808;
+                    param_529 = _e808;
                     let _e809 = (*rawValue_7);
-                    param_523 = _e809;
-                    param_524 = _e805;
-                    param_525 = _e807;
-                    let _e810 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_522), (&param_523), (&param_524), (&param_525));
+                    param_530 = _e809;
+                    param_531 = _e805;
+                    param_532 = _e807;
+                    let _e810 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_529), (&param_530), (&param_531), (&param_532));
                     if _e810 {
                         return;
                     }
@@ -5098,16 +5166,16 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
             let _e814 = (*pos_12);
             belowPos_6 = (_e814 + vec3<i32>(0i, -1i, 0i));
             let _e816 = belowPos_6;
-            param_526 = _e816;
-            let _e817 = getIndex_u0028_vi3_u003b((&param_526));
+            param_533 = _e816;
+            let _e817 = getIndex_u0028_vi3_u003b((&param_533));
             belowIndex_2 = _e817;
             let _e818 = belowIndex_2;
-            param_527 = _e818;
-            let _e819 = readCell_u0028_u1_u003b((&param_527));
+            param_534 = _e818;
+            let _e819 = readCell_u0028_u1_u003b((&param_534));
             belowValue_2 = _e819;
             let _e820 = belowValue_2;
-            param_528 = _e820;
-            let _e821 = getType_u0028_u1_u003b((&param_528));
+            param_535 = _e820;
+            let _e821 = getType_u0028_u1_u003b((&param_535));
             if (_e821 == 2u) {
                 let _e823 = (*randVal_9);
                 startDir_2 = i32((fract((_e823 * 8f)) * 8f));
@@ -5121,50 +5189,50 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                         d_13 = (_e832 - (i32(floor((f32(_e832) / f32(8i)))) * 8i));
                         let _e840 = belowPos_6;
                         let _e841 = d_13;
-                        param_529 = _e841;
-                        let _e842 = getHDir_u0028_i1_u003b((&param_529));
+                        param_536 = _e841;
+                        let _e842 = getHDir_u0028_i1_u003b((&param_536));
                         pushPos = (_e840 + _e842);
                         let _e845 = pushPos[0u];
                         let _e846 = (_e845 > 0i);
-                        phi_4008_ = _e846;
+                        phi_4026_ = _e846;
                         if _e846 {
                             let _e848 = pushPos[0u];
                             let _e850 = tuning.gridWidth;
-                            phi_4008_ = (_e848 < (bitcast<i32>(_e850) - 1i));
+                            phi_4026_ = (_e848 < (bitcast<i32>(_e850) - 1i));
                         }
-                        let _e855 = phi_4008_;
-                        phi_4014_ = _e855;
+                        let _e855 = phi_4026_;
+                        phi_4032_ = _e855;
                         if _e855 {
                             let _e857 = pushPos[2u];
-                            phi_4014_ = (_e857 > 0i);
+                            phi_4032_ = (_e857 > 0i);
                         }
-                        let _e860 = phi_4014_;
-                        phi_4024_ = _e860;
+                        let _e860 = phi_4032_;
+                        phi_4042_ = _e860;
                         if _e860 {
                             let _e862 = pushPos[2u];
                             let _e864 = tuning.gridDepth;
-                            phi_4024_ = (_e862 < (bitcast<i32>(_e864) - 1i));
+                            phi_4042_ = (_e862 < (bitcast<i32>(_e864) - 1i));
                         }
-                        let _e869 = phi_4024_;
+                        let _e869 = phi_4042_;
                         if _e869 {
-                            param_530 = 4u;
-                            param_531 = 0u;
-                            param_532 = 0u;
+                            param_537 = 4u;
+                            param_538 = 0u;
+                            param_539 = 0u;
                             let _e870 = moisture_4;
-                            param_533 = _e870;
-                            let _e871 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_530), (&param_531), (&param_532), (&param_533));
+                            param_540 = _e870;
+                            let _e871 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_537), (&param_538), (&param_539), (&param_540));
                             let _e872 = pushPos;
-                            param_534 = _e872;
-                            let _e873 = getIndex_u0028_vi3_u003b((&param_534));
+                            param_541 = _e872;
+                            let _e873 = getIndex_u0028_vi3_u003b((&param_541));
                             let _e874 = (*currentIndex_9);
-                            param_535 = _e874;
-                            param_536 = _e871;
+                            param_542 = _e874;
+                            param_543 = _e871;
                             let _e875 = belowIndex_2;
-                            param_537 = _e875;
+                            param_544 = _e875;
                             let _e876 = belowValue_2;
-                            param_538 = _e876;
-                            param_539 = _e873;
-                            let _e877 = tryDisplace_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_535), (&param_536), (&param_537), (&param_538), (&param_539));
+                            param_545 = _e876;
+                            param_546 = _e873;
+                            let _e877 = tryDisplace_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_542), (&param_543), (&param_544), (&param_545), (&param_546));
                             if _e877 {
                                 return;
                             }
@@ -5178,20 +5246,20 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                         i_16 = (_e878 + 1i);
                     }
                 }
-                param_540 = 4u;
-                param_541 = 0u;
-                param_542 = 0u;
+                param_547 = 4u;
+                param_548 = 0u;
+                param_549 = 0u;
                 let _e880 = moisture_4;
-                param_543 = _e880;
-                let _e881 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_540), (&param_541), (&param_542), (&param_543));
+                param_550 = _e880;
+                let _e881 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_547), (&param_548), (&param_549), (&param_550));
                 let _e882 = (*currentIndex_9);
-                param_544 = _e882;
+                param_551 = _e882;
                 let _e883 = (*rawValue_7);
-                param_545 = _e883;
+                param_552 = _e883;
                 let _e884 = belowIndex_2;
-                param_546 = _e884;
-                param_547 = _e881;
-                let _e885 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_544), (&param_545), (&param_546), (&param_547));
+                param_553 = _e884;
+                param_554 = _e881;
+                let _e885 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_551), (&param_552), (&param_553), (&param_554));
                 if _e885 {
                     return;
                 }
@@ -5223,38 +5291,38 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                     sPos_2 = _e919;
                     let _e921 = sPos_2[0u];
                     let _e922 = (_e921 > 0i);
-                    phi_4125_ = _e922;
+                    phi_4143_ = _e922;
                     if _e922 {
                         let _e924 = sPos_2[0u];
                         let _e926 = tuning.gridWidth;
-                        phi_4125_ = (_e924 < (bitcast<i32>(_e926) - 1i));
+                        phi_4143_ = (_e924 < (bitcast<i32>(_e926) - 1i));
                     }
-                    let _e931 = phi_4125_;
-                    phi_4131_ = _e931;
+                    let _e931 = phi_4143_;
+                    phi_4149_ = _e931;
                     if _e931 {
                         let _e933 = sPos_2[2u];
-                        phi_4131_ = (_e933 > 0i);
+                        phi_4149_ = (_e933 > 0i);
                     }
-                    let _e936 = phi_4131_;
-                    phi_4141_ = _e936;
+                    let _e936 = phi_4149_;
+                    phi_4159_ = _e936;
                     if _e936 {
                         let _e938 = sPos_2[2u];
                         let _e940 = tuning.gridDepth;
-                        phi_4141_ = (_e938 < (bitcast<i32>(_e940) - 1i));
+                        phi_4159_ = (_e938 < (bitcast<i32>(_e940) - 1i));
                     }
-                    let _e945 = phi_4141_;
+                    let _e945 = phi_4159_;
                     if _e945 {
                         let _e946 = sPos_2;
-                        param_548 = _e946;
-                        let _e947 = getIndex_u0028_vi3_u003b((&param_548));
+                        param_555 = _e946;
+                        let _e947 = getIndex_u0028_vi3_u003b((&param_555));
                         sIndex = _e947;
                         let _e948 = sIndex;
-                        param_549 = _e948;
-                        let _e949 = readCell_u0028_u1_u003b((&param_549));
+                        param_556 = _e948;
+                        let _e949 = readCell_u0028_u1_u003b((&param_556));
                         sValue = _e949;
                         let _e950 = sValue;
-                        param_550 = _e950;
-                        let _e951 = getType_u0028_u1_u003b((&param_550));
+                        param_557 = _e950;
+                        let _e951 = getType_u0028_u1_u003b((&param_557));
                         if (_e951 == 2u) {
                             let _e953 = (*randVal_9);
                             let _e955 = s_1;
@@ -5269,50 +5337,50 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                                     d_14 = (_e965 - (i32(floor((f32(_e965) / f32(8i)))) * 8i));
                                     let _e973 = sPos_2;
                                     let _e974 = d_14;
-                                    param_551 = _e974;
-                                    let _e975 = getHDir_u0028_i1_u003b((&param_551));
+                                    param_558 = _e974;
+                                    let _e975 = getHDir_u0028_i1_u003b((&param_558));
                                     pushPos_1 = (_e973 + _e975);
                                     let _e978 = pushPos_1[0u];
                                     let _e979 = (_e978 > 0i);
-                                    phi_4198_ = _e979;
+                                    phi_4216_ = _e979;
                                     if _e979 {
                                         let _e981 = pushPos_1[0u];
                                         let _e983 = tuning.gridWidth;
-                                        phi_4198_ = (_e981 < (bitcast<i32>(_e983) - 1i));
+                                        phi_4216_ = (_e981 < (bitcast<i32>(_e983) - 1i));
                                     }
-                                    let _e988 = phi_4198_;
-                                    phi_4204_ = _e988;
+                                    let _e988 = phi_4216_;
+                                    phi_4222_ = _e988;
                                     if _e988 {
                                         let _e990 = pushPos_1[2u];
-                                        phi_4204_ = (_e990 > 0i);
+                                        phi_4222_ = (_e990 > 0i);
                                     }
-                                    let _e993 = phi_4204_;
-                                    phi_4214_ = _e993;
+                                    let _e993 = phi_4222_;
+                                    phi_4232_ = _e993;
                                     if _e993 {
                                         let _e995 = pushPos_1[2u];
                                         let _e997 = tuning.gridDepth;
-                                        phi_4214_ = (_e995 < (bitcast<i32>(_e997) - 1i));
+                                        phi_4232_ = (_e995 < (bitcast<i32>(_e997) - 1i));
                                     }
-                                    let _e1002 = phi_4214_;
+                                    let _e1002 = phi_4232_;
                                     if _e1002 {
-                                        param_552 = 4u;
-                                        param_553 = 0u;
-                                        param_554 = 0u;
+                                        param_559 = 4u;
+                                        param_560 = 0u;
+                                        param_561 = 0u;
                                         let _e1003 = moisture_4;
-                                        param_555 = _e1003;
-                                        let _e1004 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_552), (&param_553), (&param_554), (&param_555));
+                                        param_562 = _e1003;
+                                        let _e1004 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_559), (&param_560), (&param_561), (&param_562));
                                         let _e1005 = pushPos_1;
-                                        param_556 = _e1005;
-                                        let _e1006 = getIndex_u0028_vi3_u003b((&param_556));
+                                        param_563 = _e1005;
+                                        let _e1006 = getIndex_u0028_vi3_u003b((&param_563));
                                         let _e1007 = (*currentIndex_9);
-                                        param_557 = _e1007;
-                                        param_558 = _e1004;
+                                        param_564 = _e1007;
+                                        param_565 = _e1004;
                                         let _e1008 = sIndex;
-                                        param_559 = _e1008;
+                                        param_566 = _e1008;
                                         let _e1009 = sValue;
-                                        param_560 = _e1009;
-                                        param_561 = _e1006;
-                                        let _e1010 = tryDisplace_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_557), (&param_558), (&param_559), (&param_560), (&param_561));
+                                        param_567 = _e1009;
+                                        param_568 = _e1006;
+                                        let _e1010 = tryDisplace_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_564), (&param_565), (&param_566), (&param_567), (&param_568));
                                         if _e1010 {
                                             return;
                                         }
@@ -5326,20 +5394,20 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                                     i_17 = (_e1011 + 1i);
                                 }
                             }
-                            param_562 = 4u;
-                            param_563 = 0u;
-                            param_564 = 0u;
+                            param_569 = 4u;
+                            param_570 = 0u;
+                            param_571 = 0u;
                             let _e1013 = moisture_4;
-                            param_565 = _e1013;
-                            let _e1014 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_562), (&param_563), (&param_564), (&param_565));
+                            param_572 = _e1013;
+                            let _e1014 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_569), (&param_570), (&param_571), (&param_572));
                             let _e1015 = (*currentIndex_9);
-                            param_566 = _e1015;
+                            param_573 = _e1015;
                             let _e1016 = (*rawValue_7);
-                            param_567 = _e1016;
+                            param_574 = _e1016;
                             let _e1017 = sIndex;
-                            param_568 = _e1017;
-                            param_569 = _e1014;
-                            let _e1018 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_566), (&param_567), (&param_568), (&param_569));
+                            param_575 = _e1017;
+                            param_576 = _e1014;
+                            let _e1018 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_573), (&param_574), (&param_575), (&param_576));
                             if _e1018 {
                                 return;
                             }
@@ -5359,13 +5427,13 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
     let _e1021 = (*currentDir_4);
     floraState = _e1021;
     let _e1022 = isClumped;
-    phi_4269_ = _e1022;
+    phi_4287_ = _e1022;
     if !(_e1022) {
         let _e1024 = (*currentSleep_4);
         let _e1026 = tuning.wakeSleepThreshold;
-        phi_4269_ = (_e1024 > _e1026);
+        phi_4287_ = (_e1024 > _e1026);
     }
-    let _e1029 = phi_4269_;
+    let _e1029 = phi_4287_;
     if _e1029 {
         let _e1030 = (*pos_12);
         abovePos_1 = (_e1030 + vec3<i32>(0i, 1i, 0i));
@@ -5373,16 +5441,16 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
         let _e1035 = tuning.gridHeight;
         aboveInside = (_e1033 < (bitcast<i32>(_e1035) - 1i));
         let _e1039 = abovePos_1;
-        param_570 = _e1039;
-        let _e1040 = getIndex_u0028_vi3_u003b((&param_570));
+        param_577 = _e1039;
+        let _e1040 = getIndex_u0028_vi3_u003b((&param_577));
         aboveIndex = _e1040;
         let _e1041 = aboveInside;
         if _e1041 {
             let _e1042 = aboveIndex;
-            param_571 = _e1042;
-            let _e1043 = readCell_u0028_u1_u003b((&param_571));
-            param_572 = _e1043;
-            let _e1044 = getType_u0028_u1_u003b((&param_572));
+            param_578 = _e1042;
+            let _e1043 = readCell_u0028_u1_u003b((&param_578));
+            param_579 = _e1043;
+            let _e1044 = getType_u0028_u1_u003b((&param_579));
             local_21 = _e1044;
         } else {
             local_21 = 0u;
@@ -5404,20 +5472,20 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
                     let _e1067 = aboveType;
                     let _e1070 = aboveInside;
                     let _e1071 = (((_e1065 == 100u) && (_e1067 == 0u)) && _e1070);
-                    phi_4343_ = _e1071;
+                    phi_4361_ = _e1071;
                     if _e1071 {
                         let _e1072 = (*randVal_9);
                         let _e1076 = tuning.treeBloomChance;
-                        phi_4343_ = (fract((_e1072 * 97f)) < _e1076);
+                        phi_4361_ = (fract((_e1072 * 97f)) < _e1076);
                     }
-                    let _e1079 = phi_4343_;
+                    let _e1079 = phi_4361_;
                     if _e1079 {
                         let _e1080 = aboveIndex;
-                        param_573 = 18u;
-                        param_574 = 0u;
-                        param_575 = 0u;
-                        param_576 = 0u;
-                        let _e1083 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_573), (&param_574), (&param_575), (&param_576));
+                        param_580 = 18u;
+                        param_581 = 0u;
+                        param_582 = 0u;
+                        param_583 = 0u;
+                        let _e1083 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_580), (&param_581), (&param_582), (&param_583));
                         let _e1084 = atomicCompareExchangeWeak((&unnamed.grid[_e1080]), 0u, _e1083);
                     }
                 }
@@ -5449,14 +5517,14 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
             } else {
                 let _e1105 = aboveType;
                 let _e1106 = (_e1105 != 5u);
-                phi_4398_ = _e1106;
+                phi_4416_ = _e1106;
                 if _e1106 {
                     let _e1107 = aboveType;
-                    param_577 = _e1107;
-                    let _e1108 = isLocust_u0028_u1_u003b((&param_577));
-                    phi_4398_ = !(_e1108);
+                    param_584 = _e1107;
+                    let _e1108 = isLocust_u0028_u1_u003b((&param_584));
+                    phi_4416_ = !(_e1108);
                 }
-                let _e1111 = phi_4398_;
+                let _e1111 = phi_4416_;
                 if _e1111 {
                     floraState = 0u;
                 }
@@ -5467,76 +5535,76 @@ fn updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u0
     newSleep_2 = min((_e1112 + 1u), 255u);
     let _e1115 = (*currentIndex_9);
     let _e1118 = (*rawValue_7);
-    param_578 = 4u;
+    param_585 = 4u;
     let _e1119 = floraState;
-    param_579 = _e1119;
+    param_586 = _e1119;
     let _e1120 = newSleep_2;
-    param_580 = _e1120;
+    param_587 = _e1120;
     let _e1121 = moisture_4;
-    param_581 = _e1121;
-    let _e1122 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_578), (&param_579), (&param_580), (&param_581));
+    param_588 = _e1121;
+    let _e1122 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_585), (&param_586), (&param_587), (&param_588));
     let _e1123 = atomicCompareExchangeWeak((&unnamed.grid[_e1115]), _e1118, _e1122);
     return;
 }
 
 fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_13: ptr<function, vec3<i32>>, currentIndex_10: ptr<function, u32>, rawValue_8: ptr<function, u32>, currentDir_5: ptr<function, u32>, currentSleep_5: ptr<function, u32>, currentAge_8: ptr<function, u32>, randVal_10: ptr<function, f32>) {
     var wake: bool;
-    var param_582: vec3<i32>;
-    var param_583: u32;
-    var param_584: u32;
+    var param_589: vec3<i32>;
+    var param_590: u32;
+    var param_591: u32;
     var hasPressure_1: bool;
     var local_22: bool;
-    var param_585: vec3<i32>;
-    var param_586: u32;
-    var param_587: u32;
-    var isStackedOnWater: bool;
-    var local_23: bool;
-    var param_588: vec3<i32>;
-    var param_589: u32;
-    var param_590: u32;
-    var d_15: i32;
-    var nPos_6: vec3<i32>;
-    var param_591: i32;
     var param_592: vec3<i32>;
     var param_593: u32;
     var param_594: u32;
-    var belowNeighbor: u32;
+    var isStackedOnWater: bool;
+    var local_23: bool;
     var param_595: vec3<i32>;
     var param_596: u32;
     var param_597: u32;
-    var newAge_2: u32;
-    var belowPos_7: vec3<i32>;
-    var param_598: vec3<i32>;
-    var param_599: u32;
+    var d_15: i32;
+    var nPos_6: vec3<i32>;
+    var param_598: i32;
+    var param_599: vec3<i32>;
     var param_600: u32;
-    var param_601: vec3<i32>;
-    var param_602: u32;
+    var param_601: u32;
+    var belowNeighbor: u32;
+    var param_602: vec3<i32>;
     var param_603: u32;
     var param_604: u32;
-    var param_605: u32;
+    var newAge_2: u32;
+    var belowPos_7: vec3<i32>;
+    var param_605: vec3<i32>;
     var param_606: u32;
     var param_607: u32;
-    var param_608: u32;
+    var param_608: vec3<i32>;
     var param_609: u32;
+    var param_610: u32;
+    var param_611: u32;
+    var param_612: u32;
+    var param_613: u32;
+    var param_614: u32;
+    var param_615: u32;
+    var param_616: u32;
     var newDir: u32;
     var r_1: f32;
     var diagDir: u32;
     var r_2: f32;
     var stepPos: vec3<i32>;
-    var param_610: i32;
-    var param_611: vec3<i32>;
-    var param_612: u32;
-    var param_613: u32;
-    var newValue_1: u32;
-    var param_614: u32;
-    var param_615: u32;
-    var param_616: u32;
-    var param_617: u32;
+    var param_617: i32;
     var param_618: vec3<i32>;
     var param_619: u32;
     var param_620: u32;
+    var newValue_1: u32;
     var param_621: u32;
     var param_622: u32;
+    var param_623: u32;
+    var param_624: u32;
+    var param_625: vec3<i32>;
+    var param_626: u32;
+    var param_627: u32;
+    var param_628: u32;
+    var param_629: u32;
     var bestDropPos: vec3<i32>;
     var foundDrop: bool;
     var blockedMask_1: u32;
@@ -5546,87 +5614,87 @@ fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u
     var i_18: i32;
     var d_16: i32;
     var c_7: vec3<i32>;
-    var param_623: i32;
-    var param_624: vec3<i32>;
-    var param_625: u32;
-    var param_626: u32;
-    var param_627: vec3<i32>;
-    var param_628: u32;
-    var param_629: u32;
-    var newValue_2: u32;
-    var param_630: u32;
-    var param_631: u32;
+    var param_630: i32;
+    var param_631: vec3<i32>;
     var param_632: u32;
     var param_633: u32;
     var param_634: vec3<i32>;
     var param_635: u32;
     var param_636: u32;
+    var newValue_2: u32;
     var param_637: u32;
     var param_638: u32;
-    var hasPressure_2: bool;
-    var local_24: bool;
-    var param_639: vec3<i32>;
+    var param_639: u32;
     var param_640: u32;
-    var param_641: u32;
-    var isStackedOnWater_1: bool;
-    var local_25: bool;
-    var param_642: vec3<i32>;
+    var param_641: vec3<i32>;
+    var param_642: u32;
     var param_643: u32;
     var param_644: u32;
-    var canStepOntoPool: bool;
-    var d_17: i32;
-    var nPos_7: vec3<i32>;
-    var param_645: i32;
+    var param_645: u32;
+    var hasPressure_2: bool;
+    var local_24: bool;
     var param_646: vec3<i32>;
     var param_647: u32;
     var param_648: u32;
+    var isStackedOnWater_1: bool;
+    var local_25: bool;
     var param_649: vec3<i32>;
     var param_650: u32;
     var param_651: u32;
-    var startSpreadDir: i32;
-    var i_19: i32;
-    var d_18: i32;
-    var targetPos_2: vec3<i32>;
+    var canStepOntoPool: bool;
+    var d_17: i32;
+    var nPos_7: vec3<i32>;
     var param_652: i32;
     var param_653: vec3<i32>;
     var param_654: u32;
     var param_655: u32;
-    var newValue_3: u32;
-    var param_656: u32;
+    var param_656: vec3<i32>;
     var param_657: u32;
     var param_658: u32;
-    var param_659: u32;
+    var startSpreadDir: i32;
+    var i_19: i32;
+    var d_18: i32;
+    var targetPos_2: vec3<i32>;
+    var param_659: i32;
     var param_660: vec3<i32>;
     var param_661: u32;
     var param_662: u32;
+    var newValue_3: u32;
     var param_663: u32;
     var param_664: u32;
-    var newSleep_3: u32;
-    var sleepValue: u32;
     var param_665: u32;
     var param_666: u32;
-    var param_667: u32;
+    var param_667: vec3<i32>;
     var param_668: u32;
-    var phi_4438_: bool;
-    var phi_4508_: bool;
-    var phi_4514_: bool;
-    var phi_4524_: bool;
-    var phi_4710_: bool;
-    var phi_4716_: bool;
-    var phi_4726_: bool;
-    var phi_4841_: bool;
-    var phi_4848_: bool;
+    var param_669: u32;
+    var param_670: u32;
+    var param_671: u32;
+    var newSleep_3: u32;
+    var sleepValue: u32;
+    var param_672: u32;
+    var param_673: u32;
+    var param_674: u32;
+    var param_675: u32;
+    var phi_4456_: bool;
+    var phi_4526_: bool;
+    var phi_4532_: bool;
+    var phi_4542_: bool;
+    var phi_4728_: bool;
+    var phi_4734_: bool;
+    var phi_4744_: bool;
     var phi_4859_: bool;
-    var phi_4871_: bool;
-    var phi_4893_: bool;
-    var phi_4997_: bool;
-    var phi_5003_: bool;
-    var phi_5013_: bool;
-    var phi_5029_: bool;
-    var phi_5041_: bool;
-    var phi_5091_: bool;
-    var phi_5097_: bool;
-    var phi_5107_: bool;
+    var phi_4866_: bool;
+    var phi_4877_: bool;
+    var phi_4889_: bool;
+    var phi_4911_: bool;
+    var phi_5015_: bool;
+    var phi_5021_: bool;
+    var phi_5031_: bool;
+    var phi_5047_: bool;
+    var phi_5059_: bool;
+    var phi_5109_: bool;
+    var phi_5115_: bool;
+    var phi_5125_: bool;
 
     let _e332 = (*currentSleep_5);
     let _e334 = tuning.wakeSleepThreshold;
@@ -5634,18 +5702,18 @@ fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u
         wake = false;
         let _e337 = (*pos_13)[1u];
         let _e338 = (_e337 > 1i);
-        phi_4438_ = _e338;
+        phi_4456_ = _e338;
         if _e338 {
             let _e339 = (*pos_13);
-            param_582 = (_e339 + vec3<i32>(0i, -1i, 0i));
-            let _e341 = getIndex_u0028_vi3_u003b((&param_582));
-            param_583 = _e341;
-            let _e342 = readCell_u0028_u1_u003b((&param_583));
-            param_584 = _e342;
-            let _e343 = getType_u0028_u1_u003b((&param_584));
-            phi_4438_ = (_e343 == 0u);
+            param_589 = (_e339 + vec3<i32>(0i, -1i, 0i));
+            let _e341 = getIndex_u0028_vi3_u003b((&param_589));
+            param_590 = _e341;
+            let _e342 = readCell_u0028_u1_u003b((&param_590));
+            param_591 = _e342;
+            let _e343 = getType_u0028_u1_u003b((&param_591));
+            phi_4456_ = (_e343 == 0u);
         }
-        let _e346 = phi_4438_;
+        let _e346 = phi_4456_;
         if _e346 {
             wake = true;
         } else {
@@ -5653,12 +5721,12 @@ fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u
             let _e350 = tuning.gridHeight;
             if (_e348 < (bitcast<i32>(_e350) - 2i)) {
                 let _e354 = (*pos_13);
-                param_585 = (_e354 + vec3<i32>(0i, 1i, 0i));
-                let _e356 = getIndex_u0028_vi3_u003b((&param_585));
-                param_586 = _e356;
-                let _e357 = readCell_u0028_u1_u003b((&param_586));
-                param_587 = _e357;
-                let _e358 = getType_u0028_u1_u003b((&param_587));
+                param_592 = (_e354 + vec3<i32>(0i, 1i, 0i));
+                let _e356 = getIndex_u0028_vi3_u003b((&param_592));
+                param_593 = _e356;
+                let _e357 = readCell_u0028_u1_u003b((&param_593));
+                param_594 = _e357;
+                let _e358 = getType_u0028_u1_u003b((&param_594));
                 local_22 = (_e358 != 0u);
             } else {
                 local_22 = false;
@@ -5668,12 +5736,12 @@ fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u
             let _e362 = (*pos_13)[1u];
             if (_e362 > 1i) {
                 let _e364 = (*pos_13);
-                param_588 = (_e364 + vec3<i32>(0i, -1i, 0i));
-                let _e366 = getIndex_u0028_vi3_u003b((&param_588));
-                param_589 = _e366;
-                let _e367 = readCell_u0028_u1_u003b((&param_589));
-                param_590 = _e367;
-                let _e368 = getType_u0028_u1_u003b((&param_590));
+                param_595 = (_e364 + vec3<i32>(0i, -1i, 0i));
+                let _e366 = getIndex_u0028_vi3_u003b((&param_595));
+                param_596 = _e366;
+                let _e367 = readCell_u0028_u1_u003b((&param_596));
+                param_597 = _e367;
+                let _e368 = getType_u0028_u1_u003b((&param_597));
                 local_23 = (_e368 == 2u);
             } else {
                 local_23 = false;
@@ -5686,47 +5754,47 @@ fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u
                 if (_e371 < 8i) {
                     let _e373 = (*pos_13);
                     let _e374 = d_15;
-                    param_591 = _e374;
-                    let _e375 = getHDir_u0028_i1_u003b((&param_591));
+                    param_598 = _e374;
+                    let _e375 = getHDir_u0028_i1_u003b((&param_598));
                     nPos_6 = (_e373 + _e375);
                     let _e378 = nPos_6[0u];
                     let _e379 = (_e378 > 0i);
-                    phi_4508_ = _e379;
+                    phi_4526_ = _e379;
                     if _e379 {
                         let _e381 = nPos_6[0u];
                         let _e383 = tuning.gridWidth;
-                        phi_4508_ = (_e381 < (bitcast<i32>(_e383) - 1i));
+                        phi_4526_ = (_e381 < (bitcast<i32>(_e383) - 1i));
                     }
-                    let _e388 = phi_4508_;
-                    phi_4514_ = _e388;
+                    let _e388 = phi_4526_;
+                    phi_4532_ = _e388;
                     if _e388 {
                         let _e390 = nPos_6[2u];
-                        phi_4514_ = (_e390 > 0i);
+                        phi_4532_ = (_e390 > 0i);
                     }
-                    let _e393 = phi_4514_;
-                    phi_4524_ = _e393;
+                    let _e393 = phi_4532_;
+                    phi_4542_ = _e393;
                     if _e393 {
                         let _e395 = nPos_6[2u];
                         let _e397 = tuning.gridDepth;
-                        phi_4524_ = (_e395 < (bitcast<i32>(_e397) - 1i));
+                        phi_4542_ = (_e395 < (bitcast<i32>(_e397) - 1i));
                     }
-                    let _e402 = phi_4524_;
+                    let _e402 = phi_4542_;
                     if _e402 {
                         let _e403 = nPos_6;
-                        param_592 = _e403;
-                        let _e404 = getIndex_u0028_vi3_u003b((&param_592));
-                        param_593 = _e404;
-                        let _e405 = readCell_u0028_u1_u003b((&param_593));
-                        param_594 = _e405;
-                        let _e406 = getType_u0028_u1_u003b((&param_594));
+                        param_599 = _e403;
+                        let _e404 = getIndex_u0028_vi3_u003b((&param_599));
+                        param_600 = _e404;
+                        let _e405 = readCell_u0028_u1_u003b((&param_600));
+                        param_601 = _e405;
+                        let _e406 = getType_u0028_u1_u003b((&param_601));
                         if (_e406 == 0u) {
                             let _e408 = nPos_6;
-                            param_595 = (_e408 + vec3<i32>(0i, -1i, 0i));
-                            let _e410 = getIndex_u0028_vi3_u003b((&param_595));
-                            param_596 = _e410;
-                            let _e411 = readCell_u0028_u1_u003b((&param_596));
-                            param_597 = _e411;
-                            let _e412 = getType_u0028_u1_u003b((&param_597));
+                            param_602 = (_e408 + vec3<i32>(0i, -1i, 0i));
+                            let _e410 = getIndex_u0028_vi3_u003b((&param_602));
+                            param_603 = _e410;
+                            let _e411 = readCell_u0028_u1_u003b((&param_603));
+                            param_604 = _e411;
+                            let _e412 = getType_u0028_u1_u003b((&param_604));
                             belowNeighbor = _e412;
                             let _e413 = belowNeighbor;
                             let _e415 = hasPressure_1;
@@ -5762,29 +5830,29 @@ fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u
         let _e431 = (*pos_13);
         belowPos_7 = (_e431 + vec3<i32>(0i, -1i, 0i));
         let _e433 = belowPos_7;
-        param_598 = _e433;
-        let _e434 = getIndex_u0028_vi3_u003b((&param_598));
-        param_599 = _e434;
-        let _e435 = readCell_u0028_u1_u003b((&param_599));
-        param_600 = _e435;
-        let _e436 = getType_u0028_u1_u003b((&param_600));
+        param_605 = _e433;
+        let _e434 = getIndex_u0028_vi3_u003b((&param_605));
+        param_606 = _e434;
+        let _e435 = readCell_u0028_u1_u003b((&param_606));
+        param_607 = _e435;
+        let _e436 = getType_u0028_u1_u003b((&param_607));
         if (_e436 == 0u) {
             let _e438 = belowPos_7;
-            param_601 = _e438;
-            let _e439 = getIndex_u0028_vi3_u003b((&param_601));
-            param_602 = 2u;
-            param_603 = 0u;
-            param_604 = 0u;
+            param_608 = _e438;
+            let _e439 = getIndex_u0028_vi3_u003b((&param_608));
+            param_609 = 2u;
+            param_610 = 0u;
+            param_611 = 0u;
             let _e440 = newAge_2;
-            param_605 = _e440;
-            let _e441 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_602), (&param_603), (&param_604), (&param_605));
+            param_612 = _e440;
+            let _e441 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_609), (&param_610), (&param_611), (&param_612));
             let _e442 = (*currentIndex_10);
-            param_606 = _e442;
+            param_613 = _e442;
             let _e443 = (*rawValue_8);
-            param_607 = _e443;
-            param_608 = _e439;
-            param_609 = _e441;
-            let _e444 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_606), (&param_607), (&param_608), (&param_609));
+            param_614 = _e443;
+            param_615 = _e439;
+            param_616 = _e441;
+            let _e444 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_613), (&param_614), (&param_615), (&param_616));
             if _e444 {
                 return;
             }
@@ -5850,59 +5918,59 @@ fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u
         }
         let _e495 = (*pos_13);
         let _e496 = diagDir;
-        param_610 = (bitcast<i32>(_e496) - 1i);
-        let _e499 = getHDir_u0028_i1_u003b((&param_610));
+        param_617 = (bitcast<i32>(_e496) - 1i);
+        let _e499 = getHDir_u0028_i1_u003b((&param_617));
         stepPos = (_e495 + _e499);
         let _e502 = stepPos[0u];
         let _e503 = (_e502 > 0i);
-        phi_4710_ = _e503;
+        phi_4728_ = _e503;
         if _e503 {
             let _e505 = stepPos[0u];
             let _e507 = tuning.gridWidth;
-            phi_4710_ = (_e505 < (bitcast<i32>(_e507) - 1i));
+            phi_4728_ = (_e505 < (bitcast<i32>(_e507) - 1i));
         }
-        let _e512 = phi_4710_;
-        phi_4716_ = _e512;
+        let _e512 = phi_4728_;
+        phi_4734_ = _e512;
         if _e512 {
             let _e514 = stepPos[2u];
-            phi_4716_ = (_e514 > 0i);
+            phi_4734_ = (_e514 > 0i);
         }
-        let _e517 = phi_4716_;
-        phi_4726_ = _e517;
+        let _e517 = phi_4734_;
+        phi_4744_ = _e517;
         if _e517 {
             let _e519 = stepPos[2u];
             let _e521 = tuning.gridDepth;
-            phi_4726_ = (_e519 < (bitcast<i32>(_e521) - 1i));
+            phi_4744_ = (_e519 < (bitcast<i32>(_e521) - 1i));
         }
-        let _e526 = phi_4726_;
+        let _e526 = phi_4744_;
         if _e526 {
             let _e527 = stepPos;
-            param_611 = _e527;
-            let _e528 = getIndex_u0028_vi3_u003b((&param_611));
-            param_612 = _e528;
-            let _e529 = readCell_u0028_u1_u003b((&param_612));
-            param_613 = _e529;
-            let _e530 = getType_u0028_u1_u003b((&param_613));
+            param_618 = _e527;
+            let _e528 = getIndex_u0028_vi3_u003b((&param_618));
+            param_619 = _e528;
+            let _e529 = readCell_u0028_u1_u003b((&param_619));
+            param_620 = _e529;
+            let _e530 = getType_u0028_u1_u003b((&param_620));
             if (_e530 == 0u) {
-                param_614 = 2u;
+                param_621 = 2u;
                 let _e532 = newDir;
-                param_615 = _e532;
-                param_616 = 0u;
+                param_622 = _e532;
+                param_623 = 0u;
                 let _e533 = newAge_2;
-                param_617 = _e533;
-                let _e534 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_614), (&param_615), (&param_616), (&param_617));
+                param_624 = _e533;
+                let _e534 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_621), (&param_622), (&param_623), (&param_624));
                 newValue_1 = _e534;
                 let _e535 = stepPos;
-                param_618 = _e535;
-                let _e536 = getIndex_u0028_vi3_u003b((&param_618));
+                param_625 = _e535;
+                let _e536 = getIndex_u0028_vi3_u003b((&param_625));
                 let _e537 = (*currentIndex_10);
-                param_619 = _e537;
+                param_626 = _e537;
                 let _e538 = (*rawValue_8);
-                param_620 = _e538;
-                param_621 = _e536;
+                param_627 = _e538;
+                param_628 = _e536;
                 let _e539 = newValue_1;
-                param_622 = _e539;
-                let _e540 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_619), (&param_620), (&param_621), (&param_622));
+                param_629 = _e539;
+                let _e540 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_626), (&param_627), (&param_628), (&param_629));
                 if _e540 {
                     return;
                 }
@@ -5941,44 +6009,44 @@ fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u
                     if ((_e576 & (1u << bitcast<u32>(_e577))) == 0u) {
                         let _e582 = (*pos_13);
                         let _e583 = d_16;
-                        param_623 = _e583;
-                        let _e584 = getHDir_u0028_i1_u003b((&param_623));
+                        param_630 = _e583;
+                        let _e584 = getHDir_u0028_i1_u003b((&param_630));
                         let _e585 = r_3;
                         c_7 = (_e582 + (_e584 * vec3(_e585)));
                         let _e590 = c_7[0u];
                         let _e591 = (_e590 <= 0i);
-                        phi_4841_ = _e591;
+                        phi_4859_ = _e591;
                         if !(_e591) {
                             let _e594 = c_7[0u];
                             let _e596 = tuning.gridWidth;
-                            phi_4841_ = (_e594 >= (bitcast<i32>(_e596) - 1i));
+                            phi_4859_ = (_e594 >= (bitcast<i32>(_e596) - 1i));
                         }
-                        let _e601 = phi_4841_;
-                        phi_4848_ = _e601;
+                        let _e601 = phi_4859_;
+                        phi_4866_ = _e601;
                         if !(_e601) {
                             let _e604 = c_7[2u];
-                            phi_4848_ = (_e604 <= 0i);
+                            phi_4866_ = (_e604 <= 0i);
                         }
-                        let _e607 = phi_4848_;
-                        phi_4859_ = _e607;
+                        let _e607 = phi_4866_;
+                        phi_4877_ = _e607;
                         if !(_e607) {
                             let _e610 = c_7[2u];
                             let _e612 = tuning.gridDepth;
-                            phi_4859_ = (_e610 >= (bitcast<i32>(_e612) - 1i));
+                            phi_4877_ = (_e610 >= (bitcast<i32>(_e612) - 1i));
                         }
-                        let _e617 = phi_4859_;
-                        phi_4871_ = _e617;
+                        let _e617 = phi_4877_;
+                        phi_4889_ = _e617;
                         if !(_e617) {
                             let _e619 = c_7;
-                            param_624 = _e619;
-                            let _e620 = getIndex_u0028_vi3_u003b((&param_624));
-                            param_625 = _e620;
-                            let _e621 = readCell_u0028_u1_u003b((&param_625));
-                            param_626 = _e621;
-                            let _e622 = getType_u0028_u1_u003b((&param_626));
-                            phi_4871_ = (_e622 != 0u);
+                            param_631 = _e619;
+                            let _e620 = getIndex_u0028_vi3_u003b((&param_631));
+                            param_632 = _e620;
+                            let _e621 = readCell_u0028_u1_u003b((&param_632));
+                            param_633 = _e621;
+                            let _e622 = getType_u0028_u1_u003b((&param_633));
+                            phi_4889_ = (_e622 != 0u);
                         }
-                        let _e625 = phi_4871_;
+                        let _e625 = phi_4889_;
                         if _e625 {
                             let _e626 = d_16;
                             let _e629 = blockedMask_1;
@@ -5986,18 +6054,18 @@ fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u
                         } else {
                             let _e632 = c_7[1u];
                             let _e633 = (_e632 > 1i);
-                            phi_4893_ = _e633;
+                            phi_4911_ = _e633;
                             if _e633 {
                                 let _e634 = c_7;
-                                param_627 = (_e634 + vec3<i32>(0i, -1i, 0i));
-                                let _e636 = getIndex_u0028_vi3_u003b((&param_627));
-                                param_628 = _e636;
-                                let _e637 = readCell_u0028_u1_u003b((&param_628));
-                                param_629 = _e637;
-                                let _e638 = getType_u0028_u1_u003b((&param_629));
-                                phi_4893_ = (_e638 == 0u);
+                                param_634 = (_e634 + vec3<i32>(0i, -1i, 0i));
+                                let _e636 = getIndex_u0028_vi3_u003b((&param_634));
+                                param_635 = _e636;
+                                let _e637 = readCell_u0028_u1_u003b((&param_635));
+                                param_636 = _e637;
+                                let _e638 = getType_u0028_u1_u003b((&param_636));
+                                phi_4911_ = (_e638 == 0u);
                             }
-                            let _e641 = phi_4893_;
+                            let _e641 = phi_4911_;
                             if _e641 {
                                 let _e642 = c_7;
                                 bestDropPos = _e642;
@@ -6030,23 +6098,23 @@ fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u
     }
     let _e648 = foundDrop;
     if _e648 {
-        param_630 = 2u;
-        param_631 = 0u;
-        param_632 = 0u;
-        param_633 = 0u;
-        let _e649 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_630), (&param_631), (&param_632), (&param_633));
+        param_637 = 2u;
+        param_638 = 0u;
+        param_639 = 0u;
+        param_640 = 0u;
+        let _e649 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_637), (&param_638), (&param_639), (&param_640));
         newValue_2 = _e649;
         let _e650 = bestDropPos;
-        param_634 = _e650;
-        let _e651 = getIndex_u0028_vi3_u003b((&param_634));
+        param_641 = _e650;
+        let _e651 = getIndex_u0028_vi3_u003b((&param_641));
         let _e652 = (*currentIndex_10);
-        param_635 = _e652;
+        param_642 = _e652;
         let _e653 = (*rawValue_8);
-        param_636 = _e653;
-        param_637 = _e651;
+        param_643 = _e653;
+        param_644 = _e651;
         let _e654 = newValue_2;
-        param_638 = _e654;
-        let _e655 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_635), (&param_636), (&param_637), (&param_638));
+        param_645 = _e654;
+        let _e655 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_642), (&param_643), (&param_644), (&param_645));
         if _e655 {
             return;
         }
@@ -6055,12 +6123,12 @@ fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u
         let _e659 = tuning.gridHeight;
         if (_e657 < (bitcast<i32>(_e659) - 2i)) {
             let _e663 = (*pos_13);
-            param_639 = (_e663 + vec3<i32>(0i, 1i, 0i));
-            let _e665 = getIndex_u0028_vi3_u003b((&param_639));
-            param_640 = _e665;
-            let _e666 = readCell_u0028_u1_u003b((&param_640));
-            param_641 = _e666;
-            let _e667 = getType_u0028_u1_u003b((&param_641));
+            param_646 = (_e663 + vec3<i32>(0i, 1i, 0i));
+            let _e665 = getIndex_u0028_vi3_u003b((&param_646));
+            param_647 = _e665;
+            let _e666 = readCell_u0028_u1_u003b((&param_647));
+            param_648 = _e666;
+            let _e667 = getType_u0028_u1_u003b((&param_648));
             local_24 = (_e667 != 0u);
         } else {
             local_24 = false;
@@ -6070,12 +6138,12 @@ fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u
         let _e671 = (*pos_13)[1u];
         if (_e671 > 1i) {
             let _e673 = (*pos_13);
-            param_642 = (_e673 + vec3<i32>(0i, -1i, 0i));
-            let _e675 = getIndex_u0028_vi3_u003b((&param_642));
-            param_643 = _e675;
-            let _e676 = readCell_u0028_u1_u003b((&param_643));
-            param_644 = _e676;
-            let _e677 = getType_u0028_u1_u003b((&param_644));
+            param_649 = (_e673 + vec3<i32>(0i, -1i, 0i));
+            let _e675 = getIndex_u0028_vi3_u003b((&param_649));
+            param_650 = _e675;
+            let _e676 = readCell_u0028_u1_u003b((&param_650));
+            param_651 = _e676;
+            let _e677 = getType_u0028_u1_u003b((&param_651));
             local_25 = (_e677 == 2u);
         } else {
             local_25 = false;
@@ -6089,58 +6157,58 @@ fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u
             if (_e680 < 8i) {
                 let _e682 = (*pos_13);
                 let _e683 = d_17;
-                param_645 = _e683;
-                let _e684 = getHDir_u0028_i1_u003b((&param_645));
+                param_652 = _e683;
+                let _e684 = getHDir_u0028_i1_u003b((&param_652));
                 nPos_7 = (_e682 + _e684);
                 let _e687 = nPos_7[0u];
                 let _e688 = (_e687 > 0i);
-                phi_4997_ = _e688;
+                phi_5015_ = _e688;
                 if _e688 {
                     let _e690 = nPos_7[0u];
                     let _e692 = tuning.gridWidth;
-                    phi_4997_ = (_e690 < (bitcast<i32>(_e692) - 1i));
+                    phi_5015_ = (_e690 < (bitcast<i32>(_e692) - 1i));
                 }
-                let _e697 = phi_4997_;
-                phi_5003_ = _e697;
+                let _e697 = phi_5015_;
+                phi_5021_ = _e697;
                 if _e697 {
                     let _e699 = nPos_7[2u];
-                    phi_5003_ = (_e699 > 0i);
+                    phi_5021_ = (_e699 > 0i);
                 }
-                let _e702 = phi_5003_;
-                phi_5013_ = _e702;
+                let _e702 = phi_5021_;
+                phi_5031_ = _e702;
                 if _e702 {
                     let _e704 = nPos_7[2u];
                     let _e706 = tuning.gridDepth;
-                    phi_5013_ = (_e704 < (bitcast<i32>(_e706) - 1i));
+                    phi_5031_ = (_e704 < (bitcast<i32>(_e706) - 1i));
                 }
-                let _e711 = phi_5013_;
+                let _e711 = phi_5031_;
                 if _e711 {
                     let _e712 = nPos_7;
-                    param_646 = _e712;
-                    let _e713 = getIndex_u0028_vi3_u003b((&param_646));
-                    param_647 = _e713;
-                    let _e714 = readCell_u0028_u1_u003b((&param_647));
-                    param_648 = _e714;
-                    let _e715 = getType_u0028_u1_u003b((&param_648));
+                    param_653 = _e712;
+                    let _e713 = getIndex_u0028_vi3_u003b((&param_653));
+                    param_654 = _e713;
+                    let _e714 = readCell_u0028_u1_u003b((&param_654));
+                    param_655 = _e714;
+                    let _e715 = getType_u0028_u1_u003b((&param_655));
                     let _e716 = (_e715 == 0u);
-                    phi_5029_ = _e716;
+                    phi_5047_ = _e716;
                     if _e716 {
                         let _e718 = (*pos_13)[1u];
-                        phi_5029_ = (_e718 > 1i);
+                        phi_5047_ = (_e718 > 1i);
                     }
-                    let _e721 = phi_5029_;
-                    phi_5041_ = _e721;
+                    let _e721 = phi_5047_;
+                    phi_5059_ = _e721;
                     if _e721 {
                         let _e722 = nPos_7;
-                        param_649 = (_e722 + vec3<i32>(0i, -1i, 0i));
-                        let _e724 = getIndex_u0028_vi3_u003b((&param_649));
-                        param_650 = _e724;
-                        let _e725 = readCell_u0028_u1_u003b((&param_650));
-                        param_651 = _e725;
-                        let _e726 = getType_u0028_u1_u003b((&param_651));
-                        phi_5041_ = (_e726 == 2u);
+                        param_656 = (_e722 + vec3<i32>(0i, -1i, 0i));
+                        let _e724 = getIndex_u0028_vi3_u003b((&param_656));
+                        param_657 = _e724;
+                        let _e725 = readCell_u0028_u1_u003b((&param_657));
+                        param_658 = _e725;
+                        let _e726 = getType_u0028_u1_u003b((&param_658));
+                        phi_5059_ = (_e726 == 2u);
                     }
-                    let _e729 = phi_5041_;
+                    let _e729 = phi_5059_;
                     if _e729 {
                         canStepOntoPool = true;
                         break;
@@ -6171,59 +6239,59 @@ fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u
                     d_18 = (_e746 - (i32(floor((f32(_e746) / f32(8i)))) * 8i));
                     let _e754 = (*pos_13);
                     let _e755 = d_18;
-                    param_652 = _e755;
-                    let _e756 = getHDir_u0028_i1_u003b((&param_652));
+                    param_659 = _e755;
+                    let _e756 = getHDir_u0028_i1_u003b((&param_659));
                     targetPos_2 = (_e754 + _e756);
                     let _e759 = targetPos_2[0u];
                     let _e760 = (_e759 > 0i);
-                    phi_5091_ = _e760;
+                    phi_5109_ = _e760;
                     if _e760 {
                         let _e762 = targetPos_2[0u];
                         let _e764 = tuning.gridWidth;
-                        phi_5091_ = (_e762 < (bitcast<i32>(_e764) - 1i));
+                        phi_5109_ = (_e762 < (bitcast<i32>(_e764) - 1i));
                     }
-                    let _e769 = phi_5091_;
-                    phi_5097_ = _e769;
+                    let _e769 = phi_5109_;
+                    phi_5115_ = _e769;
                     if _e769 {
                         let _e771 = targetPos_2[2u];
-                        phi_5097_ = (_e771 > 0i);
+                        phi_5115_ = (_e771 > 0i);
                     }
-                    let _e774 = phi_5097_;
-                    phi_5107_ = _e774;
+                    let _e774 = phi_5115_;
+                    phi_5125_ = _e774;
                     if _e774 {
                         let _e776 = targetPos_2[2u];
                         let _e778 = tuning.gridDepth;
-                        phi_5107_ = (_e776 < (bitcast<i32>(_e778) - 1i));
+                        phi_5125_ = (_e776 < (bitcast<i32>(_e778) - 1i));
                     }
-                    let _e783 = phi_5107_;
+                    let _e783 = phi_5125_;
                     if _e783 {
                         let _e784 = targetPos_2;
-                        param_653 = _e784;
-                        let _e785 = getIndex_u0028_vi3_u003b((&param_653));
-                        param_654 = _e785;
-                        let _e786 = readCell_u0028_u1_u003b((&param_654));
-                        param_655 = _e786;
-                        let _e787 = getType_u0028_u1_u003b((&param_655));
+                        param_660 = _e784;
+                        let _e785 = getIndex_u0028_vi3_u003b((&param_660));
+                        param_661 = _e785;
+                        let _e786 = readCell_u0028_u1_u003b((&param_661));
+                        param_662 = _e786;
+                        let _e787 = getType_u0028_u1_u003b((&param_662));
                         if (_e787 == 0u) {
                             let _e789 = d_18;
-                            param_656 = 2u;
-                            param_657 = bitcast<u32>((_e789 + 1i));
-                            param_658 = 0u;
+                            param_663 = 2u;
+                            param_664 = bitcast<u32>((_e789 + 1i));
+                            param_665 = 0u;
                             let _e792 = newAge_2;
-                            param_659 = _e792;
-                            let _e793 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_656), (&param_657), (&param_658), (&param_659));
+                            param_666 = _e792;
+                            let _e793 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_663), (&param_664), (&param_665), (&param_666));
                             newValue_3 = _e793;
                             let _e794 = targetPos_2;
-                            param_660 = _e794;
-                            let _e795 = getIndex_u0028_vi3_u003b((&param_660));
+                            param_667 = _e794;
+                            let _e795 = getIndex_u0028_vi3_u003b((&param_667));
                             let _e796 = (*currentIndex_10);
-                            param_661 = _e796;
+                            param_668 = _e796;
                             let _e797 = (*rawValue_8);
-                            param_662 = _e797;
-                            param_663 = _e795;
+                            param_669 = _e797;
+                            param_670 = _e795;
                             let _e798 = newValue_3;
-                            param_664 = _e798;
-                            let _e799 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_661), (&param_662), (&param_663), (&param_664));
+                            param_671 = _e798;
+                            let _e799 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_668), (&param_669), (&param_670), (&param_671));
                             if _e799 {
                                 return;
                             }
@@ -6242,13 +6310,13 @@ fn updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u
     }
     let _e802 = (*currentSleep_5);
     newSleep_3 = min((_e802 + 1u), 255u);
-    param_665 = 2u;
-    param_666 = 0u;
+    param_672 = 2u;
+    param_673 = 0u;
     let _e805 = newSleep_3;
-    param_667 = _e805;
+    param_674 = _e805;
     let _e806 = newAge_2;
-    param_668 = _e806;
-    let _e807 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_665), (&param_666), (&param_667), (&param_668));
+    param_675 = _e806;
+    let _e807 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_672), (&param_673), (&param_674), (&param_675));
     sleepValue = _e807;
     let _e808 = (*currentIndex_10);
     let _e811 = (*rawValue_8);
@@ -6269,194 +6337,194 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
     var i_20: i32;
     var d_19: i32;
     var nPos_8: vec3<i32>;
-    var param_669: i32;
+    var param_676: i32;
     var nIndex_5: u32;
-    var param_670: vec3<i32>;
+    var param_677: vec3<i32>;
     var nVal_5: u32;
-    var param_671: u32;
-    var param_672: u32;
+    var param_678: u32;
+    var param_679: u32;
     var d_20: i32;
     var nPos_9: vec3<i32>;
-    var param_673: i32;
+    var param_680: i32;
     var nIndex_6: u32;
-    var param_674: vec3<i32>;
+    var param_681: vec3<i32>;
     var nVal_6: u32;
-    var param_675: u32;
+    var param_682: u32;
     var nType_3: u32;
-    var param_676: u32;
+    var param_683: u32;
     var nMoisture_1: u32;
-    var param_677: u32;
+    var param_684: u32;
     var nCapacity_1: u32;
     var local_26: u32;
     var leakPos: vec3<i32>;
-    var param_678: vec3<i32>;
-    var param_679: u32;
-    var param_680: u32;
-    var param_681: vec3<i32>;
-    var param_682: u32;
-    var param_683: u32;
-    var param_684: u32;
-    var param_685: u32;
+    var param_685: vec3<i32>;
+    var param_686: u32;
+    var param_687: u32;
+    var param_688: vec3<i32>;
+    var param_689: u32;
+    var param_690: u32;
+    var param_691: u32;
+    var param_692: u32;
     var canMove_1: bool;
-    var param_686: vec3<i32>;
+    var param_693: vec3<i32>;
     var isClumped_1: bool;
     var emptyBelowCount_1: i32;
     var x_2: i32;
     var z_2: i32;
     var checkPos_2: vec3<i32>;
-    var param_687: vec3<i32>;
-    var param_688: u32;
-    var param_689: u32;
+    var param_694: vec3<i32>;
+    var param_695: u32;
+    var param_696: u32;
     var clumpCount_1: i32;
     var x_3: i32;
     var y_1: i32;
     var z_3: i32;
     var nPos_10: vec3<i32>;
-    var param_690: vec3<i32>;
-    var param_691: u32;
-    var param_692: u32;
-    var belowPos_8: vec3<i32>;
-    var param_693: vec3<i32>;
-    var param_694: u32;
-    var param_695: u32;
-    var param_696: vec3<i32>;
-    var param_697: u32;
+    var param_697: vec3<i32>;
     var param_698: u32;
     var param_699: u32;
-    var param_700: u32;
+    var belowPos_8: vec3<i32>;
+    var param_700: vec3<i32>;
     var param_701: u32;
     var param_702: u32;
-    var param_703: u32;
+    var param_703: vec3<i32>;
     var param_704: u32;
-    var dir_4: i32;
-    var slidePos1_1: vec3<i32>;
-    var slidePos2_1: vec3<i32>;
-    var param_705: vec3<i32>;
+    var param_705: u32;
     var param_706: u32;
     var param_707: u32;
-    var param_708: vec3<i32>;
+    var param_708: u32;
     var param_709: u32;
     var param_710: u32;
     var param_711: u32;
-    var param_712: u32;
+    var dir_4: i32;
+    var slidePos1_1: vec3<i32>;
+    var slidePos2_1: vec3<i32>;
+    var param_712: vec3<i32>;
     var param_713: u32;
     var param_714: u32;
-    var param_715: u32;
+    var param_715: vec3<i32>;
     var param_716: u32;
-    var param_717: vec3<i32>;
+    var param_717: u32;
     var param_718: u32;
     var param_719: u32;
-    var param_720: vec3<i32>;
+    var param_720: u32;
     var param_721: u32;
     var param_722: u32;
     var param_723: u32;
-    var param_724: u32;
+    var param_724: vec3<i32>;
     var param_725: u32;
     var param_726: u32;
-    var param_727: u32;
+    var param_727: vec3<i32>;
     var param_728: u32;
-    var belowPos_9: vec3<i32>;
-    var belowIndex_3: u32;
-    var param_729: vec3<i32>;
-    var belowValue_3: u32;
+    var param_729: u32;
     var param_730: u32;
     var param_731: u32;
+    var param_732: u32;
+    var param_733: u32;
+    var param_734: u32;
+    var param_735: u32;
+    var belowPos_9: vec3<i32>;
+    var belowIndex_3: u32;
+    var param_736: vec3<i32>;
+    var belowValue_3: u32;
+    var param_737: u32;
+    var param_738: u32;
     var startDir_6: i32;
     var i_21: i32;
     var d_21: i32;
     var pushPos_2: vec3<i32>;
-    var param_732: i32;
-    var param_733: u32;
-    var param_734: u32;
-    var param_735: u32;
-    var param_736: u32;
-    var param_737: vec3<i32>;
-    var param_738: u32;
-    var param_739: u32;
+    var param_739: i32;
     var param_740: u32;
     var param_741: u32;
     var param_742: u32;
     var param_743: u32;
-    var param_744: u32;
+    var param_744: vec3<i32>;
     var param_745: u32;
     var param_746: u32;
     var param_747: u32;
     var param_748: u32;
     var param_749: u32;
     var param_750: u32;
+    var param_751: u32;
+    var param_752: u32;
+    var param_753: u32;
+    var param_754: u32;
+    var param_755: u32;
+    var param_756: u32;
+    var param_757: u32;
     var dir_5: i32;
     var slidePos_1: array<vec3<i32>, 2>;
     var s_2: i32;
     var sPos_3: vec3<i32>;
     var sIndex_1: u32;
-    var param_751: vec3<i32>;
+    var param_758: vec3<i32>;
     var sValue_1: u32;
-    var param_752: u32;
-    var param_753: u32;
+    var param_759: u32;
+    var param_760: u32;
     var startDir_7: i32;
     var i_22: i32;
     var d_22: i32;
     var pushPos_3: vec3<i32>;
-    var param_754: i32;
-    var param_755: u32;
-    var param_756: u32;
-    var param_757: u32;
-    var param_758: u32;
-    var param_759: vec3<i32>;
-    var param_760: u32;
-    var param_761: u32;
+    var param_761: i32;
     var param_762: u32;
     var param_763: u32;
     var param_764: u32;
     var param_765: u32;
-    var param_766: u32;
+    var param_766: vec3<i32>;
     var param_767: u32;
     var param_768: u32;
     var param_769: u32;
     var param_770: u32;
     var param_771: u32;
     var param_772: u32;
-    var newSleep_4: u32;
     var param_773: u32;
     var param_774: u32;
     var param_775: u32;
     var param_776: u32;
-    var phi_2317_: bool;
-    var phi_2323_: bool;
-    var phi_2333_: bool;
-    var phi_2339_: bool;
-    var phi_2349_: bool;
-    var phi_2421_: bool;
-    var phi_2427_: bool;
-    var phi_2437_: bool;
-    var phi_2443_: bool;
-    var phi_2453_: bool;
-    var phi_2518_: bool;
+    var param_777: u32;
+    var param_778: u32;
+    var param_779: u32;
+    var newSleep_4: u32;
+    var param_780: u32;
+    var param_781: u32;
+    var param_782: u32;
+    var param_783: u32;
+    var phi_2336_: bool;
+    var phi_2342_: bool;
+    var phi_2352_: bool;
+    var phi_2358_: bool;
+    var phi_2368_: bool;
+    var phi_2440_: bool;
+    var phi_2446_: bool;
+    var phi_2456_: bool;
+    var phi_2462_: bool;
+    var phi_2472_: bool;
     var phi_2537_: bool;
-    var phi_2581_: bool;
-    var phi_2623_: bool;
-    var phi_2629_: bool;
-    var phi_2638_: bool;
-    var phi_2720_: bool;
-    var phi_2726_: bool;
-    var phi_2735_: bool;
-    var phi_2741_: bool;
-    var phi_2750_: bool;
-    var phi_2872_: bool;
-    var phi_2878_: bool;
-    var phi_2888_: bool;
-    var phi_2932_: bool;
-    var phi_2938_: bool;
-    var phi_2948_: bool;
-    var phi_3040_: bool;
-    var phi_3046_: bool;
-    var phi_3056_: bool;
-    var phi_3159_: bool;
-    var phi_3165_: bool;
-    var phi_3175_: bool;
-    var phi_3232_: bool;
-    var phi_3238_: bool;
-    var phi_3248_: bool;
+    var phi_2556_: bool;
+    var phi_2599_: bool;
+    var phi_2641_: bool;
+    var phi_2647_: bool;
+    var phi_2656_: bool;
+    var phi_2738_: bool;
+    var phi_2744_: bool;
+    var phi_2753_: bool;
+    var phi_2759_: bool;
+    var phi_2768_: bool;
+    var phi_2890_: bool;
+    var phi_2896_: bool;
+    var phi_2906_: bool;
+    var phi_2950_: bool;
+    var phi_2956_: bool;
+    var phi_2966_: bool;
+    var phi_3058_: bool;
+    var phi_3064_: bool;
+    var phi_3074_: bool;
+    var phi_3177_: bool;
+    var phi_3183_: bool;
+    var phi_3193_: bool;
+    var phi_3250_: bool;
+    var phi_3256_: bool;
+    var phi_3266_: bool;
 
     let _e362 = (*currentAge_9);
     moisture_5 = _e362;
@@ -6478,56 +6546,56 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
                 if (_e384 != 2i) {
                     let _e386 = (*pos_14);
                     let _e387 = d_19;
-                    param_669 = _e387;
-                    let _e388 = getOrthoDir_u0028_i1_u003b((&param_669));
+                    param_676 = _e387;
+                    let _e388 = getOrthoDir_u0028_i1_u003b((&param_676));
                     nPos_8 = (_e386 + _e388);
                     let _e391 = nPos_8[0u];
                     let _e392 = (_e391 > 0i);
-                    phi_2317_ = _e392;
+                    phi_2336_ = _e392;
                     if _e392 {
                         let _e394 = nPos_8[0u];
                         let _e396 = tuning.gridWidth;
-                        phi_2317_ = (_e394 < (bitcast<i32>(_e396) - 1i));
+                        phi_2336_ = (_e394 < (bitcast<i32>(_e396) - 1i));
                     }
-                    let _e401 = phi_2317_;
-                    phi_2323_ = _e401;
+                    let _e401 = phi_2336_;
+                    phi_2342_ = _e401;
                     if _e401 {
                         let _e403 = nPos_8[1u];
-                        phi_2323_ = (_e403 > 0i);
+                        phi_2342_ = (_e403 > 0i);
                     }
-                    let _e406 = phi_2323_;
-                    phi_2333_ = _e406;
+                    let _e406 = phi_2342_;
+                    phi_2352_ = _e406;
                     if _e406 {
                         let _e408 = nPos_8[1u];
                         let _e410 = tuning.gridHeight;
-                        phi_2333_ = (_e408 < (bitcast<i32>(_e410) - 1i));
+                        phi_2352_ = (_e408 < (bitcast<i32>(_e410) - 1i));
                     }
-                    let _e415 = phi_2333_;
-                    phi_2339_ = _e415;
+                    let _e415 = phi_2352_;
+                    phi_2358_ = _e415;
                     if _e415 {
                         let _e417 = nPos_8[2u];
-                        phi_2339_ = (_e417 > 0i);
+                        phi_2358_ = (_e417 > 0i);
                     }
-                    let _e420 = phi_2339_;
-                    phi_2349_ = _e420;
+                    let _e420 = phi_2358_;
+                    phi_2368_ = _e420;
                     if _e420 {
                         let _e422 = nPos_8[2u];
                         let _e424 = tuning.gridDepth;
-                        phi_2349_ = (_e422 < (bitcast<i32>(_e424) - 1i));
+                        phi_2368_ = (_e422 < (bitcast<i32>(_e424) - 1i));
                     }
-                    let _e429 = phi_2349_;
+                    let _e429 = phi_2368_;
                     if _e429 {
                         let _e430 = nPos_8;
-                        param_670 = _e430;
-                        let _e431 = getIndex_u0028_vi3_u003b((&param_670));
+                        param_677 = _e430;
+                        let _e431 = getIndex_u0028_vi3_u003b((&param_677));
                         nIndex_5 = _e431;
                         let _e432 = nIndex_5;
-                        param_671 = _e432;
-                        let _e433 = readCell_u0028_u1_u003b((&param_671));
+                        param_678 = _e432;
+                        let _e433 = readCell_u0028_u1_u003b((&param_678));
                         nVal_5 = _e433;
                         let _e434 = nVal_5;
-                        param_672 = _e434;
-                        let _e435 = getType_u0028_u1_u003b((&param_672));
+                        param_679 = _e434;
+                        let _e435 = getType_u0028_u1_u003b((&param_679));
                         if (_e435 == 2u) {
                             let _e437 = nIndex_5;
                             let _e440 = nVal_5;
@@ -6563,63 +6631,63 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
         if (_e465 != 2i) {
             let _e467 = (*pos_14);
             let _e468 = d_20;
-            param_673 = _e468;
-            let _e469 = getOrthoDir_u0028_i1_u003b((&param_673));
+            param_680 = _e468;
+            let _e469 = getOrthoDir_u0028_i1_u003b((&param_680));
             nPos_9 = (_e467 + _e469);
             let _e472 = nPos_9[0u];
             let _e473 = (_e472 > 0i);
-            phi_2421_ = _e473;
+            phi_2440_ = _e473;
             if _e473 {
                 let _e475 = nPos_9[0u];
                 let _e477 = tuning.gridWidth;
-                phi_2421_ = (_e475 < (bitcast<i32>(_e477) - 1i));
+                phi_2440_ = (_e475 < (bitcast<i32>(_e477) - 1i));
             }
-            let _e482 = phi_2421_;
-            phi_2427_ = _e482;
+            let _e482 = phi_2440_;
+            phi_2446_ = _e482;
             if _e482 {
                 let _e484 = nPos_9[1u];
-                phi_2427_ = (_e484 > 0i);
+                phi_2446_ = (_e484 > 0i);
             }
-            let _e487 = phi_2427_;
-            phi_2437_ = _e487;
+            let _e487 = phi_2446_;
+            phi_2456_ = _e487;
             if _e487 {
                 let _e489 = nPos_9[1u];
                 let _e491 = tuning.gridHeight;
-                phi_2437_ = (_e489 < (bitcast<i32>(_e491) - 1i));
+                phi_2456_ = (_e489 < (bitcast<i32>(_e491) - 1i));
             }
-            let _e496 = phi_2437_;
-            phi_2443_ = _e496;
+            let _e496 = phi_2456_;
+            phi_2462_ = _e496;
             if _e496 {
                 let _e498 = nPos_9[2u];
-                phi_2443_ = (_e498 > 0i);
+                phi_2462_ = (_e498 > 0i);
             }
-            let _e501 = phi_2443_;
-            phi_2453_ = _e501;
+            let _e501 = phi_2462_;
+            phi_2472_ = _e501;
             if _e501 {
                 let _e503 = nPos_9[2u];
                 let _e505 = tuning.gridDepth;
-                phi_2453_ = (_e503 < (bitcast<i32>(_e505) - 1i));
+                phi_2472_ = (_e503 < (bitcast<i32>(_e505) - 1i));
             }
-            let _e510 = phi_2453_;
+            let _e510 = phi_2472_;
             if _e510 {
                 let _e511 = nPos_9;
-                param_674 = _e511;
-                let _e512 = getIndex_u0028_vi3_u003b((&param_674));
+                param_681 = _e511;
+                let _e512 = getIndex_u0028_vi3_u003b((&param_681));
                 nIndex_6 = _e512;
                 let _e513 = nIndex_6;
-                param_675 = _e513;
-                let _e514 = readCell_u0028_u1_u003b((&param_675));
+                param_682 = _e513;
+                let _e514 = readCell_u0028_u1_u003b((&param_682));
                 nVal_6 = _e514;
                 let _e515 = nVal_6;
-                param_676 = _e515;
-                let _e516 = getType_u0028_u1_u003b((&param_676));
+                param_683 = _e515;
+                let _e516 = getType_u0028_u1_u003b((&param_683));
                 nType_3 = _e516;
                 let _e517 = nType_3;
                 let _e519 = nType_3;
                 if ((_e517 == 1u) || (_e519 == 4u)) {
                     let _e522 = nVal_6;
-                    param_677 = _e522;
-                    let _e523 = getAge_u0028_u1_u003b((&param_677));
+                    param_684 = _e522;
+                    let _e523 = getAge_u0028_u1_u003b((&param_684));
                     nMoisture_1 = _e523;
                     let _e524 = nType_3;
                     if (_e524 == 4u) {
@@ -6648,39 +6716,39 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
     }
     let _e547 = moistureModified_1;
     let _e548 = !(_e547);
-    phi_2518_ = _e548;
+    phi_2537_ = _e548;
     if _e548 {
         let _e549 = moisture_5;
         let _e551 = tuning.sandWaterAbsorbUnit;
-        phi_2518_ = (_e549 >= _e551);
+        phi_2537_ = (_e549 >= _e551);
     }
-    let _e554 = phi_2518_;
+    let _e554 = phi_2537_;
     if _e554 {
         let _e555 = (*pos_14);
         leakPos = (_e555 + vec3<i32>(0i, -1i, 0i));
         let _e558 = leakPos[1u];
         let _e559 = (_e558 > 0i);
-        phi_2537_ = _e559;
+        phi_2556_ = _e559;
         if _e559 {
             let _e560 = leakPos;
-            param_678 = _e560;
-            let _e561 = getIndex_u0028_vi3_u003b((&param_678));
-            param_679 = _e561;
-            let _e562 = readCell_u0028_u1_u003b((&param_679));
-            param_680 = _e562;
-            let _e563 = getType_u0028_u1_u003b((&param_680));
-            phi_2537_ = (_e563 == 0u);
+            param_685 = _e560;
+            let _e561 = getIndex_u0028_vi3_u003b((&param_685));
+            param_686 = _e561;
+            let _e562 = readCell_u0028_u1_u003b((&param_686));
+            param_687 = _e562;
+            let _e563 = getType_u0028_u1_u003b((&param_687));
+            phi_2556_ = (_e563 == 0u);
         }
-        let _e566 = phi_2537_;
+        let _e566 = phi_2556_;
         if _e566 {
             let _e567 = leakPos;
-            param_681 = _e567;
-            let _e568 = getIndex_u0028_vi3_u003b((&param_681));
-            param_682 = 2u;
-            param_683 = 0u;
-            param_684 = 0u;
-            param_685 = 0u;
-            let _e571 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_682), (&param_683), (&param_684), (&param_685));
+            param_688 = _e567;
+            let _e568 = getIndex_u0028_vi3_u003b((&param_688));
+            param_689 = 2u;
+            param_690 = 0u;
+            param_691 = 0u;
+            param_692 = 0u;
+            let _e571 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_689), (&param_690), (&param_691), (&param_692));
             let _e572 = atomicCompareExchangeWeak((&unnamed.grid[_e568]), 0u, _e571);
             if (_e572.old_value == 0u) {
                 let _e575 = (*currentIndex_11);
@@ -6696,20 +6764,20 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
         return;
     }
     let _e585 = (*pos_14);
-    param_686 = _e585;
-    let _e586 = grainCanMove_u0028_vi3_u003b((&param_686));
+    param_693 = _e585;
+    let _e586 = grainCanMove_u0028_vi3_u003b((&param_693));
     canMove_1 = _e586;
     isClumped_1 = false;
     let _e587 = canMove_1;
     let _e588 = moisture_5;
     let _e590 = (_e587 && (_e588 > 0u));
-    phi_2581_ = _e590;
+    phi_2599_ = _e590;
     if _e590 {
         let _e591 = (*currentSleep_6);
         let _e593 = tuning.wakeSleepThreshold;
-        phi_2581_ = (_e591 > _e593);
+        phi_2599_ = (_e591 > _e593);
     }
-    let _e596 = phi_2581_;
+    let _e596 = phi_2599_;
     if _e596 {
         emptyBelowCount_1 = 0i;
         let _e598 = (*pos_14)[1u];
@@ -6728,34 +6796,34 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
                             checkPos_2 = (_e604 + vec3<i32>(_e605, -1i, _e606));
                             let _e610 = checkPos_2[0u];
                             let _e611 = (_e610 >= 0i);
-                            phi_2623_ = _e611;
+                            phi_2641_ = _e611;
                             if _e611 {
                                 let _e613 = checkPos_2[0u];
                                 let _e615 = tuning.gridWidth;
-                                phi_2623_ = (_e613 < bitcast<i32>(_e615));
+                                phi_2641_ = (_e613 < bitcast<i32>(_e615));
                             }
-                            let _e619 = phi_2623_;
-                            phi_2629_ = _e619;
+                            let _e619 = phi_2641_;
+                            phi_2647_ = _e619;
                             if _e619 {
                                 let _e621 = checkPos_2[2u];
-                                phi_2629_ = (_e621 >= 0i);
+                                phi_2647_ = (_e621 >= 0i);
                             }
-                            let _e624 = phi_2629_;
-                            phi_2638_ = _e624;
+                            let _e624 = phi_2647_;
+                            phi_2656_ = _e624;
                             if _e624 {
                                 let _e626 = checkPos_2[2u];
                                 let _e628 = tuning.gridDepth;
-                                phi_2638_ = (_e626 < bitcast<i32>(_e628));
+                                phi_2656_ = (_e626 < bitcast<i32>(_e628));
                             }
-                            let _e632 = phi_2638_;
+                            let _e632 = phi_2656_;
                             if _e632 {
                                 let _e633 = checkPos_2;
-                                param_687 = _e633;
-                                let _e634 = getIndex_u0028_vi3_u003b((&param_687));
-                                param_688 = _e634;
-                                let _e635 = readCell_u0028_u1_u003b((&param_688));
-                                param_689 = _e635;
-                                let _e636 = getType_u0028_u1_u003b((&param_689));
+                                param_694 = _e633;
+                                let _e634 = getIndex_u0028_vi3_u003b((&param_694));
+                                param_695 = _e634;
+                                let _e635 = readCell_u0028_u1_u003b((&param_695));
+                                param_696 = _e635;
+                                let _e636 = getType_u0028_u1_u003b((&param_696));
                                 if (_e636 == 0u) {
                                     let _e638 = emptyBelowCount_1;
                                     emptyBelowCount_1 = (_e638 + 1i);
@@ -6811,47 +6879,47 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
                                     nPos_10 = (_e663 + vec3<i32>(_e664, _e665, _e666));
                                     let _e670 = nPos_10[0u];
                                     let _e671 = (_e670 >= 0i);
-                                    phi_2720_ = _e671;
+                                    phi_2738_ = _e671;
                                     if _e671 {
                                         let _e673 = nPos_10[0u];
                                         let _e675 = tuning.gridWidth;
-                                        phi_2720_ = (_e673 < bitcast<i32>(_e675));
+                                        phi_2738_ = (_e673 < bitcast<i32>(_e675));
                                     }
-                                    let _e679 = phi_2720_;
-                                    phi_2726_ = _e679;
+                                    let _e679 = phi_2738_;
+                                    phi_2744_ = _e679;
                                     if _e679 {
                                         let _e681 = nPos_10[1u];
-                                        phi_2726_ = (_e681 >= 0i);
+                                        phi_2744_ = (_e681 >= 0i);
                                     }
-                                    let _e684 = phi_2726_;
-                                    phi_2735_ = _e684;
+                                    let _e684 = phi_2744_;
+                                    phi_2753_ = _e684;
                                     if _e684 {
                                         let _e686 = nPos_10[1u];
                                         let _e688 = tuning.gridHeight;
-                                        phi_2735_ = (_e686 < bitcast<i32>(_e688));
+                                        phi_2753_ = (_e686 < bitcast<i32>(_e688));
                                     }
-                                    let _e692 = phi_2735_;
-                                    phi_2741_ = _e692;
+                                    let _e692 = phi_2753_;
+                                    phi_2759_ = _e692;
                                     if _e692 {
                                         let _e694 = nPos_10[2u];
-                                        phi_2741_ = (_e694 >= 0i);
+                                        phi_2759_ = (_e694 >= 0i);
                                     }
-                                    let _e697 = phi_2741_;
-                                    phi_2750_ = _e697;
+                                    let _e697 = phi_2759_;
+                                    phi_2768_ = _e697;
                                     if _e697 {
                                         let _e699 = nPos_10[2u];
                                         let _e701 = tuning.gridDepth;
-                                        phi_2750_ = (_e699 < bitcast<i32>(_e701));
+                                        phi_2768_ = (_e699 < bitcast<i32>(_e701));
                                     }
-                                    let _e705 = phi_2750_;
+                                    let _e705 = phi_2768_;
                                     if _e705 {
                                         let _e706 = nPos_10;
-                                        param_690 = _e706;
-                                        let _e707 = getIndex_u0028_vi3_u003b((&param_690));
-                                        param_691 = _e707;
-                                        let _e708 = readCell_u0028_u1_u003b((&param_691));
-                                        param_692 = _e708;
-                                        let _e709 = getType_u0028_u1_u003b((&param_692));
+                                        param_697 = _e706;
+                                        let _e707 = getIndex_u0028_vi3_u003b((&param_697));
+                                        param_698 = _e707;
+                                        let _e708 = readCell_u0028_u1_u003b((&param_698));
+                                        param_699 = _e708;
+                                        let _e709 = getType_u0028_u1_u003b((&param_699));
                                         if (_e709 == 1u) {
                                             let _e711 = clumpCount_1;
                                             clumpCount_1 = (_e711 + 1i);
@@ -6899,29 +6967,29 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
             let _e731 = (*pos_14);
             belowPos_8 = (_e731 + vec3<i32>(0i, -1i, 0i));
             let _e733 = belowPos_8;
-            param_693 = _e733;
-            let _e734 = getIndex_u0028_vi3_u003b((&param_693));
-            param_694 = _e734;
-            let _e735 = readCell_u0028_u1_u003b((&param_694));
-            param_695 = _e735;
-            let _e736 = getType_u0028_u1_u003b((&param_695));
+            param_700 = _e733;
+            let _e734 = getIndex_u0028_vi3_u003b((&param_700));
+            param_701 = _e734;
+            let _e735 = readCell_u0028_u1_u003b((&param_701));
+            param_702 = _e735;
+            let _e736 = getType_u0028_u1_u003b((&param_702));
             if (_e736 == 0u) {
                 let _e738 = belowPos_8;
-                param_696 = _e738;
-                let _e739 = getIndex_u0028_vi3_u003b((&param_696));
-                param_697 = 1u;
-                param_698 = 0u;
-                param_699 = 0u;
+                param_703 = _e738;
+                let _e739 = getIndex_u0028_vi3_u003b((&param_703));
+                param_704 = 1u;
+                param_705 = 0u;
+                param_706 = 0u;
                 let _e740 = moisture_5;
-                param_700 = _e740;
-                let _e741 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_697), (&param_698), (&param_699), (&param_700));
+                param_707 = _e740;
+                let _e741 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_704), (&param_705), (&param_706), (&param_707));
                 let _e742 = (*currentIndex_11);
-                param_701 = _e742;
+                param_708 = _e742;
                 let _e743 = (*rawValue_9);
-                param_702 = _e743;
-                param_703 = _e739;
-                param_704 = _e741;
-                let _e744 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_701), (&param_702), (&param_703), (&param_704));
+                param_709 = _e743;
+                param_710 = _e739;
+                param_711 = _e741;
+                let _e744 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_708), (&param_709), (&param_710), (&param_711));
                 if _e744 {
                     return;
                 }
@@ -6949,51 +7017,51 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
             }
             let _e774 = slidePos1_1[0u];
             let _e775 = (_e774 > 0i);
-            phi_2872_ = _e775;
+            phi_2890_ = _e775;
             if _e775 {
                 let _e777 = slidePos1_1[0u];
                 let _e779 = tuning.gridWidth;
-                phi_2872_ = (_e777 < (bitcast<i32>(_e779) - 1i));
+                phi_2890_ = (_e777 < (bitcast<i32>(_e779) - 1i));
             }
-            let _e784 = phi_2872_;
-            phi_2878_ = _e784;
+            let _e784 = phi_2890_;
+            phi_2896_ = _e784;
             if _e784 {
                 let _e786 = slidePos1_1[2u];
-                phi_2878_ = (_e786 > 0i);
+                phi_2896_ = (_e786 > 0i);
             }
-            let _e789 = phi_2878_;
-            phi_2888_ = _e789;
+            let _e789 = phi_2896_;
+            phi_2906_ = _e789;
             if _e789 {
                 let _e791 = slidePos1_1[2u];
                 let _e793 = tuning.gridDepth;
-                phi_2888_ = (_e791 < (bitcast<i32>(_e793) - 1i));
+                phi_2906_ = (_e791 < (bitcast<i32>(_e793) - 1i));
             }
-            let _e798 = phi_2888_;
+            let _e798 = phi_2906_;
             if _e798 {
                 let _e799 = slidePos1_1;
-                param_705 = _e799;
-                let _e800 = getIndex_u0028_vi3_u003b((&param_705));
-                param_706 = _e800;
-                let _e801 = readCell_u0028_u1_u003b((&param_706));
-                param_707 = _e801;
-                let _e802 = getType_u0028_u1_u003b((&param_707));
+                param_712 = _e799;
+                let _e800 = getIndex_u0028_vi3_u003b((&param_712));
+                param_713 = _e800;
+                let _e801 = readCell_u0028_u1_u003b((&param_713));
+                param_714 = _e801;
+                let _e802 = getType_u0028_u1_u003b((&param_714));
                 if (_e802 == 0u) {
                     let _e804 = slidePos1_1;
-                    param_708 = _e804;
-                    let _e805 = getIndex_u0028_vi3_u003b((&param_708));
-                    param_709 = 1u;
-                    param_710 = 0u;
-                    param_711 = 0u;
+                    param_715 = _e804;
+                    let _e805 = getIndex_u0028_vi3_u003b((&param_715));
+                    param_716 = 1u;
+                    param_717 = 0u;
+                    param_718 = 0u;
                     let _e806 = moisture_5;
-                    param_712 = _e806;
-                    let _e807 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_709), (&param_710), (&param_711), (&param_712));
+                    param_719 = _e806;
+                    let _e807 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_716), (&param_717), (&param_718), (&param_719));
                     let _e808 = (*currentIndex_11);
-                    param_713 = _e808;
+                    param_720 = _e808;
                     let _e809 = (*rawValue_9);
-                    param_714 = _e809;
-                    param_715 = _e805;
-                    param_716 = _e807;
-                    let _e810 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_713), (&param_714), (&param_715), (&param_716));
+                    param_721 = _e809;
+                    param_722 = _e805;
+                    param_723 = _e807;
+                    let _e810 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_720), (&param_721), (&param_722), (&param_723));
                     if _e810 {
                         return;
                     }
@@ -7001,51 +7069,51 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
             }
             let _e812 = slidePos2_1[0u];
             let _e813 = (_e812 > 0i);
-            phi_2932_ = _e813;
+            phi_2950_ = _e813;
             if _e813 {
                 let _e815 = slidePos2_1[0u];
                 let _e817 = tuning.gridWidth;
-                phi_2932_ = (_e815 < (bitcast<i32>(_e817) - 1i));
+                phi_2950_ = (_e815 < (bitcast<i32>(_e817) - 1i));
             }
-            let _e822 = phi_2932_;
-            phi_2938_ = _e822;
+            let _e822 = phi_2950_;
+            phi_2956_ = _e822;
             if _e822 {
                 let _e824 = slidePos2_1[2u];
-                phi_2938_ = (_e824 > 0i);
+                phi_2956_ = (_e824 > 0i);
             }
-            let _e827 = phi_2938_;
-            phi_2948_ = _e827;
+            let _e827 = phi_2956_;
+            phi_2966_ = _e827;
             if _e827 {
                 let _e829 = slidePos2_1[2u];
                 let _e831 = tuning.gridDepth;
-                phi_2948_ = (_e829 < (bitcast<i32>(_e831) - 1i));
+                phi_2966_ = (_e829 < (bitcast<i32>(_e831) - 1i));
             }
-            let _e836 = phi_2948_;
+            let _e836 = phi_2966_;
             if _e836 {
                 let _e837 = slidePos2_1;
-                param_717 = _e837;
-                let _e838 = getIndex_u0028_vi3_u003b((&param_717));
-                param_718 = _e838;
-                let _e839 = readCell_u0028_u1_u003b((&param_718));
-                param_719 = _e839;
-                let _e840 = getType_u0028_u1_u003b((&param_719));
+                param_724 = _e837;
+                let _e838 = getIndex_u0028_vi3_u003b((&param_724));
+                param_725 = _e838;
+                let _e839 = readCell_u0028_u1_u003b((&param_725));
+                param_726 = _e839;
+                let _e840 = getType_u0028_u1_u003b((&param_726));
                 if (_e840 == 0u) {
                     let _e842 = slidePos2_1;
-                    param_720 = _e842;
-                    let _e843 = getIndex_u0028_vi3_u003b((&param_720));
-                    param_721 = 1u;
-                    param_722 = 0u;
-                    param_723 = 0u;
+                    param_727 = _e842;
+                    let _e843 = getIndex_u0028_vi3_u003b((&param_727));
+                    param_728 = 1u;
+                    param_729 = 0u;
+                    param_730 = 0u;
                     let _e844 = moisture_5;
-                    param_724 = _e844;
-                    let _e845 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_721), (&param_722), (&param_723), (&param_724));
+                    param_731 = _e844;
+                    let _e845 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_728), (&param_729), (&param_730), (&param_731));
                     let _e846 = (*currentIndex_11);
-                    param_725 = _e846;
+                    param_732 = _e846;
                     let _e847 = (*rawValue_9);
-                    param_726 = _e847;
-                    param_727 = _e843;
-                    param_728 = _e845;
-                    let _e848 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_725), (&param_726), (&param_727), (&param_728));
+                    param_733 = _e847;
+                    param_734 = _e843;
+                    param_735 = _e845;
+                    let _e848 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_732), (&param_733), (&param_734), (&param_735));
                     if _e848 {
                         return;
                     }
@@ -7057,16 +7125,16 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
             let _e852 = (*pos_14);
             belowPos_9 = (_e852 + vec3<i32>(0i, -1i, 0i));
             let _e854 = belowPos_9;
-            param_729 = _e854;
-            let _e855 = getIndex_u0028_vi3_u003b((&param_729));
+            param_736 = _e854;
+            let _e855 = getIndex_u0028_vi3_u003b((&param_736));
             belowIndex_3 = _e855;
             let _e856 = belowIndex_3;
-            param_730 = _e856;
-            let _e857 = readCell_u0028_u1_u003b((&param_730));
+            param_737 = _e856;
+            let _e857 = readCell_u0028_u1_u003b((&param_737));
             belowValue_3 = _e857;
             let _e858 = belowValue_3;
-            param_731 = _e858;
-            let _e859 = getType_u0028_u1_u003b((&param_731));
+            param_738 = _e858;
+            let _e859 = getType_u0028_u1_u003b((&param_738));
             if (_e859 == 2u) {
                 let _e861 = (*randVal_11);
                 startDir_6 = i32((fract((_e861 * 8f)) * 8f));
@@ -7080,50 +7148,50 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
                         d_21 = (_e870 - (i32(floor((f32(_e870) / f32(8i)))) * 8i));
                         let _e878 = belowPos_9;
                         let _e879 = d_21;
-                        param_732 = _e879;
-                        let _e880 = getHDir_u0028_i1_u003b((&param_732));
+                        param_739 = _e879;
+                        let _e880 = getHDir_u0028_i1_u003b((&param_739));
                         pushPos_2 = (_e878 + _e880);
                         let _e883 = pushPos_2[0u];
                         let _e884 = (_e883 > 0i);
-                        phi_3040_ = _e884;
+                        phi_3058_ = _e884;
                         if _e884 {
                             let _e886 = pushPos_2[0u];
                             let _e888 = tuning.gridWidth;
-                            phi_3040_ = (_e886 < (bitcast<i32>(_e888) - 1i));
+                            phi_3058_ = (_e886 < (bitcast<i32>(_e888) - 1i));
                         }
-                        let _e893 = phi_3040_;
-                        phi_3046_ = _e893;
+                        let _e893 = phi_3058_;
+                        phi_3064_ = _e893;
                         if _e893 {
                             let _e895 = pushPos_2[2u];
-                            phi_3046_ = (_e895 > 0i);
+                            phi_3064_ = (_e895 > 0i);
                         }
-                        let _e898 = phi_3046_;
-                        phi_3056_ = _e898;
+                        let _e898 = phi_3064_;
+                        phi_3074_ = _e898;
                         if _e898 {
                             let _e900 = pushPos_2[2u];
                             let _e902 = tuning.gridDepth;
-                            phi_3056_ = (_e900 < (bitcast<i32>(_e902) - 1i));
+                            phi_3074_ = (_e900 < (bitcast<i32>(_e902) - 1i));
                         }
-                        let _e907 = phi_3056_;
+                        let _e907 = phi_3074_;
                         if _e907 {
-                            param_733 = 1u;
-                            param_734 = 0u;
-                            param_735 = 0u;
+                            param_740 = 1u;
+                            param_741 = 0u;
+                            param_742 = 0u;
                             let _e908 = moisture_5;
-                            param_736 = _e908;
-                            let _e909 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_733), (&param_734), (&param_735), (&param_736));
+                            param_743 = _e908;
+                            let _e909 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_740), (&param_741), (&param_742), (&param_743));
                             let _e910 = pushPos_2;
-                            param_737 = _e910;
-                            let _e911 = getIndex_u0028_vi3_u003b((&param_737));
+                            param_744 = _e910;
+                            let _e911 = getIndex_u0028_vi3_u003b((&param_744));
                             let _e912 = (*currentIndex_11);
-                            param_738 = _e912;
-                            param_739 = _e909;
+                            param_745 = _e912;
+                            param_746 = _e909;
                             let _e913 = belowIndex_3;
-                            param_740 = _e913;
+                            param_747 = _e913;
                             let _e914 = belowValue_3;
-                            param_741 = _e914;
-                            param_742 = _e911;
-                            let _e915 = tryDisplace_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_738), (&param_739), (&param_740), (&param_741), (&param_742));
+                            param_748 = _e914;
+                            param_749 = _e911;
+                            let _e915 = tryDisplace_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_745), (&param_746), (&param_747), (&param_748), (&param_749));
                             if _e915 {
                                 return;
                             }
@@ -7137,20 +7205,20 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
                         i_21 = (_e916 + 1i);
                     }
                 }
-                param_743 = 1u;
-                param_744 = 0u;
-                param_745 = 0u;
+                param_750 = 1u;
+                param_751 = 0u;
+                param_752 = 0u;
                 let _e918 = moisture_5;
-                param_746 = _e918;
-                let _e919 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_743), (&param_744), (&param_745), (&param_746));
+                param_753 = _e918;
+                let _e919 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_750), (&param_751), (&param_752), (&param_753));
                 let _e920 = (*currentIndex_11);
-                param_747 = _e920;
+                param_754 = _e920;
                 let _e921 = (*rawValue_9);
-                param_748 = _e921;
+                param_755 = _e921;
                 let _e922 = belowIndex_3;
-                param_749 = _e922;
-                param_750 = _e919;
-                let _e923 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_747), (&param_748), (&param_749), (&param_750));
+                param_756 = _e922;
+                param_757 = _e919;
+                let _e923 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_754), (&param_755), (&param_756), (&param_757));
                 if _e923 {
                     return;
                 }
@@ -7182,38 +7250,38 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
                     sPos_3 = _e957;
                     let _e959 = sPos_3[0u];
                     let _e960 = (_e959 > 0i);
-                    phi_3159_ = _e960;
+                    phi_3177_ = _e960;
                     if _e960 {
                         let _e962 = sPos_3[0u];
                         let _e964 = tuning.gridWidth;
-                        phi_3159_ = (_e962 < (bitcast<i32>(_e964) - 1i));
+                        phi_3177_ = (_e962 < (bitcast<i32>(_e964) - 1i));
                     }
-                    let _e969 = phi_3159_;
-                    phi_3165_ = _e969;
+                    let _e969 = phi_3177_;
+                    phi_3183_ = _e969;
                     if _e969 {
                         let _e971 = sPos_3[2u];
-                        phi_3165_ = (_e971 > 0i);
+                        phi_3183_ = (_e971 > 0i);
                     }
-                    let _e974 = phi_3165_;
-                    phi_3175_ = _e974;
+                    let _e974 = phi_3183_;
+                    phi_3193_ = _e974;
                     if _e974 {
                         let _e976 = sPos_3[2u];
                         let _e978 = tuning.gridDepth;
-                        phi_3175_ = (_e976 < (bitcast<i32>(_e978) - 1i));
+                        phi_3193_ = (_e976 < (bitcast<i32>(_e978) - 1i));
                     }
-                    let _e983 = phi_3175_;
+                    let _e983 = phi_3193_;
                     if _e983 {
                         let _e984 = sPos_3;
-                        param_751 = _e984;
-                        let _e985 = getIndex_u0028_vi3_u003b((&param_751));
+                        param_758 = _e984;
+                        let _e985 = getIndex_u0028_vi3_u003b((&param_758));
                         sIndex_1 = _e985;
                         let _e986 = sIndex_1;
-                        param_752 = _e986;
-                        let _e987 = readCell_u0028_u1_u003b((&param_752));
+                        param_759 = _e986;
+                        let _e987 = readCell_u0028_u1_u003b((&param_759));
                         sValue_1 = _e987;
                         let _e988 = sValue_1;
-                        param_753 = _e988;
-                        let _e989 = getType_u0028_u1_u003b((&param_753));
+                        param_760 = _e988;
+                        let _e989 = getType_u0028_u1_u003b((&param_760));
                         if (_e989 == 2u) {
                             let _e991 = (*randVal_11);
                             let _e993 = s_2;
@@ -7228,50 +7296,50 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
                                     d_22 = (_e1003 - (i32(floor((f32(_e1003) / f32(8i)))) * 8i));
                                     let _e1011 = sPos_3;
                                     let _e1012 = d_22;
-                                    param_754 = _e1012;
-                                    let _e1013 = getHDir_u0028_i1_u003b((&param_754));
+                                    param_761 = _e1012;
+                                    let _e1013 = getHDir_u0028_i1_u003b((&param_761));
                                     pushPos_3 = (_e1011 + _e1013);
                                     let _e1016 = pushPos_3[0u];
                                     let _e1017 = (_e1016 > 0i);
-                                    phi_3232_ = _e1017;
+                                    phi_3250_ = _e1017;
                                     if _e1017 {
                                         let _e1019 = pushPos_3[0u];
                                         let _e1021 = tuning.gridWidth;
-                                        phi_3232_ = (_e1019 < (bitcast<i32>(_e1021) - 1i));
+                                        phi_3250_ = (_e1019 < (bitcast<i32>(_e1021) - 1i));
                                     }
-                                    let _e1026 = phi_3232_;
-                                    phi_3238_ = _e1026;
+                                    let _e1026 = phi_3250_;
+                                    phi_3256_ = _e1026;
                                     if _e1026 {
                                         let _e1028 = pushPos_3[2u];
-                                        phi_3238_ = (_e1028 > 0i);
+                                        phi_3256_ = (_e1028 > 0i);
                                     }
-                                    let _e1031 = phi_3238_;
-                                    phi_3248_ = _e1031;
+                                    let _e1031 = phi_3256_;
+                                    phi_3266_ = _e1031;
                                     if _e1031 {
                                         let _e1033 = pushPos_3[2u];
                                         let _e1035 = tuning.gridDepth;
-                                        phi_3248_ = (_e1033 < (bitcast<i32>(_e1035) - 1i));
+                                        phi_3266_ = (_e1033 < (bitcast<i32>(_e1035) - 1i));
                                     }
-                                    let _e1040 = phi_3248_;
+                                    let _e1040 = phi_3266_;
                                     if _e1040 {
-                                        param_755 = 1u;
-                                        param_756 = 0u;
-                                        param_757 = 0u;
+                                        param_762 = 1u;
+                                        param_763 = 0u;
+                                        param_764 = 0u;
                                         let _e1041 = moisture_5;
-                                        param_758 = _e1041;
-                                        let _e1042 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_755), (&param_756), (&param_757), (&param_758));
+                                        param_765 = _e1041;
+                                        let _e1042 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_762), (&param_763), (&param_764), (&param_765));
                                         let _e1043 = pushPos_3;
-                                        param_759 = _e1043;
-                                        let _e1044 = getIndex_u0028_vi3_u003b((&param_759));
+                                        param_766 = _e1043;
+                                        let _e1044 = getIndex_u0028_vi3_u003b((&param_766));
                                         let _e1045 = (*currentIndex_11);
-                                        param_760 = _e1045;
-                                        param_761 = _e1042;
+                                        param_767 = _e1045;
+                                        param_768 = _e1042;
                                         let _e1046 = sIndex_1;
-                                        param_762 = _e1046;
+                                        param_769 = _e1046;
                                         let _e1047 = sValue_1;
-                                        param_763 = _e1047;
-                                        param_764 = _e1044;
-                                        let _e1048 = tryDisplace_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_760), (&param_761), (&param_762), (&param_763), (&param_764));
+                                        param_770 = _e1047;
+                                        param_771 = _e1044;
+                                        let _e1048 = tryDisplace_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_767), (&param_768), (&param_769), (&param_770), (&param_771));
                                         if _e1048 {
                                             return;
                                         }
@@ -7285,20 +7353,20 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
                                     i_22 = (_e1049 + 1i);
                                 }
                             }
-                            param_765 = 1u;
-                            param_766 = 0u;
-                            param_767 = 0u;
+                            param_772 = 1u;
+                            param_773 = 0u;
+                            param_774 = 0u;
                             let _e1051 = moisture_5;
-                            param_768 = _e1051;
-                            let _e1052 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_765), (&param_766), (&param_767), (&param_768));
+                            param_775 = _e1051;
+                            let _e1052 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_772), (&param_773), (&param_774), (&param_775));
                             let _e1053 = (*currentIndex_11);
-                            param_769 = _e1053;
+                            param_776 = _e1053;
                             let _e1054 = (*rawValue_9);
-                            param_770 = _e1054;
+                            param_777 = _e1054;
                             let _e1055 = sIndex_1;
-                            param_771 = _e1055;
-                            param_772 = _e1052;
-                            let _e1056 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_769), (&param_770), (&param_771), (&param_772));
+                            param_778 = _e1055;
+                            param_779 = _e1052;
+                            let _e1056 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_776), (&param_777), (&param_778), (&param_779));
                             if _e1056 {
                                 return;
                             }
@@ -7319,13 +7387,13 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
     newSleep_4 = min((_e1059 + 1u), 255u);
     let _e1062 = (*currentIndex_11);
     let _e1065 = (*rawValue_9);
-    param_773 = 1u;
-    param_774 = 0u;
+    param_780 = 1u;
+    param_781 = 0u;
     let _e1066 = newSleep_4;
-    param_775 = _e1066;
+    param_782 = _e1066;
     let _e1067 = moisture_5;
-    param_776 = _e1067;
-    let _e1068 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_773), (&param_774), (&param_775), (&param_776));
+    param_783 = _e1067;
+    let _e1068 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_780), (&param_781), (&param_782), (&param_783));
     let _e1069 = atomicCompareExchangeWeak((&unnamed.grid[_e1062]), _e1065, _e1068);
     return;
 }
@@ -7333,25 +7401,25 @@ fn updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b(pos_1
 fn orbitStep_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b(pos_15: ptr<function, vec3<i32>>, currentIndex_12: ptr<function, u32>, rawValue_10: ptr<function, u32>, stepDir: ptr<function, vec3<i32>>) -> bool {
     var target_2: vec3<i32>;
     var targetIndex_3: u32;
-    var param_777: vec3<i32>;
-    var param_778: u32;
-    var param_779: u32;
-    var param_780: u32;
-    var param_781: u32;
-    var param_782: u32;
-    var param_783: u32;
-    var param_784: u32;
+    var param_784: vec3<i32>;
     var param_785: u32;
     var param_786: u32;
     var param_787: u32;
     var param_788: u32;
     var param_789: u32;
     var param_790: u32;
-    var phi_1636_: bool;
-    var phi_1643_: bool;
-    var phi_1654_: bool;
-    var phi_1661_: bool;
-    var phi_1672_: bool;
+    var param_791: u32;
+    var param_792: u32;
+    var param_793: u32;
+    var param_794: u32;
+    var param_795: u32;
+    var param_796: u32;
+    var param_797: u32;
+    var phi_1655_: bool;
+    var phi_1662_: bool;
+    var phi_1673_: bool;
+    var phi_1680_: bool;
+    var phi_1691_: bool;
 
     let _e218 = (*stepDir);
     if all((_e218 == vec3<i32>(0i, 0i, 0i))) {
@@ -7362,76 +7430,76 @@ fn orbitStep_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b(pos_15: ptr<function, v
     target_2 = (_e221 + _e222);
     let _e225 = target_2[0u];
     let _e226 = (_e225 < 1i);
-    phi_1636_ = _e226;
+    phi_1655_ = _e226;
     if !(_e226) {
         let _e229 = target_2[0u];
         let _e231 = tuning.gridWidth;
-        phi_1636_ = (_e229 >= (bitcast<i32>(_e231) - 1i));
+        phi_1655_ = (_e229 >= (bitcast<i32>(_e231) - 1i));
     }
-    let _e236 = phi_1636_;
-    phi_1643_ = _e236;
+    let _e236 = phi_1655_;
+    phi_1662_ = _e236;
     if !(_e236) {
         let _e239 = target_2[1u];
-        phi_1643_ = (_e239 < 1i);
+        phi_1662_ = (_e239 < 1i);
     }
-    let _e242 = phi_1643_;
-    phi_1654_ = _e242;
+    let _e242 = phi_1662_;
+    phi_1673_ = _e242;
     if !(_e242) {
         let _e245 = target_2[1u];
         let _e247 = tuning.gridHeight;
-        phi_1654_ = (_e245 >= (bitcast<i32>(_e247) - 1i));
+        phi_1673_ = (_e245 >= (bitcast<i32>(_e247) - 1i));
     }
-    let _e252 = phi_1654_;
-    phi_1661_ = _e252;
+    let _e252 = phi_1673_;
+    phi_1680_ = _e252;
     if !(_e252) {
         let _e255 = target_2[2u];
-        phi_1661_ = (_e255 < 1i);
+        phi_1680_ = (_e255 < 1i);
     }
-    let _e258 = phi_1661_;
-    phi_1672_ = _e258;
+    let _e258 = phi_1680_;
+    phi_1691_ = _e258;
     if !(_e258) {
         let _e261 = target_2[2u];
         let _e263 = tuning.gridDepth;
-        phi_1672_ = (_e261 >= (bitcast<i32>(_e263) - 1i));
+        phi_1691_ = (_e261 >= (bitcast<i32>(_e263) - 1i));
     }
-    let _e268 = phi_1672_;
+    let _e268 = phi_1691_;
     if _e268 {
         return false;
     }
     let _e269 = target_2;
-    param_777 = _e269;
-    let _e270 = getIndex_u0028_vi3_u003b((&param_777));
+    param_784 = _e269;
+    let _e270 = getIndex_u0028_vi3_u003b((&param_784));
     targetIndex_3 = _e270;
     let _e271 = targetIndex_3;
-    param_778 = _e271;
-    let _e272 = readCell_u0028_u1_u003b((&param_778));
-    param_779 = _e272;
-    let _e273 = getType_u0028_u1_u003b((&param_779));
+    param_785 = _e271;
+    let _e272 = readCell_u0028_u1_u003b((&param_785));
+    param_786 = _e272;
+    let _e273 = getType_u0028_u1_u003b((&param_786));
     if (_e273 != 0u) {
         return false;
     }
     let _e275 = (*rawValue_10);
-    param_780 = _e275;
-    let _e276 = getType_u0028_u1_u003b((&param_780));
+    param_787 = _e275;
+    let _e276 = getType_u0028_u1_u003b((&param_787));
     let _e277 = (*rawValue_10);
-    param_781 = _e277;
-    let _e278 = getDir_u0028_u1_u003b((&param_781));
+    param_788 = _e277;
+    let _e278 = getDir_u0028_u1_u003b((&param_788));
     let _e279 = (*rawValue_10);
-    param_782 = _e279;
-    let _e280 = getAge_u0028_u1_u003b((&param_782));
-    param_783 = _e276;
-    param_784 = _e278;
-    param_785 = 0u;
-    param_786 = _e280;
-    let _e281 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_783), (&param_784), (&param_785), (&param_786));
+    param_789 = _e279;
+    let _e280 = getAge_u0028_u1_u003b((&param_789));
+    param_790 = _e276;
+    param_791 = _e278;
+    param_792 = 0u;
+    param_793 = _e280;
+    let _e281 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_790), (&param_791), (&param_792), (&param_793));
     let _e282 = (*currentIndex_12);
-    param_787 = _e282;
+    param_794 = _e282;
     let _e283 = (*rawValue_10);
-    param_788 = _e283;
+    param_795 = _e283;
     let _e284 = targetIndex_3;
-    param_789 = _e284;
-    param_790 = _e281;
-    let _e285 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_787), (&param_788), (&param_789), (&param_790));
+    param_796 = _e284;
+    param_797 = _e281;
+    let _e285 = tryMove_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_794), (&param_795), (&param_796), (&param_797));
     return _e285;
 }
 
@@ -7487,18 +7555,18 @@ fn bhOrbitAxis_u0028_vi3_u003b_vi3_u003b(center: ptr<function, vec3<i32>>, pos_1
     var radial: vec3<f32>;
     var planeCount_1: i32;
     var seed_1: f32;
-    var param_791: vec3<f32>;
+    var param_798: vec3<f32>;
     var best: vec3<f32>;
     var bestAlign: f32;
     var bestK: i32;
     var k_2: i32;
     var n_1: vec3<f32>;
-    var param_792: i32;
-    var param_793: i32;
-    var param_794: f32;
+    var param_799: i32;
+    var param_800: i32;
+    var param_801: f32;
     var align: f32;
     var sense: f32;
-    var param_795: vec3<f32>;
+    var param_802: vec3<f32>;
 
     let _e215 = (*pos_16);
     let _e216 = (*center);
@@ -7506,8 +7574,8 @@ fn bhOrbitAxis_u0028_vi3_u003b_vi3_u003b(center: ptr<function, vec3<i32>>, pos_1
     let _e221 = tuning.blackHoleOrbitPlanes;
     planeCount_1 = bitcast<i32>(clamp(_e221, 1u, 32u));
     let _e224 = (*center);
-    param_791 = (vec3<f32>(_e224) + vec3<f32>(29f, 3f, 71f));
-    let _e227 = hash_u0028_vf3_u003b((&param_791));
+    param_798 = (vec3<f32>(_e224) + vec3<f32>(29f, 3f, 71f));
+    let _e227 = hash_u0028_vf3_u003b((&param_798));
     seed_1 = (_e227 * 6.28318f);
     best = vec3<f32>(0f, 1f, 0f);
     bestAlign = 2f;
@@ -7518,12 +7586,12 @@ fn bhOrbitAxis_u0028_vi3_u003b_vi3_u003b(center: ptr<function, vec3<i32>>, pos_1
         let _e230 = planeCount_1;
         if (_e229 < _e230) {
             let _e232 = k_2;
-            param_792 = _e232;
+            param_799 = _e232;
             let _e233 = planeCount_1;
-            param_793 = _e233;
+            param_800 = _e233;
             let _e234 = seed_1;
-            param_794 = _e234;
-            let _e235 = bhPlaneNormal_u0028_i1_u003b_i1_u003b_f1_u003b((&param_792), (&param_793), (&param_794));
+            param_801 = _e234;
+            let _e235 = bhPlaneNormal_u0028_i1_u003b_i1_u003b_f1_u003b((&param_799), (&param_800), (&param_801));
             n_1 = _e235;
             let _e236 = n_1;
             let _e237 = radial;
@@ -7549,8 +7617,8 @@ fn bhOrbitAxis_u0028_vi3_u003b_vi3_u003b(center: ptr<function, vec3<i32>>, pos_1
     }
     let _e248 = (*center);
     let _e250 = bestK;
-    param_795 = (vec3<f32>(_e248) + vec3<f32>((f32(_e250) * 13f), 101f, 47f));
-    let _e255 = hash_u0028_vf3_u003b((&param_795));
+    param_802 = (vec3<f32>(_e248) + vec3<f32>((f32(_e250) * 13f), 101f, 47f));
+    let _e255 = hash_u0028_vf3_u003b((&param_802));
     sense = select(1f, -1f, (_e255 < 0.5f));
     let _e258 = best;
     let _e259 = sense;
@@ -7569,25 +7637,25 @@ fn bhBodyRadius_u0028_u1_u003b(level: ptr<function, u32>) -> f32 {
 
 fn updateOrbital_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b_i1_u003b_u1_u003b_b1_u003b_f1_u003b_f1_u003b(pos_17: ptr<function, vec3<i32>>, currentIndex_13: ptr<function, u32>, rawValue_11: ptr<function, u32>, center_1: ptr<function, vec3<i32>>, slot: ptr<function, i32>, level_1: ptr<function, u32>, purge: ptr<function, bool>, dist_1: ptr<function, f32>, randVal_12: ptr<function, f32>) {
     var type_37: u32;
-    var param_796: u32;
+    var param_803: u32;
     var sleep_2: u32;
-    var param_797: u32;
-    var param_798: u32;
-    var param_799: u32;
+    var param_804: u32;
+    var param_805: u32;
+    var param_806: u32;
     var orbitSpeed: f32;
     var local_27: f32;
     var infallChance: f32;
     var local_28: f32;
-    var param_800: u32;
-    var param_801: u32;
-    var param_802: u32;
-    var param_803: u32;
-    var param_804: u32;
-    var param_805: u32;
+    var param_807: u32;
+    var param_808: u32;
+    var param_809: u32;
+    var param_810: u32;
+    var param_811: u32;
+    var param_812: u32;
     var inward: vec3<f32>;
     var axis: vec3<f32>;
-    var param_806: vec3<i32>;
-    var param_807: vec3<i32>;
+    var param_813: vec3<i32>;
+    var param_814: vec3<i32>;
     var tangent: vec3<f32>;
     var tangentLen: f32;
     var axial: f32;
@@ -7595,64 +7663,64 @@ fn updateOrbital_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b_i1_u003b_u1_u003b_b
     var along: vec3<f32>;
     var pullIn: bool;
     var spiral: vec3<f32>;
-    var param_808: vec3<f32>;
-    var param_809: f32;
-    var param_810: vec3<i32>;
-    var param_811: u32;
-    var param_812: u32;
-    var param_813: vec3<i32>;
-    var param_814: vec3<f32>;
-    var param_815: f32;
-    var param_816: vec3<i32>;
-    var param_817: u32;
+    var param_815: vec3<f32>;
+    var param_816: f32;
+    var param_817: vec3<i32>;
     var param_818: u32;
-    var param_819: vec3<i32>;
-    var param_820: vec3<f32>;
-    var param_821: f32;
-    var param_822: vec3<i32>;
-    var param_823: u32;
+    var param_819: u32;
+    var param_820: vec3<i32>;
+    var param_821: vec3<f32>;
+    var param_822: f32;
+    var param_823: vec3<i32>;
     var param_824: u32;
-    var param_825: vec3<i32>;
-    var param_826: vec3<f32>;
-    var param_827: f32;
-    var param_828: vec3<i32>;
-    var param_829: u32;
+    var param_825: u32;
+    var param_826: vec3<i32>;
+    var param_827: vec3<f32>;
+    var param_828: f32;
+    var param_829: vec3<i32>;
     var param_830: u32;
-    var param_831: vec3<i32>;
-    var param_832: vec3<f32>;
-    var param_833: f32;
-    var param_834: vec3<i32>;
-    var param_835: u32;
+    var param_831: u32;
+    var param_832: vec3<i32>;
+    var param_833: vec3<f32>;
+    var param_834: f32;
+    var param_835: vec3<i32>;
     var param_836: u32;
-    var param_837: vec3<i32>;
-    var param_838: vec3<f32>;
-    var param_839: f32;
-    var param_840: vec3<i32>;
-    var param_841: u32;
+    var param_837: u32;
+    var param_838: vec3<i32>;
+    var param_839: vec3<f32>;
+    var param_840: f32;
+    var param_841: vec3<i32>;
     var param_842: u32;
-    var param_843: vec3<i32>;
-    var param_844: u32;
-    var param_845: u32;
-    var param_846: u32;
-    var param_847: u32;
+    var param_843: u32;
+    var param_844: vec3<i32>;
+    var param_845: vec3<f32>;
+    var param_846: f32;
+    var param_847: vec3<i32>;
     var param_848: u32;
     var param_849: u32;
-    var phi_1935_: bool;
+    var param_850: vec3<i32>;
+    var param_851: u32;
+    var param_852: u32;
+    var param_853: u32;
+    var param_854: u32;
+    var param_855: u32;
+    var param_856: u32;
+    var phi_1954_: bool;
 
     let _e276 = (*rawValue_11);
-    param_796 = _e276;
-    let _e277 = getType_u0028_u1_u003b((&param_796));
+    param_803 = _e276;
+    let _e277 = getType_u0028_u1_u003b((&param_803));
     type_37 = _e277;
     let _e278 = (*rawValue_11);
-    param_797 = _e278;
-    let _e279 = getSleep_u0028_u1_u003b((&param_797));
+    param_804 = _e278;
+    let _e279 = getSleep_u0028_u1_u003b((&param_804));
     sleep_2 = _e279;
     let _e280 = (*slot);
     unnamed_1.blackHoleStarve[_e280] = 0u;
     let _e283 = (*dist_1);
     let _e284 = (*level_1);
-    param_798 = _e284;
-    let _e285 = bhBodyRadius_u0028_u1_u003b((&param_798));
+    param_805 = _e284;
+    let _e285 = bhBodyRadius_u0028_u1_u003b((&param_805));
     let _e287 = tuning.blackHoleHorizon;
     if (_e283 <= (_e285 + f32(_e287))) {
         let _e291 = (*currentIndex_13);
@@ -7662,8 +7730,8 @@ fn updateOrbital_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b_i1_u003b_u1_u003b_b
         if (_e295.old_value == _e297) {
             let _e299 = (*slot);
             let _e302 = atomicLoad((&unnamed_1.blackHoles[_e299]));
-            param_799 = _e302;
-            let _e303 = bhIsPurge_u0028_u1_u003b((&param_799));
+            param_806 = _e302;
+            let _e303 = bhIsPurge_u0028_u1_u003b((&param_806));
             if !(_e303) {
                 let _e305 = (*slot);
                 let _e308 = atomicAdd((&unnamed_1.blackHoleMass[_e305]), 1u);
@@ -7704,17 +7772,17 @@ fn updateOrbital_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b_i1_u003b_u1_u003b_b
             let _e333 = (*currentIndex_13);
             let _e336 = (*rawValue_11);
             let _e337 = (*rawValue_11);
-            param_800 = _e337;
-            let _e338 = getDir_u0028_u1_u003b((&param_800));
+            param_807 = _e337;
+            let _e338 = getDir_u0028_u1_u003b((&param_807));
             let _e339 = (*rawValue_11);
-            param_801 = _e339;
-            let _e340 = getAge_u0028_u1_u003b((&param_801));
+            param_808 = _e339;
+            let _e340 = getAge_u0028_u1_u003b((&param_808));
             let _e341 = type_37;
-            param_802 = _e341;
-            param_803 = _e338;
-            param_804 = 0u;
-            param_805 = _e340;
-            let _e342 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_802), (&param_803), (&param_804), (&param_805));
+            param_809 = _e341;
+            param_810 = _e338;
+            param_811 = 0u;
+            param_812 = _e340;
+            let _e342 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_809), (&param_810), (&param_811), (&param_812));
             let _e343 = atomicCompareExchangeWeak((&unnamed.grid[_e333]), _e336, _e342);
         }
         return;
@@ -7723,10 +7791,10 @@ fn updateOrbital_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b_i1_u003b_u1_u003b_b
     let _e346 = (*pos_17);
     inward = normalize(vec3<f32>((_e345 - _e346)));
     let _e350 = (*center_1);
-    param_806 = _e350;
+    param_813 = _e350;
     let _e351 = (*pos_17);
-    param_807 = _e351;
-    let _e352 = bhOrbitAxis_u0028_vi3_u003b_vi3_u003b((&param_806), (&param_807));
+    param_814 = _e351;
+    let _e352 = bhOrbitAxis_u0028_vi3_u003b_vi3_u003b((&param_813), (&param_814));
     axis = _e352;
     let _e353 = axis;
     let _e354 = inward;
@@ -7760,98 +7828,98 @@ fn updateOrbital_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b_i1_u003b_u1_u003b_b
     let _e393 = tangent;
     spiral = normalize((_e392 + (_e393 * 0.6f)));
     let _e397 = pullIn;
-    phi_1935_ = _e397;
+    phi_1954_ = _e397;
     if _e397 {
         let _e398 = spiral;
-        param_808 = _e398;
-        param_809 = 0.55f;
-        let _e399 = dominantAxis_u0028_vf3_u003b_f1_u003b((&param_808), (&param_809));
+        param_815 = _e398;
+        param_816 = 0.55f;
+        let _e399 = dominantAxis_u0028_vf3_u003b_f1_u003b((&param_815), (&param_816));
         let _e400 = (*pos_17);
-        param_810 = _e400;
+        param_817 = _e400;
         let _e401 = (*currentIndex_13);
-        param_811 = _e401;
+        param_818 = _e401;
         let _e402 = (*rawValue_11);
-        param_812 = _e402;
-        param_813 = _e399;
-        let _e403 = orbitStep_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b((&param_810), (&param_811), (&param_812), (&param_813));
-        phi_1935_ = _e403;
+        param_819 = _e402;
+        param_820 = _e399;
+        let _e403 = orbitStep_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b((&param_817), (&param_818), (&param_819), (&param_820));
+        phi_1954_ = _e403;
     }
-    let _e405 = phi_1935_;
+    let _e405 = phi_1954_;
     if _e405 {
         return;
     }
     let _e406 = along;
-    param_814 = _e406;
-    param_815 = 0.55f;
-    let _e407 = dominantAxis_u0028_vf3_u003b_f1_u003b((&param_814), (&param_815));
+    param_821 = _e406;
+    param_822 = 0.55f;
+    let _e407 = dominantAxis_u0028_vf3_u003b_f1_u003b((&param_821), (&param_822));
     let _e408 = (*pos_17);
-    param_816 = _e408;
+    param_823 = _e408;
     let _e409 = (*currentIndex_13);
-    param_817 = _e409;
+    param_824 = _e409;
     let _e410 = (*rawValue_11);
-    param_818 = _e410;
-    param_819 = _e407;
-    let _e411 = orbitStep_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b((&param_816), (&param_817), (&param_818), (&param_819));
+    param_825 = _e410;
+    param_826 = _e407;
+    let _e411 = orbitStep_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b((&param_823), (&param_824), (&param_825), (&param_826));
     if _e411 {
         return;
     }
     let _e412 = along;
-    param_820 = _e412;
-    param_821 = 1f;
-    let _e413 = dominantAxis_u0028_vf3_u003b_f1_u003b((&param_820), (&param_821));
+    param_827 = _e412;
+    param_828 = 1f;
+    let _e413 = dominantAxis_u0028_vf3_u003b_f1_u003b((&param_827), (&param_828));
     let _e414 = (*pos_17);
-    param_822 = _e414;
+    param_829 = _e414;
     let _e415 = (*currentIndex_13);
-    param_823 = _e415;
+    param_830 = _e415;
     let _e416 = (*rawValue_11);
-    param_824 = _e416;
-    param_825 = _e413;
-    let _e417 = orbitStep_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b((&param_822), (&param_823), (&param_824), (&param_825));
+    param_831 = _e416;
+    param_832 = _e413;
+    let _e417 = orbitStep_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b((&param_829), (&param_830), (&param_831), (&param_832));
     if _e417 {
         return;
     }
     let _e418 = tangent;
-    param_826 = _e418;
-    param_827 = 1f;
-    let _e419 = dominantAxis_u0028_vf3_u003b_f1_u003b((&param_826), (&param_827));
+    param_833 = _e418;
+    param_834 = 1f;
+    let _e419 = dominantAxis_u0028_vf3_u003b_f1_u003b((&param_833), (&param_834));
     let _e420 = (*pos_17);
-    param_828 = _e420;
+    param_835 = _e420;
     let _e421 = (*currentIndex_13);
-    param_829 = _e421;
+    param_836 = _e421;
     let _e422 = (*rawValue_11);
-    param_830 = _e422;
-    param_831 = _e419;
-    let _e423 = orbitStep_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b((&param_828), (&param_829), (&param_830), (&param_831));
+    param_837 = _e422;
+    param_838 = _e419;
+    let _e423 = orbitStep_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b((&param_835), (&param_836), (&param_837), (&param_838));
     if _e423 {
         return;
     }
     let _e424 = inward;
-    param_832 = _e424;
-    param_833 = 0.55f;
-    let _e425 = dominantAxis_u0028_vf3_u003b_f1_u003b((&param_832), (&param_833));
+    param_839 = _e424;
+    param_840 = 0.55f;
+    let _e425 = dominantAxis_u0028_vf3_u003b_f1_u003b((&param_839), (&param_840));
     let _e426 = (*pos_17);
-    param_834 = _e426;
+    param_841 = _e426;
     let _e427 = (*currentIndex_13);
-    param_835 = _e427;
+    param_842 = _e427;
     let _e428 = (*rawValue_11);
-    param_836 = _e428;
-    param_837 = _e425;
-    let _e429 = orbitStep_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b((&param_834), (&param_835), (&param_836), (&param_837));
+    param_843 = _e428;
+    param_844 = _e425;
+    let _e429 = orbitStep_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b((&param_841), (&param_842), (&param_843), (&param_844));
     if _e429 {
         return;
     }
     let _e430 = inward;
-    param_838 = _e430;
-    param_839 = 1f;
-    let _e431 = dominantAxis_u0028_vf3_u003b_f1_u003b((&param_838), (&param_839));
+    param_845 = _e430;
+    param_846 = 1f;
+    let _e431 = dominantAxis_u0028_vf3_u003b_f1_u003b((&param_845), (&param_846));
     let _e432 = (*pos_17);
-    param_840 = _e432;
+    param_847 = _e432;
     let _e433 = (*currentIndex_13);
-    param_841 = _e433;
+    param_848 = _e433;
     let _e434 = (*rawValue_11);
-    param_842 = _e434;
-    param_843 = _e431;
-    let _e435 = orbitStep_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b((&param_840), (&param_841), (&param_842), (&param_843));
+    param_849 = _e434;
+    param_850 = _e431;
+    let _e435 = orbitStep_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b((&param_847), (&param_848), (&param_849), (&param_850));
     if _e435 {
         return;
     }
@@ -7860,17 +7928,17 @@ fn updateOrbital_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b_i1_u003b_u1_u003b_b
         let _e438 = (*currentIndex_13);
         let _e441 = (*rawValue_11);
         let _e442 = (*rawValue_11);
-        param_844 = _e442;
-        let _e443 = getDir_u0028_u1_u003b((&param_844));
+        param_851 = _e442;
+        let _e443 = getDir_u0028_u1_u003b((&param_851));
         let _e444 = (*rawValue_11);
-        param_845 = _e444;
-        let _e445 = getAge_u0028_u1_u003b((&param_845));
+        param_852 = _e444;
+        let _e445 = getAge_u0028_u1_u003b((&param_852));
         let _e446 = type_37;
-        param_846 = _e446;
-        param_847 = _e443;
-        param_848 = 0u;
-        param_849 = _e445;
-        let _e447 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_846), (&param_847), (&param_848), (&param_849));
+        param_853 = _e446;
+        param_854 = _e443;
+        param_855 = 0u;
+        param_856 = _e445;
+        let _e447 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_853), (&param_854), (&param_855), (&param_856));
         let _e448 = atomicCompareExchangeWeak((&unnamed.grid[_e438]), _e441, _e447);
     }
     return;
@@ -7880,7 +7948,7 @@ fn bhLevel_u0028_u1_u003b(mass: ptr<function, u32>) -> u32 {
     var level_2: u32;
     var l: u32;
     var r_5: f32;
-    var param_850: u32;
+    var param_857: u32;
     var volume: f32;
 
     level_2 = 0u;
@@ -7890,8 +7958,8 @@ fn bhLevel_u0028_u1_u003b(mass: ptr<function, u32>) -> u32 {
         let _e206 = tuning.blackHoleMaxLevel;
         if (_e204 <= min(_e206, 16u)) {
             let _e209 = l;
-            param_850 = _e209;
-            let _e210 = bhBodyRadius_u0028_u1_u003b((&param_850));
+            param_857 = _e209;
+            let _e210 = bhBodyRadius_u0028_u1_u003b((&param_857));
             r_5 = _e210;
             let _e211 = r_5;
             let _e213 = r_5;
@@ -7919,12 +7987,12 @@ fn bhLevel_u0028_u1_u003b(mass: ptr<function, u32>) -> u32 {
 }
 
 fn bhLevelFor_u0028_u1_u003b_u1_u003b(code_1: ptr<function, u32>, mass_1: ptr<function, u32>) -> u32 {
-    var param_851: u32;
-    var param_852: u32;
+    var param_858: u32;
+    var param_859: u32;
 
     let _e202 = (*code_1);
-    param_851 = _e202;
-    let _e203 = bhIsPurge_u0028_u1_u003b((&param_851));
+    param_858 = _e202;
+    let _e203 = bhIsPurge_u0028_u1_u003b((&param_858));
     if _e203 {
         let _e205 = tuning.purgeLevel;
         let _e207 = (*mass_1);
@@ -7932,8 +8000,8 @@ fn bhLevelFor_u0028_u1_u003b_u1_u003b(code_1: ptr<function, u32>, mass_1: ptr<fu
         return u32((f32(_e205) * clamp((f32(_e207) / f32(max(_e210, 1u))), 0f, 1f)));
     }
     let _e217 = (*mass_1);
-    param_852 = _e217;
-    let _e218 = bhLevel_u0028_u1_u003b((&param_852));
+    param_859 = _e217;
+    let _e218 = bhLevel_u0028_u1_u003b((&param_859));
     return _e218;
 }
 
@@ -7964,25 +8032,25 @@ fn captureByBlackHole_u0028_vi3_u003b_u1_u003b_u1_u003b_f1_u003b(pos_18: ptr<fun
     var i_24: i32;
     var code_3: u32;
     var center_2: vec3<i32>;
-    var param_853: u32;
+    var param_860: u32;
     var d_23: vec3<f32>;
     var distSq: f32;
     var purge_1: bool;
-    var param_854: u32;
+    var param_861: u32;
     var level_3: u32;
-    var param_855: u32;
-    var param_856: u32;
+    var param_862: u32;
+    var param_863: u32;
     var radius: f32;
     var local_29: f32;
-    var param_857: vec3<i32>;
-    var param_858: u32;
-    var param_859: u32;
-    var param_860: vec3<i32>;
-    var param_861: i32;
-    var param_862: u32;
-    var param_863: bool;
-    var param_864: f32;
-    var param_865: f32;
+    var param_864: vec3<i32>;
+    var param_865: u32;
+    var param_866: u32;
+    var param_867: vec3<i32>;
+    var param_868: i32;
+    var param_869: u32;
+    var param_870: bool;
+    var param_871: f32;
+    var param_872: f32;
 
     let _e232 = unnamed_1.blackHoleCount;
     if (_e232 == 0u) {
@@ -8011,8 +8079,8 @@ fn captureByBlackHole_u0028_vi3_u003b_u1_u003b_u1_u003b_f1_u003b(pos_18: ptr<fun
                 continue;
             }
             let _e252 = code_3;
-            param_853 = _e252;
-            let _e253 = bhDecode_u0028_u1_u003b((&param_853));
+            param_860 = _e252;
+            let _e253 = bhDecode_u0028_u1_u003b((&param_860));
             center_2 = _e253;
             let _e254 = center_2;
             let _e255 = (*pos_18);
@@ -8021,8 +8089,8 @@ fn captureByBlackHole_u0028_vi3_u003b_u1_u003b_u1_u003b_f1_u003b(pos_18: ptr<fun
             let _e259 = d_23;
             distSq = dot(_e258, _e259);
             let _e261 = code_3;
-            param_854 = _e261;
-            let _e262 = bhIsPurge_u0028_u1_u003b((&param_854));
+            param_861 = _e261;
+            let _e262 = bhIsPurge_u0028_u1_u003b((&param_861));
             purge_1 = _e262;
             let _e263 = purge_1;
             let _e265 = distSq;
@@ -8037,10 +8105,10 @@ fn captureByBlackHole_u0028_vi3_u003b_u1_u003b_u1_u003b_f1_u003b(pos_18: ptr<fun
             }
             let _e272 = i_24;
             let _e273 = code_3;
-            param_855 = _e273;
+            param_862 = _e273;
             let _e276 = atomicLoad((&unnamed_1.blackHoleMass[_e272]));
-            param_856 = _e276;
-            let _e277 = bhLevelFor_u0028_u1_u003b_u1_u003b((&param_855), (&param_856));
+            param_863 = _e276;
+            let _e277 = bhLevelFor_u0028_u1_u003b_u1_u003b((&param_862), (&param_863));
             level_3 = _e277;
             let _e278 = purge_1;
             if _e278 {
@@ -8082,23 +8150,23 @@ fn captureByBlackHole_u0028_vi3_u003b_u1_u003b_u1_u003b_f1_u003b(pos_18: ptr<fun
     }
     let _e299 = bestDistSq;
     let _e301 = (*pos_18);
-    param_857 = _e301;
+    param_864 = _e301;
     let _e302 = (*currentIndex_14);
-    param_858 = _e302;
+    param_865 = _e302;
     let _e303 = (*rawValue_12);
-    param_859 = _e303;
+    param_866 = _e303;
     let _e304 = bestCenter;
-    param_860 = _e304;
+    param_867 = _e304;
     let _e305 = bestSlot;
-    param_861 = _e305;
+    param_868 = _e305;
     let _e306 = bestLevel;
-    param_862 = _e306;
+    param_869 = _e306;
     let _e307 = bestPurge;
-    param_863 = _e307;
-    param_864 = sqrt(_e299);
+    param_870 = _e307;
+    param_871 = sqrt(_e299);
     let _e308 = (*randVal_13);
-    param_865 = _e308;
-    updateOrbital_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b_i1_u003b_u1_u003b_b1_u003b_f1_u003b_f1_u003b((&param_857), (&param_858), (&param_859), (&param_860), (&param_861), (&param_862), (&param_863), (&param_864), (&param_865));
+    param_872 = _e308;
+    updateOrbital_u0028_vi3_u003b_u1_u003b_u1_u003b_vi3_u003b_i1_u003b_u1_u003b_b1_u003b_f1_u003b_f1_u003b((&param_864), (&param_865), (&param_866), (&param_867), (&param_868), (&param_869), (&param_870), (&param_871), (&param_872));
     return true;
 }
 
@@ -8111,12 +8179,12 @@ fn cloudColumnBase_u0028_i1_u003b_i1_u003b(x_4: ptr<function, i32>, z_5: ptr<fun
 
 fn bhRegister_u0028_vi3_u003b(p_4: ptr<function, vec3<i32>>) -> bool {
     var code_4: u32;
-    var param_866: vec3<i32>;
+    var param_873: vec3<i32>;
     var i_25: i32;
 
     let _e202 = (*p_4);
-    param_866 = _e202;
-    let _e203 = getIndex_u0028_vi3_u003b((&param_866));
+    param_873 = _e202;
+    let _e203 = getIndex_u0028_vi3_u003b((&param_873));
     code_4 = (2147483648u | _e203);
     i_25 = 0i;
     loop {
@@ -8152,7 +8220,7 @@ fn writeCell_u0028_u1_u003b_u1_u003b(index_1: ptr<function, u32>, value_2: ptr<f
 }
 
 fn lavaSpawnCoolness_u0028_u1_u003b(type_38: ptr<function, u32>) -> u32 {
-    var param_867: u32;
+    var param_874: u32;
 
     let _e200 = (*type_38);
     if (_e200 == 12u) {
@@ -8160,8 +8228,8 @@ fn lavaSpawnCoolness_u0028_u1_u003b(type_38: ptr<function, u32>) -> u32 {
         return _e202;
     }
     let _e203 = (*type_38);
-    param_867 = _e203;
-    let _e204 = isLava_u0028_u1_u003b((&param_867));
+    param_874 = _e203;
+    let _e204 = isLava_u0028_u1_u003b((&param_874));
     if _e204 {
         let _e205 = (*type_38);
         let _e208 = tuning.lavaStageSize;
@@ -8171,11 +8239,11 @@ fn lavaSpawnCoolness_u0028_u1_u003b(type_38: ptr<function, u32>) -> u32 {
 }
 
 fn locustSpawnCount_u0028_u1_u003b(type_39: ptr<function, u32>) -> u32 {
-    var param_868: u32;
+    var param_875: u32;
 
     let _e200 = (*type_39);
-    param_868 = _e200;
-    let _e201 = isLocust_u0028_u1_u003b((&param_868));
+    param_875 = _e200;
+    let _e201 = isLocust_u0028_u1_u003b((&param_875));
     if !(_e201) {
         return 0u;
     }
@@ -8187,12 +8255,12 @@ fn locustSpawnCount_u0028_u1_u003b(type_39: ptr<function, u32>) -> u32 {
 
 fn bhRelease_u0028_vi3_u003b(p_5: ptr<function, vec3<i32>>) {
     var code_5: u32;
-    var param_869: vec3<i32>;
+    var param_876: vec3<i32>;
     var i_26: i32;
 
     let _e202 = (*p_5);
-    param_869 = _e202;
-    let _e203 = getIndex_u0028_vi3_u003b((&param_869));
+    param_876 = _e202;
+    let _e203 = getIndex_u0028_vi3_u003b((&param_876));
     code_5 = (2147483648u | _e203);
     i_26 = 0i;
     loop {
@@ -8219,9 +8287,9 @@ fn inBrush_u0028_vi3_u003b(pos_19: ptr<function, vec3<i32>>) -> bool {
     var center_3: vec3<f32>;
     var d_24: vec3<f32>;
     var radius_1: f32;
-    var phi_1397_: bool;
-    var phi_1419_: bool;
-    var phi_1440_: bool;
+    var phi_1416_: bool;
+    var phi_1438_: bool;
+    var phi_1459_: bool;
 
     let _e205 = pc.spawnSize;
     halfMin = (_e205 / 2i);
@@ -8231,14 +8299,14 @@ fn inBrush_u0028_vi3_u003b(pos_19: ptr<function, vec3<i32>>) -> bool {
     let _e214 = pc.spawnX;
     let _e215 = halfMin;
     let _e217 = (_e212 < (_e214 - _e215));
-    phi_1397_ = _e217;
+    phi_1416_ = _e217;
     if !(_e217) {
         let _e220 = (*pos_19)[0u];
         let _e222 = pc.spawnX;
         let _e223 = halfMax;
-        phi_1397_ = (_e220 > (_e222 + _e223));
+        phi_1416_ = (_e220 > (_e222 + _e223));
     }
-    let _e227 = phi_1397_;
+    let _e227 = phi_1416_;
     if _e227 {
         return false;
     }
@@ -8246,14 +8314,14 @@ fn inBrush_u0028_vi3_u003b(pos_19: ptr<function, vec3<i32>>) -> bool {
     let _e231 = pc.spawnY;
     let _e232 = halfMin;
     let _e234 = (_e229 < (_e231 - _e232));
-    phi_1419_ = _e234;
+    phi_1438_ = _e234;
     if !(_e234) {
         let _e237 = (*pos_19)[1u];
         let _e239 = pc.spawnY;
         let _e240 = halfMax;
-        phi_1419_ = (_e237 > (_e239 + _e240));
+        phi_1438_ = (_e237 > (_e239 + _e240));
     }
-    let _e244 = phi_1419_;
+    let _e244 = phi_1438_;
     if _e244 {
         return false;
     }
@@ -8261,14 +8329,14 @@ fn inBrush_u0028_vi3_u003b(pos_19: ptr<function, vec3<i32>>) -> bool {
     let _e248 = pc.spawnZ;
     let _e249 = halfMin;
     let _e251 = (_e246 < (_e248 - _e249));
-    phi_1440_ = _e251;
+    phi_1459_ = _e251;
     if !(_e251) {
         let _e254 = (*pos_19)[2u];
         let _e256 = pc.spawnZ;
         let _e257 = halfMax;
-        phi_1440_ = (_e254 > (_e256 + _e257));
+        phi_1459_ = (_e254 > (_e256 + _e257));
     }
-    let _e261 = phi_1440_;
+    let _e261 = phi_1459_;
     if _e261 {
         return false;
     }
@@ -8313,97 +8381,74 @@ fn tryMoveCloud_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b(fromIndex: ptr<functio
     return true;
 }
 
-fn getCloudSleep_u0028_u1_u003b(v_2: ptr<function, u32>) -> u32 {
-    let _e199 = (*v_2);
-    return ((_e199 >> bitcast<u32>(10i)) & 255u);
-}
-
-fn getCloudWait_u0028_u1_u003b(v_3: ptr<function, u32>) -> u32 {
-    let _e199 = (*v_3);
+fn getCloudWait_u0028_u1_u003b(v_5: ptr<function, u32>) -> u32 {
+    let _e199 = (*v_5);
     return ((_e199 >> bitcast<u32>(2i)) & 255u);
-}
-
-fn getCloudKind_u0028_u1_u003b(v_4: ptr<function, u32>) -> u32 {
-    let _e199 = (*v_4);
-    return (_e199 & 3u);
 }
 
 fn updateCloudBlock_u0028_vi3_u003b(pos_20: ptr<function, vec3<i32>>) {
     var idx_4: u32;
-    var param_870: vec3<i32>;
+    var param_877: vec3<i32>;
     var base: u32;
-    var param_871: i32;
-    var param_872: i32;
+    var param_878: i32;
+    var param_879: i32;
     var cell: u32;
     var kind_1: u32;
-    var param_873: u32;
+    var param_880: u32;
     var r_6: f32;
-    var param_874: vec3<f32>;
+    var param_881: vec3<f32>;
     var waitMax: u32;
     var newCell: u32;
-    var param_875: u32;
-    var param_876: u32;
-    var param_877: u32;
-    var wait_1: u32;
-    var param_878: u32;
-    var param_879: u32;
-    var param_880: u32;
-    var param_881: u32;
-    var g: u32;
     var param_882: u32;
     var param_883: u32;
     var param_884: u32;
     var param_885: u32;
     var param_886: u32;
     var param_887: u32;
-    var randVal_14: f32;
-    var param_888: vec3<f32>;
-    var sleep_3: u32;
+    var param_888: u32;
     var param_889: u32;
+    var wait_1: u32;
+    var param_890: u32;
+    var param_891: u32;
+    var param_892: u32;
+    var param_893: u32;
+    var g: u32;
+    var param_894: u32;
+    var param_895: u32;
+    var param_896: u32;
+    var param_897: u32;
+    var param_898: u32;
+    var param_899: u32;
+    var randVal_14: f32;
+    var param_900: vec3<f32>;
+    var sleep_3: u32;
+    var param_901: u32;
     var canRise: bool;
     var i_27: i32;
     var t_4: vec3<i32>;
     var local_30: vec3<i32>;
     var local_31: vec3<i32>;
     var local_32: vec3<i32>;
-    var param_890: vec3<i32>;
-    var param_891: u32;
-    var param_892: u32;
-    var param_893: u32;
-    var param_894: u32;
-    var param_895: u32;
-    var isClumped_2: bool;
-    var clump: u32;
-    var x_5: i32;
-    var y_2: i32;
-    var z_6: i32;
-    var n_2: vec3<i32>;
-    var param_896: vec3<i32>;
-    var param_897: u32;
-    var param_898: u32;
-    var param_899: u32;
-    var param_900: u32;
-    var param_901: u32;
-    var upIndex_1: u32;
     var param_902: vec3<i32>;
     var param_903: u32;
     var param_904: u32;
     var param_905: u32;
     var param_906: u32;
     var param_907: u32;
-    var param_908: u32;
+    var isClumped_2: bool;
+    var clump: u32;
+    var x_5: i32;
+    var y_2: i32;
+    var z_6: i32;
+    var n_2: vec3<i32>;
+    var param_908: vec3<i32>;
     var param_909: u32;
     var param_910: u32;
     var param_911: u32;
-    var dir_7: i32;
-    var slide1_: vec3<i32>;
-    var slide2_: vec3<i32>;
-    var i_28: i32;
-    var t_5: vec3<i32>;
-    var tIndex: u32;
-    var param_912: vec3<i32>;
+    var param_912: u32;
     var param_913: u32;
-    var param_914: u32;
+    var upIndex_1: u32;
+    var param_914: vec3<i32>;
     var param_915: u32;
     var param_916: u32;
     var param_917: u32;
@@ -8413,227 +8458,261 @@ fn updateCloudBlock_u0028_vi3_u003b(pos_20: ptr<function, vec3<i32>>) {
     var param_921: u32;
     var param_922: u32;
     var param_923: u32;
-    var param_924: u32;
+    var dir_7: i32;
+    var slide1_: vec3<i32>;
+    var slide2_: vec3<i32>;
+    var i_28: i32;
+    var t_5: vec3<i32>;
+    var tIndex: u32;
+    var param_924: vec3<i32>;
     var param_925: u32;
-    var phi_8671_: bool;
-    var phi_8857_: bool;
-    var phi_8864_: bool;
-    var phi_8874_: bool;
-    var phi_8921_: bool;
-    var phi_8979_: bool;
-    var phi_8986_: bool;
-    var phi_8996_: bool;
-    var phi_9003_: bool;
-    var phi_9013_: bool;
-    var phi_9152_: bool;
-    var phi_9159_: bool;
-    var phi_9169_: bool;
+    var param_926: u32;
+    var param_927: u32;
+    var param_928: u32;
+    var param_929: u32;
+    var param_930: u32;
+    var param_931: u32;
+    var param_932: u32;
+    var param_933: u32;
+    var param_934: u32;
+    var param_935: u32;
+    var param_936: u32;
+    var param_937: u32;
+    var phi_8724_: bool;
+    var phi_8928_: bool;
+    var phi_8935_: bool;
+    var phi_8945_: bool;
+    var phi_8992_: bool;
+    var phi_9050_: bool;
+    var phi_9057_: bool;
+    var phi_9067_: bool;
+    var phi_9074_: bool;
+    var phi_9084_: bool;
+    var phi_9223_: bool;
+    var phi_9230_: bool;
+    var phi_9240_: bool;
 
-    let _e285 = (*pos_20);
-    param_870 = _e285;
-    let _e286 = getIndex_u0028_vi3_u003b((&param_870));
-    idx_4 = _e286;
-    let _e288 = (*pos_20)[0u];
-    param_871 = _e288;
-    let _e290 = (*pos_20)[2u];
-    param_872 = _e290;
-    let _e291 = cloudColumnBase_u0028_i1_u003b_i1_u003b((&param_871), (&param_872));
-    base = _e291;
-    let _e293 = (*pos_20)[1u];
-    if (_e293 == 0i) {
-        let _e295 = base;
-        let _e297 = base;
-        let _e301 = atomicLoad((&unnamed_1.cloudColumn[(_e297 + 0u)]));
-        atomicStore((&unnamed_1.cloudColumn[(_e295 + 2u)]), _e301);
-        let _e304 = base;
-        let _e306 = base;
-        let _e310 = atomicLoad((&unnamed_1.cloudColumn[(_e306 + 1u)]));
-        atomicStore((&unnamed_1.cloudColumn[(_e304 + 3u)]), _e310);
-        let _e313 = base;
-        atomicStore((&unnamed_1.cloudColumn[(_e313 + 0u)]), 0u);
-        let _e317 = base;
-        atomicStore((&unnamed_1.cloudColumn[(_e317 + 1u)]), 0u);
+    let _e290 = (*pos_20);
+    param_877 = _e290;
+    let _e291 = getIndex_u0028_vi3_u003b((&param_877));
+    idx_4 = _e291;
+    let _e293 = (*pos_20)[0u];
+    param_878 = _e293;
+    let _e295 = (*pos_20)[2u];
+    param_879 = _e295;
+    let _e296 = cloudColumnBase_u0028_i1_u003b_i1_u003b((&param_878), (&param_879));
+    base = _e296;
+    let _e298 = (*pos_20)[1u];
+    if (_e298 == 0i) {
+        let _e300 = base;
+        let _e302 = base;
+        let _e306 = atomicLoad((&unnamed_1.cloudColumn[(_e302 + 0u)]));
+        atomicStore((&unnamed_1.cloudColumn[(_e300 + 2u)]), _e306);
+        let _e309 = base;
+        let _e311 = base;
+        let _e315 = atomicLoad((&unnamed_1.cloudColumn[(_e311 + 1u)]));
+        atomicStore((&unnamed_1.cloudColumn[(_e309 + 3u)]), _e315);
+        let _e318 = base;
+        atomicStore((&unnamed_1.cloudColumn[(_e318 + 0u)]), 0u);
+        let _e322 = base;
+        atomicStore((&unnamed_1.cloudColumn[(_e322 + 1u)]), 0u);
     }
-    let _e321 = idx_4;
-    let _e324 = atomicLoad((&unnamed_2.cloudCells[_e321]));
-    cell = _e324;
-    let _e325 = cell;
-    param_873 = _e325;
-    let _e326 = getCloudKind_u0028_u1_u003b((&param_873));
-    kind_1 = _e326;
-    let _e327 = kind_1;
-    if (_e327 == 0u) {
+    let _e326 = idx_4;
+    let _e329 = atomicLoad((&unnamed_2.cloudCells[_e326]));
+    cell = _e329;
+    let _e330 = cell;
+    param_880 = _e330;
+    let _e331 = getCloudKind_u0028_u1_u003b((&param_880));
+    kind_1 = _e331;
+    let _e332 = kind_1;
+    if (_e332 == 0u) {
         return;
     }
-    let _e330 = atomicAdd((&unnamed_1.cloudBlockCount), 1u);
-    let _e331 = base;
-    let _e335 = atomicAdd((&unnamed_1.cloudColumn[(_e331 + 0u)]), 1u);
+    let _e335 = atomicAdd((&unnamed_1.cloudBlockCount), 1u);
     let _e336 = base;
-    let _e341 = (*pos_20)[1u];
-    let _e343 = atomicMax((&unnamed_1.cloudColumn[(_e336 + 1u)]), bitcast<u32>(_e341));
-    let _e344 = kind_1;
-    let _e345 = (_e344 == 1u);
-    phi_8671_ = _e345;
-    if _e345 {
-        let _e347 = unnamed_1.rainPhase;
-        phi_8671_ = (_e347 == 2u);
-    }
-    let _e350 = phi_8671_;
+    let _e340 = atomicAdd((&unnamed_1.cloudColumn[(_e336 + 0u)]), 1u);
+    let _e341 = base;
+    let _e346 = (*pos_20)[1u];
+    let _e348 = atomicMax((&unnamed_1.cloudColumn[(_e341 + 1u)]), bitcast<u32>(_e346));
+    let _e349 = kind_1;
+    let _e350 = (_e349 == 1u);
+    phi_8724_ = _e350;
     if _e350 {
-        let _e351 = (*pos_20);
-        let _e354 = pc.time;
-        param_874 = (vec3<f32>(_e351) + vec3<f32>(_e354, 17f, 3f));
-        let _e357 = hash_u0028_vf3_u003b((&param_874));
-        r_6 = _e357;
-        let _e359 = tuning.stormWaitMaxTicks;
-        waitMax = clamp(_e359, 1u, 255u);
-        let _e361 = r_6;
-        let _e362 = waitMax;
-        param_875 = 2u;
-        param_876 = u32((_e361 * f32(_e362)));
-        param_877 = 0u;
-        let _e366 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_875), (&param_876), (&param_877));
-        newCell = _e366;
-        let _e367 = idx_4;
-        let _e370 = cell;
-        let _e371 = newCell;
-        let _e372 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e367]), _e370, _e371);
-        let _e374 = cell;
-        if (_e372.old_value != _e374) {
+        let _e352 = unnamed_1.rainPhase;
+        phi_8724_ = (_e352 == 2u);
+    }
+    let _e355 = phi_8724_;
+    if _e355 {
+        let _e356 = (*pos_20);
+        let _e359 = pc.time;
+        param_881 = (vec3<f32>(_e356) + vec3<f32>(_e359, 17f, 3f));
+        let _e362 = hash_u0028_vf3_u003b((&param_881));
+        r_6 = _e362;
+        let _e364 = tuning.stormWaitMaxTicks;
+        waitMax = clamp(_e364, 1u, 255u);
+        let _e366 = r_6;
+        let _e367 = waitMax;
+        param_882 = 2u;
+        param_883 = u32((_e366 * f32(_e367)));
+        param_884 = 0u;
+        let _e371 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_882), (&param_883), (&param_884));
+        newCell = _e371;
+        let _e372 = idx_4;
+        let _e375 = cell;
+        let _e376 = newCell;
+        let _e377 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e372]), _e375, _e376);
+        let _e379 = cell;
+        if (_e377.old_value != _e379) {
             return;
         }
-        let _e376 = newCell;
-        cell = _e376;
+        let _e381 = newCell;
+        cell = _e381;
         kind_1 = 2u;
     }
-    let _e378 = (*pos_20)[1u];
-    let _e380 = tuning.gridHeight;
-    if (_e378 >= (bitcast<i32>(_e380) - 2i)) {
-        let _e384 = kind_1;
-        if (_e384 != 2u) {
+    let _e383 = (*pos_20)[1u];
+    let _e385 = tuning.gridHeight;
+    if (_e383 >= (bitcast<i32>(_e385) - 2i)) {
+        let _e389 = kind_1;
+        if (_e389 != 2u) {
+            let _e391 = cell;
+            param_885 = _e391;
+            let _e392 = getCloudSleep_u0028_u1_u003b((&param_885));
+            if (_e392 < 255u) {
+                let _e394 = idx_4;
+                let _e397 = cell;
+                let _e398 = cell;
+                param_886 = _e398;
+                let _e399 = getCloudWait_u0028_u1_u003b((&param_886));
+                let _e400 = kind_1;
+                param_887 = _e400;
+                param_888 = _e399;
+                param_889 = 255u;
+                let _e401 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_887), (&param_888), (&param_889));
+                let _e402 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e394]), _e397, _e401);
+            }
             return;
         }
-        let _e386 = cell;
-        param_878 = _e386;
-        let _e387 = getCloudWait_u0028_u1_u003b((&param_878));
-        wait_1 = _e387;
-        let _e388 = wait_1;
-        if (_e388 > 0u) {
-            let _e390 = idx_4;
-            let _e393 = cell;
-            let _e394 = wait_1;
-            param_879 = 2u;
-            param_880 = (_e394 - 1u);
-            param_881 = 0u;
-            let _e396 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_879), (&param_880), (&param_881));
-            let _e397 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e390]), _e393, _e396);
+        let _e404 = cell;
+        param_890 = _e404;
+        let _e405 = getCloudWait_u0028_u1_u003b((&param_890));
+        wait_1 = _e405;
+        let _e406 = wait_1;
+        if (_e406 > 0u) {
+            let _e408 = idx_4;
+            let _e411 = cell;
+            let _e412 = wait_1;
+            param_891 = 2u;
+            param_892 = (_e412 - 1u);
+            param_893 = 0u;
+            let _e414 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_891), (&param_892), (&param_893));
+            let _e415 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e408]), _e411, _e414);
             return;
         }
-        let _e399 = idx_4;
-        param_882 = _e399;
-        let _e400 = readCell_u0028_u1_u003b((&param_882));
-        g = _e400;
-        let _e401 = g;
-        param_883 = _e401;
-        let _e402 = getType_u0028_u1_u003b((&param_883));
-        if (_e402 != 0u) {
+        let _e417 = idx_4;
+        param_894 = _e417;
+        let _e418 = readCell_u0028_u1_u003b((&param_894));
+        g = _e418;
+        let _e419 = g;
+        param_895 = _e419;
+        let _e420 = getType_u0028_u1_u003b((&param_895));
+        if (_e420 != 0u) {
             return;
         }
-        let _e404 = idx_4;
-        let _e407 = g;
-        param_884 = 2u;
-        param_885 = 0u;
-        param_886 = 0u;
-        param_887 = 0u;
-        let _e408 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_884), (&param_885), (&param_886), (&param_887));
-        let _e409 = atomicCompareExchangeWeak((&unnamed.grid[_e404]), _e407, _e408);
-        let _e411 = g;
-        if (_e409.old_value != _e411) {
+        let _e422 = idx_4;
+        let _e425 = g;
+        param_896 = 2u;
+        param_897 = 0u;
+        param_898 = 0u;
+        param_899 = 0u;
+        let _e426 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_896), (&param_897), (&param_898), (&param_899));
+        let _e427 = atomicCompareExchangeWeak((&unnamed.grid[_e422]), _e425, _e426);
+        let _e429 = g;
+        if (_e427.old_value != _e429) {
             return;
         }
-        let _e413 = idx_4;
-        let _e416 = cell;
-        let _e417 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e413]), _e416, 0u);
+        let _e431 = idx_4;
+        let _e434 = cell;
+        let _e435 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e431]), _e434, 0u);
         incWater_u0028_();
-        let _e420 = (*pos_20)[1u];
-        let _e423 = atomicLoad((&unnamed_1.maxOccupiedY));
-        if (bitcast<u32>(_e420) > _e423) {
-            let _e427 = (*pos_20)[1u];
-            let _e429 = atomicMax((&unnamed_1.maxOccupiedY), bitcast<u32>(_e427));
+        let _e438 = (*pos_20)[1u];
+        let _e441 = atomicLoad((&unnamed_1.maxOccupiedY));
+        if (bitcast<u32>(_e438) > _e441) {
+            let _e445 = (*pos_20)[1u];
+            let _e447 = atomicMax((&unnamed_1.maxOccupiedY), bitcast<u32>(_e445));
         }
         return;
     }
-    let _e430 = (*pos_20);
-    let _e433 = pc.time;
-    param_888 = (vec3<f32>(_e430) + vec3<f32>((_e433 * 2.3f), 7f, 13f));
-    let _e437 = hash_u0028_vf3_u003b((&param_888));
-    randVal_14 = _e437;
-    let _e438 = cell;
-    param_889 = _e438;
-    let _e439 = getCloudSleep_u0028_u1_u003b((&param_889));
-    sleep_3 = _e439;
+    let _e448 = (*pos_20);
+    let _e451 = pc.time;
+    param_900 = (vec3<f32>(_e448) + vec3<f32>((_e451 * 2.3f), 7f, 13f));
+    let _e455 = hash_u0028_vf3_u003b((&param_900));
+    randVal_14 = _e455;
+    let _e456 = cell;
+    param_901 = _e456;
+    let _e457 = getCloudSleep_u0028_u1_u003b((&param_901));
+    sleep_3 = _e457;
     canRise = false;
     i_27 = 0i;
     loop {
-        let _e440 = i_27;
-        let _e442 = canRise;
-        if ((_e440 < 5i) && !(_e442)) {
-            let _e445 = (*pos_20);
-            let _e446 = i_27;
-            if (_e446 == 0i) {
+        let _e458 = i_27;
+        let _e460 = canRise;
+        if ((_e458 < 5i) && !(_e460)) {
+            let _e463 = (*pos_20);
+            let _e464 = i_27;
+            if (_e464 == 0i) {
                 local_30 = vec3<i32>(0i, 1i, 0i);
             } else {
-                let _e448 = i_27;
-                if (_e448 == 1i) {
+                let _e466 = i_27;
+                if (_e466 == 1i) {
                     local_31 = vec3<i32>(1i, 1i, 0i);
                 } else {
-                    let _e450 = i_27;
-                    if (_e450 == 2i) {
+                    let _e468 = i_27;
+                    if (_e468 == 2i) {
                         local_32 = vec3<i32>(-1i, 1i, 0i);
                     } else {
-                        let _e452 = i_27;
-                        local_32 = select(vec3<i32>(0i, 1i, -1i), vec3<i32>(0i, 1i, 1i), vec3((_e452 == 3i)));
+                        let _e470 = i_27;
+                        local_32 = select(vec3<i32>(0i, 1i, -1i), vec3<i32>(0i, 1i, 1i), vec3((_e470 == 3i)));
                     }
-                    let _e456 = local_32;
-                    local_31 = _e456;
+                    let _e474 = local_32;
+                    local_31 = _e474;
                 }
-                let _e457 = local_31;
-                local_30 = _e457;
+                let _e475 = local_31;
+                local_30 = _e475;
             }
-            let _e458 = local_30;
-            t_4 = (_e445 + _e458);
-            let _e461 = t_4[0u];
-            let _e462 = (_e461 < 0i);
-            phi_8857_ = _e462;
-            if !(_e462) {
-                let _e465 = t_4[0u];
-                let _e467 = tuning.gridWidth;
-                phi_8857_ = (_e465 >= bitcast<i32>(_e467));
+            let _e476 = local_30;
+            t_4 = (_e463 + _e476);
+            let _e479 = t_4[0u];
+            let _e480 = (_e479 < 0i);
+            phi_8928_ = _e480;
+            if !(_e480) {
+                let _e483 = t_4[0u];
+                let _e485 = tuning.gridWidth;
+                phi_8928_ = (_e483 >= bitcast<i32>(_e485));
             }
-            let _e471 = phi_8857_;
-            phi_8864_ = _e471;
-            if !(_e471) {
-                let _e474 = t_4[2u];
-                phi_8864_ = (_e474 < 0i);
+            let _e489 = phi_8928_;
+            phi_8935_ = _e489;
+            if !(_e489) {
+                let _e492 = t_4[2u];
+                phi_8935_ = (_e492 < 0i);
             }
-            let _e477 = phi_8864_;
-            phi_8874_ = _e477;
-            if !(_e477) {
-                let _e480 = t_4[2u];
-                let _e482 = tuning.gridDepth;
-                phi_8874_ = (_e480 >= bitcast<i32>(_e482));
+            let _e495 = phi_8935_;
+            phi_8945_ = _e495;
+            if !(_e495) {
+                let _e498 = t_4[2u];
+                let _e500 = tuning.gridDepth;
+                phi_8945_ = (_e498 >= bitcast<i32>(_e500));
             }
-            let _e486 = phi_8874_;
-            if _e486 {
+            let _e504 = phi_8945_;
+            if _e504 {
                 continue;
             }
-            let _e487 = t_4;
-            param_890 = _e487;
-            let _e488 = getIndex_u0028_vi3_u003b((&param_890));
-            let _e491 = atomicLoad((&unnamed_2.cloudCells[_e488]));
-            param_891 = _e491;
-            let _e492 = getCloudKind_u0028_u1_u003b((&param_891));
-            if (_e492 == 0u) {
+            let _e505 = t_4;
+            param_902 = _e505;
+            let _e506 = getIndex_u0028_vi3_u003b((&param_902));
+            let _e509 = atomicLoad((&unnamed_2.cloudCells[_e506]));
+            param_903 = _e509;
+            let _e510 = getCloudKind_u0028_u1_u003b((&param_903));
+            if (_e510 == 0u) {
                 canRise = true;
             }
             continue;
@@ -8641,116 +8720,116 @@ fn updateCloudBlock_u0028_vi3_u003b(pos_20: ptr<function, vec3<i32>>) {
             break;
         }
         continuing {
-            let _e494 = i_27;
-            i_27 = (_e494 + 1i);
+            let _e512 = i_27;
+            i_27 = (_e512 + 1i);
         }
     }
-    let _e496 = canRise;
-    if !(_e496) {
-        let _e498 = idx_4;
-        let _e501 = cell;
-        let _e502 = cell;
-        param_892 = _e502;
-        let _e503 = getCloudWait_u0028_u1_u003b((&param_892));
-        let _e504 = sleep_3;
-        let _e507 = kind_1;
-        param_893 = _e507;
-        param_894 = _e503;
-        param_895 = min((_e504 + 1u), 255u);
-        let _e508 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_893), (&param_894), (&param_895));
-        let _e509 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e498]), _e501, _e508);
+    let _e514 = canRise;
+    if !(_e514) {
+        let _e516 = idx_4;
+        let _e519 = cell;
+        let _e520 = cell;
+        param_904 = _e520;
+        let _e521 = getCloudWait_u0028_u1_u003b((&param_904));
+        let _e522 = sleep_3;
+        let _e525 = kind_1;
+        param_905 = _e525;
+        param_906 = _e521;
+        param_907 = min((_e522 + 1u), 255u);
+        let _e526 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_905), (&param_906), (&param_907));
+        let _e527 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e516]), _e519, _e526);
         return;
     }
     isClumped_2 = false;
-    let _e511 = sleep_3;
-    let _e513 = tuning.wakeSleepThreshold;
-    let _e514 = (_e511 > _e513);
-    phi_8921_ = _e514;
-    if _e514 {
-        let _e516 = tuning.cloudClumpThreshold;
-        phi_8921_ = (_e516 > 0u);
+    let _e529 = sleep_3;
+    let _e531 = tuning.wakeSleepThreshold;
+    let _e532 = (_e529 > _e531);
+    phi_8992_ = _e532;
+    if _e532 {
+        let _e534 = tuning.cloudClumpThreshold;
+        phi_8992_ = (_e534 > 0u);
     }
-    let _e519 = phi_8921_;
-    if _e519 {
+    let _e537 = phi_8992_;
+    if _e537 {
         clump = 0u;
         x_5 = -1i;
         loop {
-            let _e520 = x_5;
-            if (_e520 <= 1i) {
+            let _e538 = x_5;
+            if (_e538 <= 1i) {
                 y_2 = -1i;
                 loop {
-                    let _e522 = y_2;
-                    if (_e522 <= 1i) {
+                    let _e540 = y_2;
+                    if (_e540 <= 1i) {
                         z_6 = -1i;
                         loop {
-                            let _e524 = z_6;
-                            if (_e524 <= 1i) {
-                                let _e526 = x_5;
-                                let _e528 = y_2;
-                                let _e531 = z_6;
-                                if (((_e526 == 0i) && (_e528 == 0i)) && (_e531 == 0i)) {
+                            let _e542 = z_6;
+                            if (_e542 <= 1i) {
+                                let _e544 = x_5;
+                                let _e546 = y_2;
+                                let _e549 = z_6;
+                                if (((_e544 == 0i) && (_e546 == 0i)) && (_e549 == 0i)) {
                                     continue;
                                 }
-                                let _e534 = (*pos_20);
-                                let _e535 = x_5;
-                                let _e536 = y_2;
-                                let _e537 = z_6;
-                                n_2 = (_e534 + vec3<i32>(_e535, _e536, _e537));
-                                let _e541 = n_2[0u];
-                                let _e542 = (_e541 < 0i);
-                                phi_8979_ = _e542;
-                                if !(_e542) {
-                                    let _e545 = n_2[0u];
-                                    let _e547 = tuning.gridWidth;
-                                    phi_8979_ = (_e545 >= bitcast<i32>(_e547));
+                                let _e552 = (*pos_20);
+                                let _e553 = x_5;
+                                let _e554 = y_2;
+                                let _e555 = z_6;
+                                n_2 = (_e552 + vec3<i32>(_e553, _e554, _e555));
+                                let _e559 = n_2[0u];
+                                let _e560 = (_e559 < 0i);
+                                phi_9050_ = _e560;
+                                if !(_e560) {
+                                    let _e563 = n_2[0u];
+                                    let _e565 = tuning.gridWidth;
+                                    phi_9050_ = (_e563 >= bitcast<i32>(_e565));
                                 }
-                                let _e551 = phi_8979_;
-                                phi_8986_ = _e551;
-                                if !(_e551) {
-                                    let _e554 = n_2[1u];
-                                    phi_8986_ = (_e554 < 0i);
+                                let _e569 = phi_9050_;
+                                phi_9057_ = _e569;
+                                if !(_e569) {
+                                    let _e572 = n_2[1u];
+                                    phi_9057_ = (_e572 < 0i);
                                 }
-                                let _e557 = phi_8986_;
-                                phi_8996_ = _e557;
-                                if !(_e557) {
-                                    let _e560 = n_2[1u];
-                                    let _e562 = tuning.gridHeight;
-                                    phi_8996_ = (_e560 >= bitcast<i32>(_e562));
+                                let _e575 = phi_9057_;
+                                phi_9067_ = _e575;
+                                if !(_e575) {
+                                    let _e578 = n_2[1u];
+                                    let _e580 = tuning.gridHeight;
+                                    phi_9067_ = (_e578 >= bitcast<i32>(_e580));
                                 }
-                                let _e566 = phi_8996_;
-                                phi_9003_ = _e566;
-                                if !(_e566) {
-                                    let _e569 = n_2[2u];
-                                    phi_9003_ = (_e569 < 0i);
+                                let _e584 = phi_9067_;
+                                phi_9074_ = _e584;
+                                if !(_e584) {
+                                    let _e587 = n_2[2u];
+                                    phi_9074_ = (_e587 < 0i);
                                 }
-                                let _e572 = phi_9003_;
-                                phi_9013_ = _e572;
-                                if !(_e572) {
-                                    let _e575 = n_2[2u];
-                                    let _e577 = tuning.gridDepth;
-                                    phi_9013_ = (_e575 >= bitcast<i32>(_e577));
+                                let _e590 = phi_9074_;
+                                phi_9084_ = _e590;
+                                if !(_e590) {
+                                    let _e593 = n_2[2u];
+                                    let _e595 = tuning.gridDepth;
+                                    phi_9084_ = (_e593 >= bitcast<i32>(_e595));
                                 }
-                                let _e581 = phi_9013_;
-                                if _e581 {
+                                let _e599 = phi_9084_;
+                                if _e599 {
                                     continue;
                                 }
-                                let _e582 = n_2;
-                                param_896 = _e582;
-                                let _e583 = getIndex_u0028_vi3_u003b((&param_896));
-                                let _e586 = atomicLoad((&unnamed_2.cloudCells[_e583]));
-                                param_897 = _e586;
-                                let _e587 = getCloudKind_u0028_u1_u003b((&param_897));
-                                if (_e587 != 0u) {
-                                    let _e589 = clump;
-                                    clump = (_e589 + bitcast<u32>(1i));
+                                let _e600 = n_2;
+                                param_908 = _e600;
+                                let _e601 = getIndex_u0028_vi3_u003b((&param_908));
+                                let _e604 = atomicLoad((&unnamed_2.cloudCells[_e601]));
+                                param_909 = _e604;
+                                let _e605 = getCloudKind_u0028_u1_u003b((&param_909));
+                                if (_e605 != 0u) {
+                                    let _e607 = clump;
+                                    clump = (_e607 + bitcast<u32>(1i));
                                 }
                                 continue;
                             } else {
                                 break;
                             }
                             continuing {
-                                let _e592 = z_6;
-                                z_6 = (_e592 + 1i);
+                                let _e610 = z_6;
+                                z_6 = (_e610 + 1i);
                             }
                         }
                         continue;
@@ -8758,8 +8837,8 @@ fn updateCloudBlock_u0028_vi3_u003b(pos_20: ptr<function, vec3<i32>>) {
                         break;
                     }
                     continuing {
-                        let _e594 = y_2;
-                        y_2 = (_e594 + 1i);
+                        let _e612 = y_2;
+                        y_2 = (_e612 + 1i);
                     }
                 }
                 continue;
@@ -8767,142 +8846,142 @@ fn updateCloudBlock_u0028_vi3_u003b(pos_20: ptr<function, vec3<i32>>) {
                 break;
             }
             continuing {
-                let _e596 = x_5;
-                x_5 = (_e596 + 1i);
+                let _e614 = x_5;
+                x_5 = (_e614 + 1i);
             }
         }
-        let _e598 = clump;
-        let _e600 = tuning.cloudClumpThreshold;
-        if (_e598 >= _e600) {
+        let _e616 = clump;
+        let _e618 = tuning.cloudClumpThreshold;
+        if (_e616 >= _e618) {
             isClumped_2 = true;
         }
     }
-    let _e602 = isClumped_2;
-    if _e602 {
-        let _e603 = idx_4;
-        let _e606 = cell;
-        let _e607 = cell;
-        param_898 = _e607;
-        let _e608 = getCloudWait_u0028_u1_u003b((&param_898));
-        let _e609 = sleep_3;
-        let _e612 = kind_1;
-        param_899 = _e612;
-        param_900 = _e608;
-        param_901 = min((_e609 + 1u), 255u);
-        let _e613 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_899), (&param_900), (&param_901));
-        let _e614 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e603]), _e606, _e613);
+    let _e620 = isClumped_2;
+    if _e620 {
+        let _e621 = idx_4;
+        let _e624 = cell;
+        let _e625 = cell;
+        param_910 = _e625;
+        let _e626 = getCloudWait_u0028_u1_u003b((&param_910));
+        let _e627 = sleep_3;
+        let _e630 = kind_1;
+        param_911 = _e630;
+        param_912 = _e626;
+        param_913 = min((_e627 + 1u), 255u);
+        let _e631 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_911), (&param_912), (&param_913));
+        let _e632 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e621]), _e624, _e631);
         return;
     }
-    let _e616 = (*pos_20);
-    param_902 = (_e616 + vec3<i32>(0i, 1i, 0i));
-    let _e618 = getIndex_u0028_vi3_u003b((&param_902));
-    upIndex_1 = _e618;
-    let _e619 = upIndex_1;
-    let _e622 = atomicLoad((&unnamed_2.cloudCells[_e619]));
-    param_903 = _e622;
-    let _e623 = getCloudKind_u0028_u1_u003b((&param_903));
-    if (_e623 == 0u) {
-        let _e625 = cell;
-        param_904 = _e625;
-        let _e626 = getCloudWait_u0028_u1_u003b((&param_904));
-        let _e627 = kind_1;
-        param_905 = _e627;
-        param_906 = _e626;
-        param_907 = 0u;
-        let _e628 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_905), (&param_906), (&param_907));
-        let _e629 = idx_4;
-        param_908 = _e629;
-        param_909 = _e628;
-        let _e630 = upIndex_1;
-        param_910 = _e630;
-        let _e631 = cell;
-        param_911 = _e631;
-        let _e632 = tryMoveCloud_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_908), (&param_909), (&param_910), (&param_911));
-        if _e632 {
-            let _e634 = atomicAdd((&unnamed_1.cloudMovedCount), 1u);
+    let _e634 = (*pos_20);
+    param_914 = (_e634 + vec3<i32>(0i, 1i, 0i));
+    let _e636 = getIndex_u0028_vi3_u003b((&param_914));
+    upIndex_1 = _e636;
+    let _e637 = upIndex_1;
+    let _e640 = atomicLoad((&unnamed_2.cloudCells[_e637]));
+    param_915 = _e640;
+    let _e641 = getCloudKind_u0028_u1_u003b((&param_915));
+    if (_e641 == 0u) {
+        let _e643 = cell;
+        param_916 = _e643;
+        let _e644 = getCloudWait_u0028_u1_u003b((&param_916));
+        let _e645 = kind_1;
+        param_917 = _e645;
+        param_918 = _e644;
+        param_919 = 0u;
+        let _e646 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_917), (&param_918), (&param_919));
+        let _e647 = idx_4;
+        param_920 = _e647;
+        param_921 = _e646;
+        let _e648 = upIndex_1;
+        param_922 = _e648;
+        let _e649 = cell;
+        param_923 = _e649;
+        let _e650 = tryMoveCloud_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_920), (&param_921), (&param_922), (&param_923));
+        if _e650 {
+            let _e652 = atomicAdd((&unnamed_1.cloudMovedCount), 1u);
             return;
         }
     }
-    let _e635 = randVal_14;
-    dir_7 = select(-1i, 1i, (fract((_e635 * 10f)) > 0.5f));
-    let _e640 = randVal_14;
-    if (fract((_e640 * 100f)) > 0.5f) {
-        let _e644 = (*pos_20);
-        let _e645 = dir_7;
-        slide1_ = (_e644 + vec3<i32>(_e645, 1i, 0i));
-        let _e648 = (*pos_20);
-        let _e649 = dir_7;
-        slide2_ = (_e648 + vec3<i32>(0i, 1i, _e649));
+    let _e653 = randVal_14;
+    dir_7 = select(-1i, 1i, (fract((_e653 * 10f)) > 0.5f));
+    let _e658 = randVal_14;
+    if (fract((_e658 * 100f)) > 0.5f) {
+        let _e662 = (*pos_20);
+        let _e663 = dir_7;
+        slide1_ = (_e662 + vec3<i32>(_e663, 1i, 0i));
+        let _e666 = (*pos_20);
+        let _e667 = dir_7;
+        slide2_ = (_e666 + vec3<i32>(0i, 1i, _e667));
     } else {
-        let _e652 = (*pos_20);
-        let _e653 = dir_7;
-        slide1_ = (_e652 + vec3<i32>(0i, 1i, _e653));
-        let _e656 = (*pos_20);
-        let _e657 = dir_7;
-        slide2_ = (_e656 + vec3<i32>(_e657, 1i, 0i));
+        let _e670 = (*pos_20);
+        let _e671 = dir_7;
+        slide1_ = (_e670 + vec3<i32>(0i, 1i, _e671));
+        let _e674 = (*pos_20);
+        let _e675 = dir_7;
+        slide2_ = (_e674 + vec3<i32>(_e675, 1i, 0i));
     }
     i_28 = 0i;
     loop {
-        let _e660 = i_28;
-        if (_e660 < 2i) {
-            let _e662 = i_28;
-            let _e664 = slide1_;
-            let _e665 = slide2_;
-            t_5 = select(_e665, _e664, vec3((_e662 == 0i)));
-            let _e669 = t_5[0u];
-            let _e670 = (_e669 < 0i);
-            phi_9152_ = _e670;
-            if !(_e670) {
-                let _e673 = t_5[0u];
-                let _e675 = tuning.gridWidth;
-                phi_9152_ = (_e673 >= bitcast<i32>(_e675));
+        let _e678 = i_28;
+        if (_e678 < 2i) {
+            let _e680 = i_28;
+            let _e682 = slide1_;
+            let _e683 = slide2_;
+            t_5 = select(_e683, _e682, vec3((_e680 == 0i)));
+            let _e687 = t_5[0u];
+            let _e688 = (_e687 < 0i);
+            phi_9223_ = _e688;
+            if !(_e688) {
+                let _e691 = t_5[0u];
+                let _e693 = tuning.gridWidth;
+                phi_9223_ = (_e691 >= bitcast<i32>(_e693));
             }
-            let _e679 = phi_9152_;
-            phi_9159_ = _e679;
-            if !(_e679) {
-                let _e682 = t_5[2u];
-                phi_9159_ = (_e682 < 0i);
+            let _e697 = phi_9223_;
+            phi_9230_ = _e697;
+            if !(_e697) {
+                let _e700 = t_5[2u];
+                phi_9230_ = (_e700 < 0i);
             }
-            let _e685 = phi_9159_;
-            phi_9169_ = _e685;
-            if !(_e685) {
-                let _e688 = t_5[2u];
-                let _e690 = tuning.gridDepth;
-                phi_9169_ = (_e688 >= bitcast<i32>(_e690));
+            let _e703 = phi_9230_;
+            phi_9240_ = _e703;
+            if !(_e703) {
+                let _e706 = t_5[2u];
+                let _e708 = tuning.gridDepth;
+                phi_9240_ = (_e706 >= bitcast<i32>(_e708));
             }
-            let _e694 = phi_9169_;
-            if _e694 {
+            let _e712 = phi_9240_;
+            if _e712 {
                 continue;
             }
-            let _e695 = t_5;
-            param_912 = _e695;
-            let _e696 = getIndex_u0028_vi3_u003b((&param_912));
-            tIndex = _e696;
-            let _e697 = tIndex;
-            let _e700 = atomicLoad((&unnamed_2.cloudCells[_e697]));
-            param_913 = _e700;
-            let _e701 = getCloudKind_u0028_u1_u003b((&param_913));
-            if (_e701 != 0u) {
+            let _e713 = t_5;
+            param_924 = _e713;
+            let _e714 = getIndex_u0028_vi3_u003b((&param_924));
+            tIndex = _e714;
+            let _e715 = tIndex;
+            let _e718 = atomicLoad((&unnamed_2.cloudCells[_e715]));
+            param_925 = _e718;
+            let _e719 = getCloudKind_u0028_u1_u003b((&param_925));
+            if (_e719 != 0u) {
                 continue;
             }
-            let _e703 = cell;
-            param_914 = _e703;
-            let _e704 = getCloudWait_u0028_u1_u003b((&param_914));
-            let _e705 = kind_1;
-            param_915 = _e705;
-            param_916 = _e704;
-            param_917 = 0u;
-            let _e706 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_915), (&param_916), (&param_917));
-            let _e707 = idx_4;
-            param_918 = _e707;
-            param_919 = _e706;
-            let _e708 = tIndex;
-            param_920 = _e708;
-            let _e709 = cell;
-            param_921 = _e709;
-            let _e710 = tryMoveCloud_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_918), (&param_919), (&param_920), (&param_921));
-            if _e710 {
-                let _e712 = atomicAdd((&unnamed_1.cloudMovedCount), 1u);
+            let _e721 = cell;
+            param_926 = _e721;
+            let _e722 = getCloudWait_u0028_u1_u003b((&param_926));
+            let _e723 = kind_1;
+            param_927 = _e723;
+            param_928 = _e722;
+            param_929 = 0u;
+            let _e724 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_927), (&param_928), (&param_929));
+            let _e725 = idx_4;
+            param_930 = _e725;
+            param_931 = _e724;
+            let _e726 = tIndex;
+            param_932 = _e726;
+            let _e727 = cell;
+            param_933 = _e727;
+            let _e728 = tryMoveCloud_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_930), (&param_931), (&param_932), (&param_933));
+            if _e728 {
+                let _e730 = atomicAdd((&unnamed_1.cloudMovedCount), 1u);
                 return;
             }
             continue;
@@ -8910,22 +8989,22 @@ fn updateCloudBlock_u0028_vi3_u003b(pos_20: ptr<function, vec3<i32>>) {
             break;
         }
         continuing {
-            let _e713 = i_28;
-            i_28 = (_e713 + 1i);
+            let _e731 = i_28;
+            i_28 = (_e731 + 1i);
         }
     }
-    let _e715 = idx_4;
-    let _e718 = cell;
-    let _e719 = cell;
-    param_922 = _e719;
-    let _e720 = getCloudWait_u0028_u1_u003b((&param_922));
-    let _e721 = sleep_3;
-    let _e724 = kind_1;
-    param_923 = _e724;
-    param_924 = _e720;
-    param_925 = min((_e721 + 1u), 255u);
-    let _e725 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_923), (&param_924), (&param_925));
-    let _e726 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e715]), _e718, _e725);
+    let _e733 = idx_4;
+    let _e736 = cell;
+    let _e737 = cell;
+    param_934 = _e737;
+    let _e738 = getCloudWait_u0028_u1_u003b((&param_934));
+    let _e739 = sleep_3;
+    let _e742 = kind_1;
+    param_935 = _e742;
+    param_936 = _e738;
+    param_937 = min((_e739 + 1u), 255u);
+    let _e743 = packCloud_u0028_u1_u003b_u1_u003b_u1_u003b((&param_935), (&param_936), (&param_937));
+    let _e744 = atomicCompareExchangeWeak((&unnamed_2.cloudCells[_e733]), _e736, _e743);
     return;
 }
 
@@ -8934,40 +9013,40 @@ fn updateSimState_u0028_() {
     var i_29: i32;
     var code_6: u32;
     var voxel: u32;
-    var param_926: u32;
-    var param_927: u32;
+    var param_938: u32;
+    var param_939: u32;
     var starve: u32;
     var purge_2: bool;
-    var param_928: u32;
+    var param_940: u32;
     var grace: u32;
     var local_33: u32;
     var decay: u32;
     var local_34: u32;
     var mass_2: u32;
-    var param_929: u32;
-    var param_930: u32;
+    var param_941: u32;
+    var param_942: u32;
     var liveClouds: u32;
     var chargeTarget: f32;
     var charge: f32;
     var crossedTime: f32;
-    var phi_7990_: bool;
-    var phi_7997_: bool;
-    var phi_8170_: bool;
+    var phi_8008_: bool;
+    var phi_8015_: bool;
+    var phi_8188_: bool;
 
     let _e219 = gl_GlobalInvocationID_1[0u];
     let _e220 = (_e219 != 0u);
-    phi_7990_ = _e220;
+    phi_8008_ = _e220;
     if !(_e220) {
         let _e223 = gl_GlobalInvocationID_1[1u];
-        phi_7990_ = (_e223 != 0u);
+        phi_8008_ = (_e223 != 0u);
     }
-    let _e226 = phi_7990_;
-    phi_7997_ = _e226;
+    let _e226 = phi_8008_;
+    phi_8015_ = _e226;
     if !(_e226) {
         let _e229 = gl_GlobalInvocationID_1[2u];
-        phi_7997_ = (_e229 != 0u);
+        phi_8015_ = (_e229 != 0u);
     }
-    let _e232 = phi_7997_;
+    let _e232 = phi_8015_;
     if _e232 {
         return;
     }
@@ -8986,10 +9065,10 @@ fn updateSimState_u0028_() {
             let _e241 = code_6;
             voxel = (_e241 & 1073741823u);
             let _e243 = voxel;
-            param_926 = _e243;
-            let _e244 = readCell_u0028_u1_u003b((&param_926));
-            param_927 = _e244;
-            let _e245 = getType_u0028_u1_u003b((&param_927));
+            param_938 = _e243;
+            let _e244 = readCell_u0028_u1_u003b((&param_938));
+            param_939 = _e244;
+            let _e245 = getType_u0028_u1_u003b((&param_939));
             if (_e245 != 7u) {
                 let _e247 = i_29;
                 atomicStore((&unnamed_1.blackHoles[_e247]), 0u);
@@ -9002,8 +9081,8 @@ fn updateSimState_u0028_() {
             let _e256 = starve;
             unnamed_1.blackHoleStarve[_e255] = _e256;
             let _e259 = code_6;
-            param_928 = _e259;
-            let _e260 = bhIsPurge_u0028_u1_u003b((&param_928));
+            param_940 = _e259;
+            let _e260 = bhIsPurge_u0028_u1_u003b((&param_940));
             purge_2 = _e260;
             let _e261 = purge_2;
             if _e261 {
@@ -9034,9 +9113,9 @@ fn updateSimState_u0028_() {
                 let _e280 = mass_2;
                 if (_e280 == 0u) {
                     let _e282 = voxel;
-                    param_929 = _e282;
-                    param_930 = 0u;
-                    writeCell_u0028_u1_u003b_u1_u003b((&param_929), (&param_930));
+                    param_941 = _e282;
+                    param_942 = 0u;
+                    writeCell_u0028_u1_u003b_u1_u003b((&param_941), (&param_942));
                     let _e283 = i_29;
                     atomicStore((&unnamed_1.blackHoles[_e283]), 0u);
                     continue;
@@ -9093,13 +9172,13 @@ fn updateSimState_u0028_() {
     if (_e344 == 0u) {
         let _e346 = liveClouds;
         let _e347 = (_e346 > 0u);
-        phi_8170_ = _e347;
+        phi_8188_ = _e347;
         if _e347 {
             let _e349 = unnamed_1.cloudStillTicks;
             let _e351 = tuning.cloudStillTicksToStorm;
-            phi_8170_ = (_e349 >= _e351);
+            phi_8188_ = (_e349 >= _e351);
         }
-        let _e354 = phi_8170_;
+        let _e354 = phi_8188_;
         if _e354 {
             unnamed_1.rainPhase = 1u;
             let _e357 = pc.time;
@@ -9135,90 +9214,78 @@ fn updateSimState_u0028_() {
 
 fn main_1() {
     var pos_21: vec3<i32>;
-    var param_931: vec3<i32>;
-    var param_932: vec3<i32>;
+    var param_943: vec3<i32>;
+    var param_944: vec3<i32>;
     var spawnIndex: u32;
-    var param_933: vec3<i32>;
+    var param_945: vec3<i32>;
     var oldType: u32;
-    var param_934: u32;
-    var param_935: u32;
-    var newType_3: u32;
-    var param_936: vec3<i32>;
-    var seedAge: u32;
-    var param_937: u32;
-    var local_35: u32;
-    var param_938: u32;
-    var param_939: u32;
-    var param_940: u32;
-    var param_941: u32;
-    var param_942: u32;
-    var param_943: u32;
-    var param_944: u32;
-    var param_945: u32;
-    var param_946: vec3<i32>;
+    var param_946: u32;
     var param_947: u32;
-    var param_948: u32;
-    var currentIndex_15: u32;
-    var param_949: vec3<i32>;
-    var rawValue_13: u32;
+    var newType_3: u32;
+    var param_948: vec3<i32>;
+    var seedAge: u32;
+    var param_949: u32;
+    var local_35: u32;
     var param_950: u32;
-    var currentType_1: u32;
     var param_951: u32;
-    var param_952: i32;
-    var param_953: i32;
-    var randVal_15: f32;
-    var param_954: vec3<f32>;
-    var param_955: vec3<i32>;
+    var param_952: u32;
+    var param_953: u32;
+    var param_954: u32;
+    var param_955: u32;
     var param_956: u32;
     var param_957: u32;
-    var param_958: f32;
-    var currentDir_6: u32;
+    var param_958: vec3<i32>;
     var param_959: u32;
-    var currentSleep_7: u32;
     var param_960: u32;
-    var currentAge_10: u32;
-    var param_961: u32;
-    var param_962: vec3<i32>;
+    var currentIndex_15: u32;
+    var param_961: vec3<i32>;
+    var rawValue_13: u32;
+    var param_962: u32;
+    var currentType_1: u32;
     var param_963: u32;
-    var param_964: u32;
-    var param_965: u32;
-    var param_966: u32;
-    var param_967: f32;
-    var param_968: vec3<i32>;
+    var param_964: i32;
+    var param_965: i32;
+    var randVal_15: f32;
+    var param_966: vec3<f32>;
+    var param_967: vec3<i32>;
+    var param_968: u32;
     var param_969: u32;
-    var param_970: u32;
+    var param_970: f32;
+    var currentDir_6: u32;
     var param_971: u32;
+    var currentSleep_7: u32;
     var param_972: u32;
+    var currentAge_10: u32;
     var param_973: u32;
-    var param_974: f32;
-    var param_975: vec3<i32>;
+    var param_974: vec3<i32>;
+    var param_975: u32;
     var param_976: u32;
     var param_977: u32;
     var param_978: u32;
-    var param_979: u32;
-    var param_980: u32;
-    var param_981: f32;
-    var param_982: vec3<i32>;
+    var param_979: f32;
+    var param_980: vec3<i32>;
+    var param_981: u32;
+    var param_982: u32;
     var param_983: u32;
     var param_984: u32;
     var param_985: u32;
-    var param_986: u32;
-    var param_987: u32;
-    var param_988: f32;
-    var param_989: vec3<i32>;
+    var param_986: f32;
+    var param_987: vec3<i32>;
+    var param_988: u32;
+    var param_989: u32;
     var param_990: u32;
     var param_991: u32;
     var param_992: u32;
-    var param_993: u32;
-    var param_994: f32;
-    var param_995: vec3<i32>;
+    var param_993: f32;
+    var param_994: vec3<i32>;
+    var param_995: u32;
     var param_996: u32;
     var param_997: u32;
     var param_998: u32;
     var param_999: u32;
-    var param_1000: u32;
-    var param_1001: f32;
-    var param_1002: vec3<i32>;
+    var param_1000: f32;
+    var param_1001: vec3<i32>;
+    var param_1002: u32;
     var param_1003: u32;
     var param_1004: u32;
     var param_1005: u32;
@@ -9234,71 +9301,83 @@ fn main_1() {
     var param_1015: u32;
     var param_1016: u32;
     var param_1017: u32;
-    var param_1018: u32;
-    var param_1019: f32;
-    var param_1020: vec3<i32>;
+    var param_1018: f32;
+    var param_1019: vec3<i32>;
+    var param_1020: u32;
     var param_1021: u32;
     var param_1022: u32;
     var param_1023: u32;
-    var param_1024: f32;
-    var phi_9242_: bool;
-    var phi_9252_: bool;
-    var phi_9268_: bool;
-    var phi_9367_: bool;
-    var phi_9374_: bool;
-    var phi_9385_: bool;
-    var phi_9392_: bool;
-    var phi_9403_: bool;
-    var phi_9426_: bool;
-    var phi_9436_: bool;
-    var phi_9494_: bool;
+    var param_1024: u32;
+    var param_1025: f32;
+    var param_1026: vec3<i32>;
+    var param_1027: u32;
+    var param_1028: u32;
+    var param_1029: u32;
+    var param_1030: u32;
+    var param_1031: f32;
+    var param_1032: vec3<i32>;
+    var param_1033: u32;
+    var param_1034: u32;
+    var param_1035: u32;
+    var param_1036: f32;
+    var phi_9313_: bool;
+    var phi_9323_: bool;
+    var phi_9339_: bool;
+    var phi_9438_: bool;
+    var phi_9445_: bool;
+    var phi_9456_: bool;
+    var phi_9463_: bool;
+    var phi_9474_: bool;
+    var phi_9497_: bool;
+    var phi_9507_: bool;
+    var phi_9565_: bool;
 
     let _e305 = gl_GlobalInvocationID_1;
     pos_21 = bitcast<vec3<i32>>(_e305);
     let _e308 = pos_21[0u];
     let _e310 = tuning.gridWidth;
     let _e312 = (_e308 >= bitcast<i32>(_e310));
-    phi_9242_ = _e312;
+    phi_9313_ = _e312;
     if !(_e312) {
         let _e315 = pos_21[1u];
         let _e317 = tuning.gridHeight;
-        phi_9242_ = (_e315 >= bitcast<i32>(_e317));
+        phi_9313_ = (_e315 >= bitcast<i32>(_e317));
     }
-    let _e321 = phi_9242_;
-    phi_9252_ = _e321;
+    let _e321 = phi_9313_;
+    phi_9323_ = _e321;
     if !(_e321) {
         let _e324 = pos_21[2u];
         let _e326 = tuning.gridDepth;
-        phi_9252_ = (_e324 >= bitcast<i32>(_e326));
+        phi_9323_ = (_e324 >= bitcast<i32>(_e326));
     }
-    let _e330 = phi_9252_;
+    let _e330 = phi_9323_;
     if _e330 {
         return;
     }
     updateSimState_u0028_();
     let _e331 = pos_21;
-    param_931 = _e331;
-    updateCloudBlock_u0028_vi3_u003b((&param_931));
+    param_943 = _e331;
+    updateCloudBlock_u0028_vi3_u003b((&param_943));
     let _e333 = pc.spawnActive;
     let _e334 = (_e333 == 1i);
-    phi_9268_ = _e334;
+    phi_9339_ = _e334;
     if _e334 {
         let _e335 = pos_21;
-        param_932 = _e335;
-        let _e336 = inBrush_u0028_vi3_u003b((&param_932));
-        phi_9268_ = _e336;
+        param_944 = _e335;
+        let _e336 = inBrush_u0028_vi3_u003b((&param_944));
+        phi_9339_ = _e336;
     }
-    let _e338 = phi_9268_;
+    let _e338 = phi_9339_;
     if _e338 {
         let _e339 = pos_21;
-        param_933 = _e339;
-        let _e340 = getIndex_u0028_vi3_u003b((&param_933));
+        param_945 = _e339;
+        let _e340 = getIndex_u0028_vi3_u003b((&param_945));
         spawnIndex = _e340;
         let _e341 = spawnIndex;
-        param_934 = _e341;
-        let _e342 = readCell_u0028_u1_u003b((&param_934));
-        param_935 = _e342;
-        let _e343 = getType_u0028_u1_u003b((&param_935));
+        param_946 = _e341;
+        let _e342 = readCell_u0028_u1_u003b((&param_946));
+        param_947 = _e342;
+        let _e343 = getType_u0028_u1_u003b((&param_947));
         oldType = _e343;
         let _e345 = pc.spawnType;
         newType_3 = bitcast<u32>(_e345);
@@ -9315,8 +9394,8 @@ fn main_1() {
                 let _e357 = oldType;
                 if (_e357 == 7u) {
                     let _e359 = pos_21;
-                    param_936 = _e359;
-                    bhRelease_u0028_vi3_u003b((&param_936));
+                    param_948 = _e359;
+                    bhRelease_u0028_vi3_u003b((&param_948));
                 }
                 let _e360 = newType_3;
                 if (_e360 == 2u) {
@@ -9324,117 +9403,117 @@ fn main_1() {
                 }
             }
             let _e362 = newType_3;
-            param_937 = _e362;
-            let _e363 = isLocust_u0028_u1_u003b((&param_937));
+            param_949 = _e362;
+            let _e363 = isLocust_u0028_u1_u003b((&param_949));
             if _e363 {
                 let _e364 = newType_3;
-                param_938 = _e364;
-                let _e365 = locustSpawnCount_u0028_u1_u003b((&param_938));
+                param_950 = _e364;
+                let _e365 = locustSpawnCount_u0028_u1_u003b((&param_950));
                 local_35 = _e365;
             } else {
                 let _e366 = newType_3;
-                param_939 = _e366;
-                let _e367 = lavaSpawnCoolness_u0028_u1_u003b((&param_939));
+                param_951 = _e366;
+                let _e367 = lavaSpawnCoolness_u0028_u1_u003b((&param_951));
                 local_35 = _e367;
             }
             let _e368 = local_35;
             seedAge = _e368;
             let _e369 = newType_3;
-            param_940 = _e369;
-            param_941 = 0u;
-            param_942 = 0u;
+            param_952 = _e369;
+            param_953 = 0u;
+            param_954 = 0u;
             let _e370 = seedAge;
-            param_943 = _e370;
-            let _e371 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_940), (&param_941), (&param_942), (&param_943));
+            param_955 = _e370;
+            let _e371 = pack_u0028_u1_u003b_u1_u003b_u1_u003b_u1_u003b((&param_952), (&param_953), (&param_954), (&param_955));
             let _e372 = spawnIndex;
-            param_944 = _e372;
-            param_945 = _e371;
-            writeCell_u0028_u1_u003b_u1_u003b((&param_944), (&param_945));
+            param_956 = _e372;
+            param_957 = _e371;
+            writeCell_u0028_u1_u003b_u1_u003b((&param_956), (&param_957));
             let _e373 = newType_3;
             if (_e373 == 7u) {
                 let _e375 = pos_21;
-                param_946 = _e375;
-                let _e376 = bhRegister_u0028_vi3_u003b((&param_946));
+                param_958 = _e375;
+                let _e376 = bhRegister_u0028_vi3_u003b((&param_958));
                 if !(_e376) {
                     let _e378 = spawnIndex;
-                    param_947 = _e378;
-                    param_948 = 0u;
-                    writeCell_u0028_u1_u003b_u1_u003b((&param_947), (&param_948));
+                    param_959 = _e378;
+                    param_960 = 0u;
+                    writeCell_u0028_u1_u003b_u1_u003b((&param_959), (&param_960));
                 }
             }
         }
     }
     let _e380 = pos_21[0u];
     let _e381 = (_e380 < 1i);
-    phi_9367_ = _e381;
+    phi_9438_ = _e381;
     if !(_e381) {
         let _e384 = pos_21[0u];
         let _e386 = tuning.gridWidth;
-        phi_9367_ = (_e384 >= (bitcast<i32>(_e386) - 1i));
+        phi_9438_ = (_e384 >= (bitcast<i32>(_e386) - 1i));
     }
-    let _e391 = phi_9367_;
-    phi_9374_ = _e391;
+    let _e391 = phi_9438_;
+    phi_9445_ = _e391;
     if !(_e391) {
         let _e394 = pos_21[1u];
-        phi_9374_ = (_e394 < 1i);
+        phi_9445_ = (_e394 < 1i);
     }
-    let _e397 = phi_9374_;
-    phi_9385_ = _e397;
+    let _e397 = phi_9445_;
+    phi_9456_ = _e397;
     if !(_e397) {
         let _e400 = pos_21[1u];
         let _e402 = tuning.gridHeight;
-        phi_9385_ = (_e400 >= (bitcast<i32>(_e402) - 1i));
+        phi_9456_ = (_e400 >= (bitcast<i32>(_e402) - 1i));
     }
-    let _e407 = phi_9385_;
-    phi_9392_ = _e407;
+    let _e407 = phi_9456_;
+    phi_9463_ = _e407;
     if !(_e407) {
         let _e410 = pos_21[2u];
-        phi_9392_ = (_e410 < 1i);
+        phi_9463_ = (_e410 < 1i);
     }
-    let _e413 = phi_9392_;
-    phi_9403_ = _e413;
+    let _e413 = phi_9463_;
+    phi_9474_ = _e413;
     if !(_e413) {
         let _e416 = pos_21[2u];
         let _e418 = tuning.gridDepth;
-        phi_9403_ = (_e416 >= (bitcast<i32>(_e418) - 1i));
+        phi_9474_ = (_e416 >= (bitcast<i32>(_e418) - 1i));
     }
-    let _e423 = phi_9403_;
+    let _e423 = phi_9474_;
     if _e423 {
         return;
     }
     let _e424 = pos_21;
-    param_949 = _e424;
-    let _e425 = getIndex_u0028_vi3_u003b((&param_949));
+    param_961 = _e424;
+    let _e425 = getIndex_u0028_vi3_u003b((&param_961));
     currentIndex_15 = _e425;
     let _e426 = currentIndex_15;
-    param_950 = _e426;
-    let _e427 = readCell_u0028_u1_u003b((&param_950));
+    param_962 = _e426;
+    let _e427 = readCell_u0028_u1_u003b((&param_962));
     rawValue_13 = _e427;
     let _e428 = rawValue_13;
-    param_951 = _e428;
-    let _e429 = getType_u0028_u1_u003b((&param_951));
+    param_963 = _e428;
+    let _e429 = getType_u0028_u1_u003b((&param_963));
     currentType_1 = _e429;
     let _e430 = currentType_1;
     let _e431 = (_e430 == 0u);
-    phi_9426_ = _e431;
+    phi_9497_ = _e431;
     if _e431 {
         let _e433 = unnamed_1.rainPhase;
-        phi_9426_ = (_e433 >= 1u);
+        phi_9497_ = (_e433 >= 1u);
     }
-    let _e436 = phi_9426_;
-    phi_9436_ = _e436;
+    let _e436 = phi_9497_;
+    phi_9507_ = _e436;
     if _e436 {
         let _e438 = pos_21[1u];
         let _e440 = tuning.gridHeight;
-        phi_9436_ = (_e438 == (bitcast<i32>(_e440) - 2i));
+        phi_9507_ = (_e438 == (bitcast<i32>(_e440) - 2i));
     }
-    let _e445 = phi_9436_;
+    let _e445 = phi_9507_;
     if _e445 {
         let _e447 = pos_21[0u];
-        param_952 = _e447;
+        param_964 = _e447;
         let _e449 = pos_21[2u];
-        param_953 = _e449;
-        let _e450 = cloudColumnBase_u0028_i1_u003b_i1_u003b((&param_952), (&param_953));
+        param_965 = _e449;
+        let _e450 = cloudColumnBase_u0028_i1_u003b_i1_u003b((&param_964), (&param_965));
         let _e454 = atomicLoad((&unnamed_1.cloudColumn[(_e450 + 2u)]));
         if (_e454 != 0u) {
             let _e457 = atomicAdd((&unnamed_1.rainCandidateCount), 1u);
@@ -9452,25 +9531,25 @@ fn main_1() {
     }
     let _e471 = pos_21;
     let _e474 = pc.time;
-    param_954 = (vec3<f32>(_e471) + vec3(_e474));
-    let _e477 = hash_u0028_vf3_u003b((&param_954));
+    param_966 = (vec3<f32>(_e471) + vec3(_e474));
+    let _e477 = hash_u0028_vf3_u003b((&param_966));
     randVal_15 = _e477;
     let _e478 = currentType_1;
     let _e479 = (_e478 != 7u);
-    phi_9494_ = _e479;
+    phi_9565_ = _e479;
     if _e479 {
         let _e480 = pos_21;
-        param_955 = _e480;
+        param_967 = _e480;
         let _e481 = currentIndex_15;
-        param_956 = _e481;
+        param_968 = _e481;
         let _e482 = rawValue_13;
-        param_957 = _e482;
+        param_969 = _e482;
         let _e483 = randVal_15;
-        param_958 = _e483;
-        let _e484 = captureByBlackHole_u0028_vi3_u003b_u1_u003b_u1_u003b_f1_u003b((&param_955), (&param_956), (&param_957), (&param_958));
-        phi_9494_ = _e484;
+        param_970 = _e483;
+        let _e484 = captureByBlackHole_u0028_vi3_u003b_u1_u003b_u1_u003b_f1_u003b((&param_967), (&param_968), (&param_969), (&param_970));
+        phi_9565_ = _e484;
     }
-    let _e486 = phi_9494_;
+    let _e486 = phi_9565_;
     if _e486 {
         return;
     }
@@ -9480,183 +9559,183 @@ fn main_1() {
         return;
     }
     let _e492 = rawValue_13;
-    param_959 = _e492;
-    let _e493 = getDir_u0028_u1_u003b((&param_959));
+    param_971 = _e492;
+    let _e493 = getDir_u0028_u1_u003b((&param_971));
     currentDir_6 = _e493;
     let _e494 = rawValue_13;
-    param_960 = _e494;
-    let _e495 = getSleep_u0028_u1_u003b((&param_960));
+    param_972 = _e494;
+    let _e495 = getSleep_u0028_u1_u003b((&param_972));
     currentSleep_7 = _e495;
     let _e496 = rawValue_13;
-    param_961 = _e496;
-    let _e497 = getAge_u0028_u1_u003b((&param_961));
+    param_973 = _e496;
+    let _e497 = getAge_u0028_u1_u003b((&param_973));
     currentAge_10 = _e497;
     let _e498 = currentType_1;
     switch bitcast<i32>(_e498) {
         case 1: {
             let _e500 = pos_21;
-            param_962 = _e500;
+            param_974 = _e500;
             let _e501 = currentIndex_15;
-            param_963 = _e501;
+            param_975 = _e501;
             let _e502 = rawValue_13;
-            param_964 = _e502;
+            param_976 = _e502;
             let _e503 = currentSleep_7;
-            param_965 = _e503;
+            param_977 = _e503;
             let _e504 = currentAge_10;
-            param_966 = _e504;
+            param_978 = _e504;
             let _e505 = randVal_15;
-            param_967 = _e505;
-            updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_962), (&param_963), (&param_964), (&param_965), (&param_966), (&param_967));
+            param_979 = _e505;
+            updateSand_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_974), (&param_975), (&param_976), (&param_977), (&param_978), (&param_979));
             break;
         }
         case 2: {
             let _e506 = pos_21;
-            param_968 = _e506;
+            param_980 = _e506;
             let _e507 = currentIndex_15;
-            param_969 = _e507;
+            param_981 = _e507;
             let _e508 = rawValue_13;
-            param_970 = _e508;
+            param_982 = _e508;
             let _e509 = currentDir_6;
-            param_971 = _e509;
+            param_983 = _e509;
             let _e510 = currentSleep_7;
-            param_972 = _e510;
+            param_984 = _e510;
             let _e511 = currentAge_10;
-            param_973 = _e511;
+            param_985 = _e511;
             let _e512 = randVal_15;
-            param_974 = _e512;
-            updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_968), (&param_969), (&param_970), (&param_971), (&param_972), (&param_973), (&param_974));
+            param_986 = _e512;
+            updateWater_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_980), (&param_981), (&param_982), (&param_983), (&param_984), (&param_985), (&param_986));
             break;
         }
         case 4: {
             let _e513 = pos_21;
-            param_975 = _e513;
+            param_987 = _e513;
             let _e514 = currentIndex_15;
-            param_976 = _e514;
+            param_988 = _e514;
             let _e515 = rawValue_13;
-            param_977 = _e515;
+            param_989 = _e515;
             let _e516 = currentDir_6;
-            param_978 = _e516;
+            param_990 = _e516;
             let _e517 = currentSleep_7;
-            param_979 = _e517;
+            param_991 = _e517;
             let _e518 = currentAge_10;
-            param_980 = _e518;
+            param_992 = _e518;
             let _e519 = randVal_15;
-            param_981 = _e519;
-            updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_975), (&param_976), (&param_977), (&param_978), (&param_979), (&param_980), (&param_981));
+            param_993 = _e519;
+            updateDirt_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_987), (&param_988), (&param_989), (&param_990), (&param_991), (&param_992), (&param_993));
             break;
         }
         case 5: {
             let _e520 = pos_21;
-            param_982 = _e520;
+            param_994 = _e520;
             let _e521 = currentIndex_15;
-            param_983 = _e521;
+            param_995 = _e521;
             let _e522 = rawValue_13;
-            param_984 = _e522;
+            param_996 = _e522;
             let _e523 = currentDir_6;
-            param_985 = _e523;
+            param_997 = _e523;
             let _e524 = currentSleep_7;
-            param_986 = _e524;
+            param_998 = _e524;
             let _e525 = currentAge_10;
-            param_987 = _e525;
+            param_999 = _e525;
             let _e526 = randVal_15;
-            param_988 = _e526;
-            updateFire_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_982), (&param_983), (&param_984), (&param_985), (&param_986), (&param_987), (&param_988));
+            param_1000 = _e526;
+            updateFire_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_994), (&param_995), (&param_996), (&param_997), (&param_998), (&param_999), (&param_1000));
             break;
         }
         case 6: {
             let _e527 = pos_21;
-            param_989 = _e527;
+            param_1001 = _e527;
             let _e528 = currentIndex_15;
-            param_990 = _e528;
+            param_1002 = _e528;
             let _e529 = rawValue_13;
-            param_991 = _e529;
+            param_1003 = _e529;
             let _e530 = currentSleep_7;
-            param_992 = _e530;
+            param_1004 = _e530;
             let _e531 = currentAge_10;
-            param_993 = _e531;
+            param_1005 = _e531;
             let _e532 = randVal_15;
-            param_994 = _e532;
-            updateSteam_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_989), (&param_990), (&param_991), (&param_992), (&param_993), (&param_994));
+            param_1006 = _e532;
+            updateSteam_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_1001), (&param_1002), (&param_1003), (&param_1004), (&param_1005), (&param_1006));
             break;
         }
         case 9, 10, 11, 8: {
             let _e533 = pos_21;
-            param_995 = _e533;
+            param_1007 = _e533;
             let _e534 = currentIndex_15;
-            param_996 = _e534;
+            param_1008 = _e534;
             let _e535 = rawValue_13;
-            param_997 = _e535;
+            param_1009 = _e535;
             let _e536 = currentDir_6;
-            param_998 = _e536;
+            param_1010 = _e536;
             let _e537 = currentSleep_7;
-            param_999 = _e537;
+            param_1011 = _e537;
             let _e538 = currentAge_10;
-            param_1000 = _e538;
+            param_1012 = _e538;
             let _e539 = randVal_15;
-            param_1001 = _e539;
-            updateLava_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_995), (&param_996), (&param_997), (&param_998), (&param_999), (&param_1000), (&param_1001));
+            param_1013 = _e539;
+            updateLava_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_1007), (&param_1008), (&param_1009), (&param_1010), (&param_1011), (&param_1012), (&param_1013));
             break;
         }
         case 12: {
             let _e540 = pos_21;
-            param_1002 = _e540;
+            param_1014 = _e540;
             let _e541 = currentIndex_15;
-            param_1003 = _e541;
+            param_1015 = _e541;
             let _e542 = rawValue_13;
-            param_1004 = _e542;
+            param_1016 = _e542;
             let _e543 = currentAge_10;
-            param_1005 = _e543;
+            param_1017 = _e543;
             let _e544 = randVal_15;
-            param_1006 = _e544;
-            updateDarkStone_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_1002), (&param_1003), (&param_1004), (&param_1005), (&param_1006));
+            param_1018 = _e544;
+            updateDarkStone_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_1014), (&param_1015), (&param_1016), (&param_1017), (&param_1018));
             break;
         }
         case 14, 15, 16, 17, 13: {
             let _e545 = pos_21;
-            param_1007 = _e545;
+            param_1019 = _e545;
             let _e546 = currentIndex_15;
-            param_1008 = _e546;
+            param_1020 = _e546;
             let _e547 = rawValue_13;
-            param_1009 = _e547;
+            param_1021 = _e547;
             let _e548 = currentDir_6;
-            param_1010 = _e548;
+            param_1022 = _e548;
             let _e549 = currentSleep_7;
-            param_1011 = _e549;
+            param_1023 = _e549;
             let _e550 = currentAge_10;
-            param_1012 = _e550;
+            param_1024 = _e550;
             let _e551 = randVal_15;
-            param_1013 = _e551;
-            updateLocust_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_1007), (&param_1008), (&param_1009), (&param_1010), (&param_1011), (&param_1012), (&param_1013));
+            param_1025 = _e551;
+            updateLocust_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_1019), (&param_1020), (&param_1021), (&param_1022), (&param_1023), (&param_1024), (&param_1025));
             break;
         }
         case 18: {
             let _e552 = pos_21;
-            param_1014 = _e552;
+            param_1026 = _e552;
             let _e553 = currentIndex_15;
-            param_1015 = _e553;
+            param_1027 = _e553;
             let _e554 = rawValue_13;
-            param_1016 = _e554;
+            param_1028 = _e554;
             let _e555 = currentDir_6;
-            param_1017 = _e555;
+            param_1029 = _e555;
             let _e556 = currentAge_10;
-            param_1018 = _e556;
+            param_1030 = _e556;
             let _e557 = randVal_15;
-            param_1019 = _e557;
-            updateTrunk_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_1014), (&param_1015), (&param_1016), (&param_1017), (&param_1018), (&param_1019));
+            param_1031 = _e557;
+            updateTrunk_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_1026), (&param_1027), (&param_1028), (&param_1029), (&param_1030), (&param_1031));
             break;
         }
         case 19: {
             let _e558 = pos_21;
-            param_1020 = _e558;
+            param_1032 = _e558;
             let _e559 = currentIndex_15;
-            param_1021 = _e559;
+            param_1033 = _e559;
             let _e560 = rawValue_13;
-            param_1022 = _e560;
+            param_1034 = _e560;
             let _e561 = currentAge_10;
-            param_1023 = _e561;
+            param_1035 = _e561;
             let _e562 = randVal_15;
-            param_1024 = _e562;
-            updateLeaf_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_1020), (&param_1021), (&param_1022), (&param_1023), (&param_1024));
+            param_1036 = _e562;
+            updateLeaf_u0028_vi3_u003b_u1_u003b_u1_u003b_u1_u003b_f1_u003b((&param_1032), (&param_1033), (&param_1034), (&param_1035), (&param_1036));
             break;
         }
         default: {
