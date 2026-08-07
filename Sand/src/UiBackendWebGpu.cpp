@@ -11,7 +11,26 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_wgpu.h>
 
+namespace {
+
+// What the renderer last reported, applied in newFrame. Held rather than applied immediately
+// because ImGui_ImplGlfw_NewFrame overwrites both values from GLFW every frame, so the correction
+// only survives if it happens after it and before ImGui::NewFrame. Written by UiBackendWebGpu and
+// read by UiBackend, which is why it sits above both rather than inside either.
+ImVec2 g_displaySize{};
+ImVec2 g_framebufferScale{};
+bool   g_haveMetrics = false;
+
+} // namespace
+
 namespace UiBackendWebGpu {
+
+void setDisplayMetrics(float cssWidth, float cssHeight, float fbWidth, float fbHeight) {
+    if (cssWidth <= 0.0f || cssHeight <= 0.0f || fbWidth <= 0.0f || fbHeight <= 0.0f) return;
+    g_displaySize = ImVec2(cssWidth, cssHeight);
+    g_framebufferScale = ImVec2(fbWidth / cssWidth, fbHeight / cssHeight);
+    g_haveMetrics = true;
+}
 
 void init(const InitInfo& info) {
     // InitForOther, not InitForVulkan: the GLFW backend's job here is only input and window
@@ -48,6 +67,14 @@ namespace UiBackend {
 void newFrame() {
     ImGui_ImplWGPU_NewFrame();
     ImGui_ImplGlfw_NewFrame();
+
+    // After the GLFW backend, deliberately: it has just written both of these from a window size
+    // that is not the canvas's. See UiBackendWebGpu::setDisplayMetrics.
+    if (g_haveMetrics) {
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = g_displaySize;
+        io.DisplayFramebufferScale = g_framebufferScale;
+    }
 }
 
 void shutdown() {

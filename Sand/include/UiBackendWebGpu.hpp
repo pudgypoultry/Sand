@@ -30,6 +30,24 @@ struct InitInfo {
 
 void init(const InitInfo& info);
 
+// FUNCTION: setDisplayMetrics
+// Tells ImGui how big the thing being drawn into actually is.
+//
+// It would not need telling if GLFW knew. ImGui's GLFW backend sets io.DisplaySize and
+// io.DisplayFramebufferScale from glfwGetWindowSize and glfwGetFramebufferSize every frame, and
+// under Emscripten those still report whatever glfwCreateWindow was asked for -- the canvas is
+// resized through the HTML5 API, which GLFW has no idea about. Everything ImGui's WebGPU backend
+// does is scaled from those two values, so a stale pair means a viewport and scissor sized for a
+// render target that does not exist, and WebGPU rejects the whole command buffer: no UI, and an
+// uncaptured error every frame.
+//
+// cssWidth/cssHeight are in CSS pixels, the space GLFW reports mouse positions in, so the UI stays
+// hit-testable. fbWidth/fbHeight are the real backing store. ImGui multiplies the two, which is
+// exactly where render.resolution_scale lives.
+//
+// No Vulkan counterpart: there the window is fixed and GLFW's numbers are true.
+void setDisplayMetrics(float cssWidth, float cssHeight, float fbWidth, float fbHeight);
+
 // Appends the UI's vertex data to a render pass. The Vulkan version takes a command buffer; here
 // it is the pass encoder, because WebGPU has no way to record draws outside a pass.
 void render(WGPURenderPassEncoder pass);

@@ -259,6 +259,28 @@ so `render.resolution_scale` at 0.5 quarters the most expensive thing the frame 
 most effective quality knob on a low-end machine. It is web-only for now: the desktop renders
 directly into the swapchain image and would need an offscreen target to honour it.
 
+**ImGui has to be told the size too, and told it every frame.** Resizing the canvas through the
+HTML5 API goes behind GLFW's back — `glfwGetWindowSize` still reports what `glfwCreateWindow` was
+asked for. ImGui's GLFW backend rewrites `io.DisplaySize` and `io.DisplayFramebufferScale` from
+those stale numbers at the top of every frame, and its WebGPU backend scales its viewport and every
+scissor rect from their product. The result was a scissor of 1600×1200 against a 1567×983 target,
+which WebGPU rejects — invalidating the whole command buffer, so nothing drew at all and an
+uncaptured error arrived every frame.
+
+`UiBackendWebGpu::setDisplayMetrics` overrides both, after `ImGui_ImplGlfw_NewFrame` and before
+`ImGui::NewFrame`, which is the only window where the correction survives. `DisplaySize` is the CSS
+size, because that is the space GLFW reports mouse positions in and ImGui hit-tests in;
+`DisplayFramebufferScale` carries `render.resolution_scale`, since ImGui multiplies the two to get
+pixels. The rounding was checked exhaustively rather than reasoned about — across every canvas size
+to 3840×2160 and nine scale factors, the derived framebuffer size is never larger than the target
+(which is the direction that throws) and at worst one pixel smaller. There is no Vulkan counterpart:
+that window is fixed, so GLFW's numbers are true.
+
+One consequence worth knowing: below 1.0 the UI is drawn into the reduced target and upscaled with
+everything else, so it softens along with the scene. Keeping it sharp means rendering the raymarch
+to an offscreen texture and compositing the UI at native size — a second render target and a blit,
+which is more than this knob is worth today.
+
 **The same size confusion had already broken clicking, silently.** `Window::getMouseNdcX/Y` divide
 the cursor position by the window's dimensions, which were set once in the constructor and never
 updated. On the desktop that is correct by construction — `GLFW_RESIZABLE` is `GLFW_FALSE`, so the

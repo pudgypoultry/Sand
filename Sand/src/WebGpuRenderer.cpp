@@ -677,6 +677,12 @@ void WebGpuRenderer::syncCanvasSize() {
     want_w = std::min(want_w, 8192u);
     want_h = std::min(want_h, 8192u);
 
+    // ImGui needs both numbers, and needs them every frame rather than only when they change: its
+    // GLFW backend rewrites them from the stale window size at the top of each one. Reported before
+    // the early-out for the same reason -- "nothing to resize" is not "nothing to tell ImGui".
+    UiBackendWebGpu::setDisplayMetrics((float)cssWidth, (float)cssHeight,
+                                       (float)want_w, (float)want_h);
+
     if (want_w == configuredWidth && want_h == configuredHeight) return;
 
     // The element's own attributes, not just the surface: the surface presents into the canvas's
