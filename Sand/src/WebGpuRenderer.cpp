@@ -315,9 +315,18 @@ void WebGpuRenderer::createWorldBuffers() {
     // Variable length: the fixed scalars and the black hole table, then four words per column of
     // cloud census. Resized with the world, which is why createWorldBuffers owns it.
     desc.label = sv("stats");
+    desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst | WGPUBufferUsage_CopySrc;
     desc.size = (uint64_t)SimStats::statsWordCount(config.tuning.gridWidth, config.tuning.gridDepth)
               * sizeof(uint32_t);
     statsBuffer = wgpuDeviceCreateBuffer(device, &desc);
+
+    // Only the scalars, not the whole variable-length block -- the profiler wants three of them and
+    // the per-column census behind them is megabytes.
+    desc.label = sv("stats readback");
+    desc.usage = WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst;
+    desc.size = (uint64_t)SimStats::kCloudScalarCount * sizeof(uint32_t);
+    statsReadback = wgpuDeviceCreateBuffer(device, &desc);
+    readbackPending = false;
 
     // Uniform buffer sizes are rounded up to 16: WebGPU requires the binding size to be a multiple
     // of it, and TuningParams (99 scalars, 396 bytes) is not.
@@ -376,6 +385,8 @@ void WebGpuRenderer::resetWorld() {
     // Every counter to zero, with the one exception the desktop also makes: maxOccupiedY starts at
     // the roof. Over-reporting it only costs the renderer some empty sky to march, while
     // under-reporting hides matter that is really there.
+    uiManager.resetTicks();
+
     std::vector<uint32_t> stats(
         SimStats::statsWordCount(config.tuning.gridWidth, config.tuning.gridDepth), 0u);
     stats[SimStats::kMaxY] = config.tuning.gridHeight;
@@ -582,6 +593,10 @@ void WebGpuRenderer::releaseWorldBuffers() {
     if (gridBuffer)  { wgpuBufferDestroy(gridBuffer);  wgpuBufferRelease(gridBuffer);  gridBuffer = nullptr; }
     if (cloudBuffer) { wgpuBufferDestroy(cloudBuffer); wgpuBufferRelease(cloudBuffer); cloudBuffer = nullptr; }
     if (statsBuffer) { wgpuBufferDestroy(statsBuffer); wgpuBufferRelease(statsBuffer); statsBuffer = nullptr; }
+    // Destroyed even with a map in flight: the callback checks the pending flag, which
+    // releaseWorldBuffers clears, so a late completion for a buffer that is gone does nothing.
+    if (statsReadback) { wgpuBufferDestroy(statsReadback); wgpuBufferRelease(statsReadback); statsReadback = nullptr; }
+    readbackPending = false;
 }
 
 // beginPurge: what Clear Grid does -- one enormous black hole at the centre, eating the world.
@@ -726,6 +741,63 @@ void WebGpuRenderer::syncCanvasSize() {
     configureSurface(want_w, want_h);
 }
 
+// pollSimState: brings the simulation's weather counters back to the CPU for the profiler.
+//
+// The desktop reads the same three numbers straight off host-visible memory. WebGPU has no such
+// thing for a storage buffer, so this is the whole dance: copy the scalars into a MapRead buffer,
+// submit, ask to map it, and take delivery whenever the browser gets round to it.
+//
+// Self-throttling by construction. readbackPending gates both the copy and the map, so at most one
+// request is ever in flight and the map's own latency sets the rate -- there is no frame counter to
+// tune, and a slow frame cannot pile requests up behind itself. Copying into a buffer that is
+// currently mapped is invalid, which is the other reason that flag guards the copy and not just the
+// map.
+void WebGpuRenderer::pollSimState() {
+    if (!statsReadback || !statsBuffer || readbackPending) return;
+
+    const uint64_t bytes = (uint64_t)SimStats::kCloudScalarCount * sizeof(uint32_t);
+
+    WGPUCommandEncoderDescriptor encDesc = WGPU_COMMAND_ENCODER_DESCRIPTOR_INIT;
+    encDesc.label = sv("stats readback");
+    WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+    wgpuCommandEncoderCopyBufferToBuffer(enc, statsBuffer, 0, statsReadback, 0, bytes);
+
+    WGPUCommandBufferDescriptor cbDesc = WGPU_COMMAND_BUFFER_DESCRIPTOR_INIT;
+    WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc, &cbDesc);
+    wgpuQueueSubmit(queue, 1, &cb);
+    wgpuCommandBufferRelease(cb);
+    wgpuCommandEncoderRelease(enc);
+
+    readbackPending = true;
+
+    WGPUBufferMapCallbackInfo cbInfo = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
+    // AllowSpontaneous for the same reason every other callback here uses it: nothing in this
+    // program ever calls wgpuInstanceProcessEvents, so the browser's event loop is what must be
+    // allowed to deliver it.
+    cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    cbInfo.userdata1 = this;
+    cbInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* userdata1, void*) {
+        auto* self = static_cast<WebGpuRenderer*>(userdata1);
+        // The world may have been resized between the request and its completion, which destroys
+        // this buffer and clears the flag. Landing here with the flag already down means exactly
+        // that, and the buffer named below is gone.
+        if (!self->readbackPending || !self->statsReadback) return;
+
+        if (status == WGPUMapAsyncStatus_Success) {
+            const uint64_t n = (uint64_t)SimStats::kCloudScalarCount * sizeof(uint32_t);
+            const uint32_t* stats =
+                static_cast<const uint32_t*>(wgpuBufferGetConstMappedRange(self->statsReadback, 0, n));
+            if (stats) {
+                self->uiManager.setSimState(stats[SimStats::kRainPhase], stats[SimStats::kSimTick],
+                                            stats[SimStats::kLastRain], true);
+            }
+            wgpuBufferUnmap(self->statsReadback);
+        }
+        self->readbackPending = false;
+    };
+    wgpuBufferMapAsync(statsReadback, WGPUMapMode_Read, 0, (size_t)bytes, cbInfo);
+}
+
 void WebGpuRenderer::configureSurface(uint32_t width, uint32_t height) {
     // A zero-sized configuration is invalid and a hidden or not-yet-laid-out canvas reports zero,
     // so this is a real case rather than defensive noise.
@@ -777,6 +849,9 @@ void WebGpuRenderer::frame() {
     uploadFrameConstants();
 
     drawFrame();
+
+    // After the frame's own work, so the copy sees this dispatch's counters.
+    pollSimState();
 
     const double wallMs = std::chrono::duration<double, std::milli>(
         std::chrono::high_resolution_clock::now() - frameStart).count();

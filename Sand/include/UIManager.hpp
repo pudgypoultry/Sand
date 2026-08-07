@@ -206,6 +206,29 @@ public:
                     "Wraps at %u.", kTickWrap);
             }
 
+            // Weather, read back from the simulation's own counters rather than inferred here --
+            // whether the sky has settled is a fact only the compute shader knows.
+            if (!m_simStateValid) {
+                ImGui::TextDisabled("Rain: waiting for the first readback");
+            } else if (m_rainPhase != 0u) {
+                ImGui::TextColored(ImVec4(0.45f, 0.70f, 1.0f, 1.0f),
+                                   "Rain: FALLING (began at tick %u)", m_lastRainTick);
+            } else if (m_lastRainTick > 0u) {
+                ImGui::Text("Rain: last at tick %u, %u ticks ago",
+                            m_lastRainTick, m_simTick - m_lastRainTick);
+            } else {
+                ImGui::Text("Rain: none yet this world");
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "A rain event begins when a storm check finds that no cloud block moved on the\n"
+                    "previous tick. Checks happen every cloud.check_interval_ticks ticks, so the\n"
+                    "gap between events is a multiple of that interval plus however long the last\n"
+                    "storm took to fall.\n\n"
+                    "These ticks are the simulation's own counter, not the one above -- that one is\n"
+                    "the CPU's and wraps, this one does not.");
+            }
+
             ImGui::Separator();
             ImGui::Checkbox("Show cloud blocks", &m_showCloudBlocks);
             if (ImGui::IsItemHovered()) {
@@ -240,6 +263,21 @@ public:
         if (steps > 0) m_tickCount = (m_tickCount + uint32_t(steps)) % kTickWrap;
     }
     uint32_t tickCount() const { return m_tickCount; }
+
+    // FUNCTION: resetTicks
+    // Puts the CPU's tick counter back to zero when the world does, so it keeps step with the
+    // simulation's own simTick rather than drifting apart from it over a session.
+    void resetTicks() { m_tickCount = 0; }
+
+    // FUNCTION: setSimState
+    // The simulation's weather counters, read back from SimStats. `valid` is false until the first
+    // readback lands, which on the web is several frames in -- the map is asynchronous.
+    void setSimState(uint32_t rainPhase, uint32_t simTick, uint32_t lastRainTick, bool valid) {
+        m_rainPhase = rainPhase;
+        m_simTick = simTick;
+        m_lastRainTick = lastRainTick;
+        m_simStateValid = valid;
+    }
     float getPerspectiveBlend() const { return m_perspectiveBlend; }
     MaterialType getCurrentMaterial() const { return m_currentMaterial; }
     int getSimulationSpeed() const { return m_simulationSpeed; }
@@ -314,6 +352,11 @@ private:
     // run it into a number nobody can read at a glance.
     static constexpr uint32_t kTickWrap = 100000u;
     uint32_t m_tickCount = 0;
+
+    uint32_t m_rainPhase = 0;
+    uint32_t m_simTick = 0;
+    uint32_t m_lastRainTick = 0;
+    bool     m_simStateValid = false;
     bool m_showOptions = false;
     bool m_firstFrame = true; // drives the one-shot startup window placement in buildUI
 

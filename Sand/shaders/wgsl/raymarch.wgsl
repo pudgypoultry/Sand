@@ -4,7 +4,7 @@
 // Edit raymarch.frag and re-run that script instead; edits here are overwritten and, worse,
 // silently diverge from the shader the desktop build uses.
 //
-// source-sha256: a5f212b7866d2075b347ec3b9039b3867586768af576633eb02d3f2e2f3ee556
+// source-sha256: afe52ed0cf6c9052664c5a158aa0a2e5150b8cffaba7bcd9b2ada7fd59e0ad91
 
 struct TuningParams {
     gridWidth: u32,
@@ -107,11 +107,12 @@ struct TuningParams {
     treeTrunkColumns: u32,
     treeTrunkRadius: f32,
     renderScale: f32,
-    cloudStillTicksToStorm: u32,
-    stormWaitMaxTicks: u32,
+    cloudCheckIntervalTicks: u32,
+    rainWaitMaxTicks: u32,
     cloudColumnFullCount: f32,
     cloudThicknessPerBlock: f32,
     cloudClumpThreshold: u32,
+    rainWaitMinTicks: u32,
 }
 
 struct SimStats {
@@ -127,6 +128,8 @@ struct SimStats {
     cloudBlockCount: u32,
     cloudChangedCount: u32,
     cloudStillTicks: u32,
+    simTick: u32,
+    lastRainTick: u32,
     blackHoleCount: u32,
     maxOccupiedY: u32,
     blackHoles: array<u32, 8>,
@@ -226,9 +229,9 @@ fn marchBlockyCloud_u0028_vf3_u003b_vf3_u003b_f1_u003b_f1_u003b_vf3_u003b_f1_u00
     var baseColor: vec3<f32>;
     var stormColor: vec3<f32>;
     var diffuse: f32;
-    var phi_2548_: bool;
-    var phi_2559_: bool;
-    var phi_2607_: bool;
+    var phi_2547_: bool;
+    var phi_2558_: bool;
+    var phi_2605_: bool;
 
     let _e306 = (*tEnter);
     (*tEnter) = max(_e306, 0f);
@@ -335,22 +338,22 @@ fn marchBlockyCloud_u0028_vf3_u003b_vf3_u003b_f1_u003b_f1_u003b_vf3_u003b_f1_u00
             cz = i32(floor(_e435));
             let _e438 = cx;
             let _e439 = (_e438 >= 0i);
-            phi_2548_ = _e439;
+            phi_2547_ = _e439;
             if _e439 {
                 let _e440 = cx;
                 let _e442 = tuning.gridWidth;
-                phi_2548_ = (_e440 < bitcast<i32>(_e442));
+                phi_2547_ = (_e440 < bitcast<i32>(_e442));
             }
-            let _e446 = phi_2548_;
+            let _e446 = phi_2547_;
             let _e447 = cz;
             let _e449 = (_e446 && (_e447 >= 0i));
-            phi_2559_ = _e449;
+            phi_2558_ = _e449;
             if _e449 {
                 let _e450 = cz;
                 let _e452 = tuning.gridDepth;
-                phi_2559_ = (_e450 < bitcast<i32>(_e452));
+                phi_2558_ = (_e450 < bitcast<i32>(_e452));
             }
-            let _e456 = phi_2559_;
+            let _e456 = phi_2558_;
             if _e456 {
                 let _e457 = cx;
                 param = _e457;
@@ -375,13 +378,13 @@ fn marchBlockyCloud_u0028_vf3_u003b_vf3_u003b_f1_u003b_f1_u003b_vf3_u003b_f1_u00
                     let _e483 = cellCenter[1u];
                     let _e484 = baseY;
                     let _e485 = (_e483 >= _e484);
-                    phi_2607_ = _e485;
+                    phi_2605_ = _e485;
                     if _e485 {
                         let _e487 = cellCenter[1u];
                         let _e488 = capY;
-                        phi_2607_ = (_e487 <= _e488);
+                        phi_2605_ = (_e487 <= _e488);
                     }
-                    let _e491 = phi_2607_;
+                    let _e491 = phi_2605_;
                     if _e491 {
                         let _e492 = count;
                         let _e495 = tuning.cloudColumnFullCount;
@@ -2170,7 +2173,7 @@ fn main_1() {
     var baseLighting_9: vec3<f32>;
     var finalVoxelColor: vec3<f32>;
     var calm: vec3<f32>;
-    var storm: vec3<f32>;
+    var rain: vec3<f32>;
     var param_81: u32;
     var param_82: vec3<f32>;
     var param_83: vec3<i32>;
@@ -2769,9 +2772,9 @@ fn main_1() {
         let _e981 = hitType;
         if (_e981 == 200u) {
             calm = vec3<f32>(0.35f, 0.65f, 1f);
-            storm = vec3<f32>(1f, 0.55f, 0.25f);
+            rain = vec3<f32>(1f, 0.55f, 0.25f);
             let _e983 = calm;
-            let _e984 = storm;
+            let _e984 = rain;
             let _e985 = hitRawVoxel;
             let _e991 = baseLighting_9;
             finalVoxelColor = (mix(_e983, _e984, vec3(select(0f, 1f, ((_e985 & 3u) == 2u)))) * _e991);

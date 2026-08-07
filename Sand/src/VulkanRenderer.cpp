@@ -339,6 +339,8 @@ void VulkanRenderer::seedParticles() {
     // +0.0f as a float, so the sky correctly starts completely uncharged with no sentinel needed.
     // Zero is also the "free slot" marker for the black hole table, so clearing the grid correctly
     // forgets every hole that was in it.
+    uiManager.resetTicks();
+
     std::vector<uint32_t> statsInit(
         SimStats::statsWordCount(config.tuning.gridWidth, config.tuning.gridDepth), 0u);
 
@@ -700,6 +702,16 @@ void VulkanRenderer::drawFrame() {
     buildFrameConstants(*window, uiManager, config.tuning, (float)glfwGetTime(), pc);
 
     // --- MULTI-STEP PHYSICS DISPATCH ---
+    // The simulation's weather counters, straight off the mapped buffer. Host-visible and
+    // host-coherent, so this is a read of memory the GPU wrote -- no staging copy, no fence. The web
+    // backend has to work considerably harder for the same three numbers.
+    {
+        const uint32_t* stats = static_cast<const uint32_t*>(steamCounterBuffer->mapMemory());
+        uiManager.setSimState(stats[SimStats::kRainPhase], stats[SimStats::kSimTick],
+                              stats[SimStats::kLastRain], true);
+        steamCounterBuffer->unmapMemory();
+    }
+
     int simSteps = uiManager.getSimulationSpeed();
     uiManager.advanceTicks(simSteps);
     for (int step = 0; step < simSteps; step++) {

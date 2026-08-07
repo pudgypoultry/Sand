@@ -69,16 +69,22 @@ const ConfigField kConfigFields[] = {
     { "Clouds", "cloud.max_steps", "Max steps", FieldKind::UInt,
       offsetof(TuningParams, maxCloudSteps), 1.0, 128.0,
       nullptr },
-    { "Clouds", "cloud.still_ticks_to_storm", "Still ticks to storm", FieldKind::UInt,
-      offsetof(TuningParams, cloudStillTicksToStorm), 1.0, 100000.0,
-      "Dispatches every cloud block must go without moving before the sky darkens and a storm "
-      "begins. Counted in dispatches rather than seconds, so the simulation speed slider scales it. "
-      "Low values make weather easy to observe; the sky will barely settle before it rains." },
-    { "Clouds", "cloud.storm_wait_max_ticks", "Storm wait max ticks", FieldKind::UInt,
-      offsetof(TuningParams, stormWaitMaxTicks), 1.0, 255.0,
-      "A storm block that reaches the ceiling waits a random number of dispatches up to this before "
-      "turning into water, so rain arrives scattered rather than as one sheet. Capped at 255 by the "
-      "8-bit wait field in the cloud word." },
+    { "Clouds", "cloud.check_interval_ticks", "Storm check interval", FieldKind::UInt,
+      offsetof(TuningParams, cloudCheckIntervalTicks), 1.0, 100000.0,
+      "Dispatches between storm checks. On each multiple of this the simulation asks whether any "
+      "cloud block moved on the previous dispatch; if none did, a rain event begins. Counted in "
+      "dispatches rather than seconds, so the speed slider scales it -- the profiler's tick counter "
+      "is the same clock." },
+    { "Clouds", "cloud.rain_wait_max_ticks", "Rain wait max", FieldKind::UInt,
+      offsetof(TuningParams, rainWaitMaxTicks), 1.0, 2047.0,
+      "The upper end of how long a raincloud hangs at the ceiling before falling as water. Each "
+      "block picks its own target between the minimum and this, so a storm falls as scattered drops "
+      "over a long while rather than as one sheet. Capped at 2047 by the 11-bit counter in the "
+      "cloud word." },
+    { "Clouds", "cloud.rain_wait_min_ticks", "Rain wait min", FieldKind::UInt,
+      offsetof(TuningParams, rainWaitMinTicks), 1.0, 2047.0,
+      "The lower end of that wait. Raising it toward the maximum makes a storm arrive all at once; "
+      "widening the gap spreads it out." },
     { "Clouds", "cloud.column_full_count", "Column full count", FieldKind::Float,
       offsetof(TuningParams, cloudColumnFullCount), 1.0, 512.0,
       "How many cloud blocks stacked in one column read as a fully dense cloud. Lower makes thin "
@@ -90,8 +96,8 @@ const ConfigField kConfigFields[] = {
     { "Clouds", "cloud.clump_threshold", "Clump threshold", FieldKind::UInt,
       offsetof(TuningParams, cloudClumpThreshold), 0.0, 26.0,
       "How many of a cloud block's 26 neighbours must also be cloud before it stops trying to move. "
-      "The same idea as the sand clump threshold: low values let a pile slump into a flat sheet, "
-      "high values hold it in lumpy mounds. 0 disables clumping entirely." },
+      "UNUSED. Cloud spreads like sand, with no cohesion rule -- cohesion made it stack into "
+      "towers like dirt instead of spreading along the ceiling." },
 
     // ---- Physics ----
     { "Physics", "physics.sand_moisture_capacity", "Sand moisture capacity", FieldKind::UInt,

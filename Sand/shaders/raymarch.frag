@@ -27,7 +27,9 @@ layout(std430, binding = 1) readonly buffer SimStats {
     uint cloudChargeBits;
     uint cloudBlockCount;
     uint cloudChangedCount;
-    uint cloudStillTicks;
+    uint cloudStillTicks;        // UNUSED: the storm check samples rather than accumulating
+    uint simTick;                // dispatches since startup; the clock the checks run on
+    uint lastRainTick;           // simTick at the last rain event, for the profiler
     uint blackHoleCount;
     uint maxOccupiedY;
     uint blackHoles[BLACK_HOLE_MAX];
@@ -147,11 +149,12 @@ layout(std140, binding = 2) uniform TuningParams {
     uint treeTrunkColumns;
     float treeTrunkRadius;
     float renderScale;
-    uint cloudStillTicksToStorm;  // dispatches of stillness before the sky darkens
-    uint stormWaitMaxTicks;       // storm block's random wait at the ceiling, 0..255
+    uint cloudCheckIntervalTicks; // dispatches between storm checks
+    uint rainWaitMaxTicks;        // ceiling of a raincloud's wait, 0..2047
     float cloudColumnFullCount;   // cloud blocks in a column that read as fully dense
     float cloudThicknessPerBlock; // world units of cloud drawn per block in the column
-    uint cloudClumpThreshold;     // cloud neighbours at which a block stops trying to move
+    uint cloudClumpThreshold;     // UNUSED: cloud spreads like sand, no cohesion
+    uint rainWaitMinTicks;        // floor of a raincloud's wait at the ceiling
 } tuning;
 
 // Per-frame state the CPU writes: camera pose, cursor position, brush.
@@ -1285,9 +1288,9 @@ void main() {
         if (hitType == CLOUD_DEBUG_TYPE) {
             // Storm blocks read warm, calm blocks cool, so a storm sweeping the field is visible as
             // it happens rather than only in the rain that follows.
-            vec3 calm  = vec3(0.35f, 0.65f, 1.00f);
-            vec3 storm = vec3(1.00f, 0.55f, 0.25f);
-            finalVoxelColor = mix(calm, storm, ((hitRawVoxel & 3u) == 2u) ? 1.0f : 0.0f) * baseLighting;
+            vec3 calm = vec3(0.35f, 0.65f, 1.00f);
+            vec3 rain = vec3(1.00f, 0.55f, 0.25f);
+            finalVoxelColor = mix(calm, rain, ((hitRawVoxel & 3u) == 2u) ? 1.0f : 0.0f) * baseLighting;
         }
 
         switch (hitType) {

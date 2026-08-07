@@ -273,15 +273,16 @@ struct TuningParams {
     // Appended for the same reason renderScale was: every field above has an offset both shaders'
     // uniform blocks depend on.
     //
-    // Weather is driven by the cloud field going still rather than by a water deficit. Once every
-    // cloud block has failed to move for this many dispatches, the sky darkens and then rains.
-    // Counted in dispatches, not seconds, so it scales with the simulation speed slider -- the same
-    // convention cloudChargeEaseRate already uses.
-    uint32_t cloudStillTicksToStorm = 1000;
-    // A storm block that reaches the ceiling waits a random 0..this many dispatches before becoming
-    // a water voxel, so a storm arrives as scattered drops rather than one sheet. Hard-capped at
-    // 255 by the 8-bit wait field in the cloud word; sanitizeTuning enforces it.
-    uint32_t stormWaitMaxTicks = 120;
+    // How often the sky is tested for a storm, in dispatches. On every multiple of this the
+    // simulation asks whether any cloud block moved on the previous dispatch; if none did, the
+    // field has settled and a rain event begins. A periodic check rather than a run of consecutive
+    // still ticks, so a single block jostling once cannot postpone weather indefinitely.
+    uint32_t cloudCheckIntervalTicks = 5000;
+    // A raincloud that reaches the ceiling picks a target between rainWaitMinTicks and this, then
+    // counts up to it before becoming water -- so a storm falls as scattered drops over a long
+    // while rather than as one sheet. Both are capped at 2047 by the 11-bit counters in the cloud
+    // word; sanitizeTuning enforces that.
+    uint32_t rainWaitMaxTicks = 2048;
     // How many cloud blocks in a column count as a fully opaque cloud. The divisor that makes cloud
     // density independent of world size.
     float cloudColumnFullCount = 24.0f;
@@ -290,7 +291,9 @@ struct TuningParams {
     // Cloud neighbours (of 26) at which a block counts as clumped and stops trying to move. The
     // counterpart of sandClumpThreshold, and it does the same job: without it a pile slumps into a
     // flat even sheet, and with it the field holds lumpy, cloud-shaped mounds.
-    uint32_t cloudClumpThreshold = 9;
+    uint32_t cloudClumpThreshold = 9;  // UNUSED: cloud spreads like sand, with no cohesion rule
+    // The floor of a raincloud's wait at the ceiling. See rainWaitMaxTicks.
+    uint32_t rainWaitMinTicks = 256;
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

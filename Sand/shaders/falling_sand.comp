@@ -52,8 +52,10 @@ layout(std430, binding = 1) buffer SimStats {
     uint rainCandidateEstimate;  // last dispatch's census -- the divisor that sets drop odds
     uint cloudChargeBits;        // float bits: eased 0..1 group-wide cloud opacity/greyness
     uint cloudBlockCount;        // live cloud + storm blocks; census, rotated every dispatch
-    uint cloudChangedCount;      // cloud blocks that moved OR were created this dispatch; census
-    uint cloudStillTicks;        // consecutive dispatches in which nothing moved -- the storm clock
+    uint cloudMovedCount;        // cloud blocks that moved this dispatch; census, rotated
+    uint cloudStillTicks;        // UNUSED: the storm check samples rather than accumulating
+    uint simTick;                // dispatches since startup; the clock the checks run on
+    uint lastRainTick;           // simTick at the last rain event, for the profiler
     uint blackHoleCount;         // live table entries; 0 lets every voxel skip the scan entirely
     uint maxOccupiedY;           // ceiling on where matter can be; lets the renderer skip empty sky
     uint blackHoles[BLACK_HOLE_MAX];      // 0 = free slot, else BH_ACTIVE | linear voxel index
@@ -195,11 +197,12 @@ layout(std140, binding = 2) uniform TuningParams {
     uint treeTrunkColumns;
     float treeTrunkRadius;
     float renderScale;
-    uint cloudStillTicksToStorm;  // dispatches of stillness before the sky darkens
-    uint stormWaitMaxTicks;       // storm block's random wait at the ceiling, 0..255
+    uint cloudCheckIntervalTicks; // dispatches between storm checks
+    uint rainWaitMaxTicks;        // ceiling of a raincloud's wait, 0..2047
     float cloudColumnFullCount;   // cloud blocks in a column that read as fully dense
     float cloudThicknessPerBlock; // world units of cloud drawn per block in the column
-    uint cloudClumpThreshold;     // cloud neighbours at which a block stops trying to move
+    uint cloudClumpThreshold;     // UNUSED: cloud spreads like sand, no cohesion
+    uint rainWaitMinTicks;        // floor of a raincloud's wait at the ceiling
 } tuning;
 
 #define LAYER_SIZE (uint(WIDTH) * uint(HEIGHT)) // one layer of the world
@@ -300,27 +303,36 @@ uint getAge(uint val) {
     return (val >> 24) & 0xFFu;
 }
 
-// FUNCTION: packCloud / getCloudKind / getCloudWait / getCloudSleep
-// The cloud word, which is a separate encoding from pack() above and deliberately narrower:
-//   bits 0-1   kind   0 = empty, 1 = cloud, 2 = storm
-//   bits 2-9   wait   storm's countdown at the ceiling, 0..255
-//   bits 10-17 sleep  settle counter, the same idea as a grain's sleep byte
-// Nothing outside these four functions should know the layout.
-const uint CLOUD_NONE  = 0u;
-const uint CLOUD_CALM  = 1u;
-const uint CLOUD_STORM = 2u;
+// FUNCTION: packCloud and its accessors
+// The cloud word -- a separate, narrower encoding from pack() above:
+//   bits 0-1   kind     0 = empty, 1 = cloud, 2 = raincloud
+//   bit  2     moved    did this block move on the last dispatch
+//   bits 3-13  counter  a raincloud's tick count at the ceiling, 0..2047
+//   bits 14-24 target   the count it is heading for, 0..2047
+// Nothing outside these functions should know the layout.
+//
+// eleven bits for each of the two counters, not the eight the wait field used to have: a raincloud
+// waits somewhere between rainWaitMinTicks and rainWaitMaxTicks, and 2048 does not fit in a byte.
+//
+// The `moved` bit is what the storm check reads. Storing it per block rather than only counting
+// moves globally means "did anything move last tick" is answerable from the block itself, which is
+// also what makes cloudIsAtRest a single mask instead of a threshold on a sleep counter.
+const uint CLOUD_NONE = 0u;
+const uint CLOUD_CALM = 1u;
+const uint CLOUD_RAIN = 2u;
 
-uint packCloud(uint kind, uint wait, uint sleep) {
-    return (kind & 3u) | ((wait & 0xFFu) << 2) | ((sleep & 0xFFu) << 10);
+const uint CLOUD_COUNTER_MAX = 2047u;
+
+uint packCloud(uint kind, bool moved, uint counter, uint target) {
+    return (kind & 3u)
+         | (moved ? 4u : 0u)
+         | ((min(counter, CLOUD_COUNTER_MAX)) << 3)
+         | ((min(target,  CLOUD_COUNTER_MAX)) << 14);
 }
-uint getCloudKind(uint v)  { return v & 3u; }
-uint getCloudWait(uint v)  { return (v >> 2) & 0xFFu; }
-uint getCloudSleep(uint v) { return (v >> 10) & 0xFFu; }
-
-// FUNCTION: cloudColumnBase
-// Where a column's four census words start. x and z only -- the whole point is that the renderer
-// can answer "how much cloud is over this spot" without marching the column.
-uint cloudColumnBase(int x, int z) { return uint(x + z * WIDTH) * 4u; }
+uint getCloudKind(uint v)    { return v & 3u; }
+bool getCloudMoved(uint v)   { return (v & 4u) != 0u; }
+uint getCloudCounter(uint v) { return (v >> 3) & CLOUD_COUNTER_MAX; }
+uint getCloudTarget(uint v)  { return (v >> 14) & CLOUD_COUNTER_MAX; }
 
 // FUNCTION: cloudCellInBounds
 // Whether a cloud block may occupy a cell -- the same strict interior every other material is
@@ -337,12 +349,30 @@ bool cloudCellInBounds(ivec3 p) {
            p.z >= 1 && p.z < DEPTH - 1;
 }
 
+// FUNCTION: cloudTouchesRain
+// Whether any of the six face neighbours holds a raincloud. Faces only, not the 26-cell shell:
+// "touching" should mean touching, and a diagonal contact spreading the rain would let it jump
+// through the gap between two blocks that are not themselves connected.
+bool cloudTouchesRain(ivec3 pos) {
+    for (int i = 0; i < 6; i++) {
+        ivec3 n = pos + getOrthoDir(i);
+        if (!cloudCellInBounds(n)) continue;
+        if (getCloudKind(cloudCells[getIndex(n)]) == CLOUD_RAIN) return true;
+    }
+    return false;
+}
+
+// FUNCTION: cloudColumnBase
+// Where a column's four census words start. x and z only -- the whole point is that the renderer
+// can answer "how much cloud is over this spot" without marching the column.
+uint cloudColumnBase(int x, int z) { return uint(x + z * WIDTH) * 4u; }
+
 // FUNCTION: cloudIsAtRest
-// A cloud block that has stopped moving. Steam condenses onto these, so it has to mean "settled"
-// rather than merely "present": condensing against a block that is still on its way up would turn
-// a rising column into cloud from the bottom, and the sky would fill from the wrong end.
+// A cloud block that did not move on the last dispatch. Steam condenses onto these, so it has to
+// mean "settled" rather than merely "present": condensing against a block still on its way up would
+// turn a rising column into cloud from the bottom and fill the sky from the wrong end.
 bool cloudIsAtRest(uint v) {
-    return getCloudKind(v) != CLOUD_NONE && getCloudSleep(v) >= tuning.wakeSleepThreshold;
+    return getCloudKind(v) != CLOUD_NONE && !getCloudMoved(v);
 }
 
 // FUNCTION: hash
@@ -2460,60 +2490,46 @@ void updateSimState() {
     rainCandidateEstimate = rainCandidateCount;
     rainCandidateCount = 0u;
 
-    // --- The storm clock ------------------------------------------------------------------------
-    // A dispatch in which the cloud field did not change is a still one. Enough of those in a row
-    // and it has settled, which is the cue for weather. Read before the census is cleared, because
-    // this is the tally accumulated since the last clear -- exactly one dispatch's worth, wherever
-    // in the dispatch the single writer happens to run.
+    // --- The storm check ------------------------------------------------------------------------
+    // Every cloudCheckIntervalTicks dispatches, ask one question: did any cloud block move on the
+    // dispatch just gone? If none did, the field has settled and a rain event begins.
     //
-    // CHANGED, not moved. A cloud block that condenses at the ceiling is born where it belongs and
-    // never moves, so counting only movement meant a sky actively filling with new cloud read as
-    // perfectly still: the clock ran throughout formation and was already past the threshold by the
-    // time the steam stopped arriving, and the sky rained the moment it finished filling. "All
-    // clouds stagnant" has to mean the field stopped changing, not merely that nothing slid.
-    if (cloudChangedCount == 0u) {
-        cloudStillTicks = min(cloudStillTicks + 1u, 0xFFFFFFFFu - 1u);
-    } else {
-        cloudStillTicks = 0u;
-    }
+    // Periodic rather than a run of consecutive still ticks, which is what this used to be. A run
+    // resets on any movement, so one block jostling once every few hundred ticks postponed weather
+    // indefinitely; sampling instead asks only whether the sky is still at the moment it is asked.
+    //
+    // cloudMovedCount is read before the clear, so it is the tally accumulated since the last clear
+    // -- exactly one dispatch's worth, wherever in the dispatch this single writer happens to run.
+    simTick = simTick + 1u;
+    uint movedLastTick = cloudMovedCount;
     uint liveClouds = cloudBlockCount;
     cloudBlockCount = 0u;
-    cloudChangedCount = 0u;
+    cloudMovedCount = 0u;
 
-    // --- Group cloud charge -------------------------------------------------------------------
+    // --- Group cloud charge ---------------------------------------------------------------------
     // One value the whole sky renders from, so it thickens and greys together rather than cloud by
-    // cloud. It now tracks the phase rather than a deficit: clear while gathering, full once the
-    // sky has committed to a storm. Eased rather than assigned, so the transition is gradual and
-    // the darkening phase has something to show for its duration.
+    // cloud. Clear while gathering, full once it is raining. Eased rather than assigned, so the
+    // change is gradual.
     float chargeTarget = (rainPhase == 0u) ? 0.0f : 1.0f;
     float charge = uintBitsToFloat(cloudChargeBits);
     charge += (chargeTarget - charge) * clamp(tuning.cloudChargeEaseRate, 0.0f, 1.0f);
     cloudChargeBits = floatBitsToUint(clamp(charge, 0.0f, 1.0f));
 
     if (rainPhase == 0u) {
-        // Gathering. Needs cloud to rain from, and needs it to have stopped moving -- a field still
-        // piling up is one that steam is actively feeding, and raining through that would never let
-        // the sky fill.
-        if (liveClouds > 0u && cloudStillTicks >= tuning.cloudStillTicksToStorm) {
-            rainPhase = 1u;
-            rainPhaseTimeBits = floatBitsToUint(pc.time);
-        }
-    } else if (rainPhase == 1u) {
-        // Darkening. Purely a delay, so the sky visibly greys before anything falls.
-        float crossedTime = uintBitsToFloat(rainPhaseTimeBits);
-        if (pc.time - crossedTime >= tuning.rainDarkenDelay) {
+        uint interval = max(tuning.cloudCheckIntervalTicks, 1u);
+        if (simTick % interval == 0u && liveClouds > 0u && movedLastTick == 0u) {
             rainPhase = 2u;
             rainPhaseTimeBits = floatBitsToUint(pc.time);
+            lastRainTick = simTick;   // read back by the profiler; nothing in the sim uses it
         }
-    } else if (rainPhase == 2u) {
-        // Raining. Every cloud block has become a storm block and is making its own way to the
-        // ceiling to fall as water, so the storm is over exactly when the last one has gone. There
-        // is no target level to reach and nothing to overshoot: the water that comes down is the
-        // water that went up, one block for one voxel.
+    } else {
+        // Raining. Every cloud block became a raincloud, and each makes its own way to the ceiling,
+        // waits out its counter and falls as water. The storm is over exactly when the last one has
+        // gone -- there is no target level to reach and nothing to overshoot, because the water that
+        // comes down is the water that went up, one block for one voxel.
         if (liveClouds == 0u) {
             rainPhase = 0u;
             rainPhaseTimeBits = 0u;
-            cloudStillTicks = 0u;
         }
     }
 }
@@ -2528,17 +2544,21 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
         //
         // The cloud write has to succeed before the steam is cleared, or a steam voxel is destroyed
         // and its moisture with it.
-        if (atomicCompSwap(cloudCells[currentIndex], 0u, packCloud(CLOUD_CALM, 0u, 0u)) == 0u) {
+        // Touching the roof always ends the steam, one way or the other. Letting it fall through to
+        // ordinary movement is what produced steam skating along the underside of the cube looking
+        // for a free cell, which should not be possible: reaching the top IS becoming cloud.
+        uint newKind = (rainPhase == 2u) ? CLOUD_RAIN : CLOUD_CALM;
+        if (atomicCompSwap(cloudCells[currentIndex], 0u, packCloud(newKind, false, 0u, 0u)) == 0u) {
             atomicExchange(grid[currentIndex], 0u);
-            atomicAdd(cloudChangedCount, 1u);   // a new block is a change; the sky is not settled
             return;
         }
-        // A cloud block is already in this cell, so there is no room to condense here. This used to
-        // return and wait -- on the reasoning that nothing would move out from under it, which was
-        // true and was exactly the problem: a cloud block at the ceiling never moves, so the wait
-        // was forever and the steam welded itself to the roof. Falling through instead lets it
-        // scatter along the underside until it finds a free cell, or meets a settled block and
-        // condenses beneath it via the check further down.
+        // A cloud block already occupies this cell, so there is no slot to condense into. The steam
+        // merges into it and is gone rather than skating away. That does lose one voxel of moisture
+        // from the cycle, which is worth being explicit about -- but it is bounded and rare: steam
+        // treats clouded cells as solid (see the movement checks below), so the only way to be here
+        // is to have been created inside one, which means water boiled directly beneath the layer.
+        atomicExchange(grid[currentIndex], 0u);
+        return;
     }
 
     uint newAge = min(currentAge + 1u, 255u);
@@ -2549,7 +2569,10 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
         ivec3 scatterPos = pos + getOrthoDir(d);
         if (scatterPos.x > 0 && scatterPos.x < WIDTH - 1 && scatterPos.y > 0 && scatterPos.y < HEIGHT - 1 && scatterPos.z > 0 && scatterPos.z < DEPTH - 1) {
             uint sType = getType(readCell(getIndex(scatterPos)));
-            if (sType == 0u || sType == 5u) {
+            // A clouded cell is closed to steam. Without this steam wanders into the layer, and a
+            // steam voxel sharing a cell with a cloud block has nowhere to condense.
+            if ((sType == 0u || sType == 5u) &&
+                getCloudKind(cloudCells[getIndex(scatterPos)]) == CLOUD_NONE) {
                 if (tryMove(currentIndex, rawValue, getIndex(scatterPos), pack(6u, 0u, 0u, newAge))) return;
             }
         }
@@ -2576,10 +2599,15 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
     // thickens downward from the roof as more moisture arrives.
     {
         ivec3 upPos = pos + ivec3(0, 1, 0);
-        if (upPos.y < HEIGHT && cloudIsAtRest(cloudCells[getIndex(upPos)])) {
-            if (atomicCompSwap(cloudCells[currentIndex], 0u, packCloud(CLOUD_CALM, 0u, 0u)) == 0u) {
+        bool underSettled = cloudCellInBounds(upPos) && cloudIsAtRest(cloudCells[getIndex(upPos)]);
+        // Steam touching a raincloud joins the storm directly, which is what stops a rain event
+        // leaving a fog of steam behind that would have to condense and wait for the next one.
+        bool touchingRain = cloudTouchesRain(pos);
+
+        if (underSettled || touchingRain) {
+            uint newKind = (touchingRain || rainPhase == 2u) ? CLOUD_RAIN : CLOUD_CALM;
+            if (atomicCompSwap(cloudCells[currentIndex], 0u, packCloud(newKind, false, 0u, 0u)) == 0u) {
                 atomicExchange(grid[currentIndex], 0u);
-                atomicAdd(cloudChangedCount, 1u);
             }
             return;
         }
@@ -2617,7 +2645,8 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
         if (sPos.y < HEIGHT - 1 &&
             sPos.x > 0 && sPos.x < WIDTH - 1 && sPos.z > 0 && sPos.z < DEPTH - 1) {
             uint sType = getType(readCell(getIndex(sPos)));
-            if (sType == 0u || sType == 5u) {
+            if ((sType == 0u || sType == 5u) &&
+                getCloudKind(cloudCells[getIndex(sPos)]) == CLOUD_NONE) {
                 if (tryMove(currentIndex, rawValue, getIndex(sPos), pack(6u, 0u, 0u, newAge))) return;
             }
         }
@@ -2651,18 +2680,21 @@ bool tryMoveCloud(uint fromIndex, uint newValue, uint toIndex, uint expectedFrom
 // FUNCTION: updateCloudBlock
 // The whole cloud simulation, run by every invocation for its own cell.
 //
-// It touches the main grid in exactly one place -- a storm block at the ceiling turning into water.
-// Everywhere else it reads and writes cloudCells alone, and that is what makes a cloud block able to
-// share a cell with stone: the two fields never look at each other, so neither can disturb the
-// other. Cloud blocks fall upward and pile against the ceiling, sliding diagonally when blocked in
-// the same way a grain does, mirrored in Y.
+// It touches the main grid in exactly two places -- a raincloud finishing its count and becoming
+// water, and the census of steam it converts. Everywhere else it reads and writes cloudCells alone,
+// and that is what makes a cloud block able to share a cell with stone: the two fields never look at
+// each other, so neither can disturb the other.
+//
+// Cloud blocks fall upward: straight up, then one of two diagonals, exactly as a grain falls
+// downward. There is deliberately NO cohesion rule. Sand spreads because a blocked grain slides
+// aside; adding the clump test made a pile hold its shape instead, which is dirt's behaviour, and
+// cloud stacked into towers rather than spreading along the ceiling.
 void updateCloudBlock(ivec3 pos) {
     uint idx = getIndex(pos);
     uint base = cloudColumnBase(pos.x, pos.z);
 
     // Rotate this column's census. y == 0 is in every column and is visited exactly once per
-    // dispatch, which makes it the natural single writer for the column. Contributions that race
-    // the rotation land in this dispatch's tally or the next -- see the note on cloudColumn.
+    // dispatch, which makes it the natural single writer for the column.
     if (pos.y == 0) {
         cloudColumn[base + 2u] = cloudColumn[base + 0u];
         cloudColumn[base + 3u] = cloudColumn[base + 1u];
@@ -2678,124 +2710,73 @@ void updateCloudBlock(ivec3 pos) {
     atomicAdd(cloudColumn[base + 0u], 1u);
     atomicMax(cloudColumn[base + 1u], uint(pos.y));
 
-    // A storm is declared globally and adopted locally: the single writer that runs the state
-    // machine cannot reach millions of cells, so each block converts itself on the dispatch after
-    // the phase changes.
-    if (kind == CLOUD_CALM && rainPhase == 2u) {
-        float r = hash(vec3(pos) + vec3(pc.time, 17.0f, 3.0f));
-        uint waitMax = clamp(tuning.stormWaitMaxTicks, 1u, 255u);
-        uint newCell = packCloud(CLOUD_STORM, uint(r * float(waitMax)), 0u);
-        if (atomicCompSwap(cloudCells[idx], cell, newCell) != cell) return; // moved; catch it later
+    // --- Becoming a raincloud -------------------------------------------------------------------
+    // Two ways in, and both matter. A rain event converts the whole field at once, which is what
+    // makes a storm a storm rather than a drizzle; and a calm block touching an existing raincloud
+    // joins it, which mops up whatever formed after the event began so a storm ends cleanly instead
+    // of leaving islands of calm cloud behind.
+    if (kind == CLOUD_CALM && (rainPhase == 2u || cloudTouchesRain(pos))) {
+        uint newCell = packCloud(CLOUD_RAIN, false, 0u, 0u);
+        if (atomicCompSwap(cloudCells[idx], cell, newCell) != cell) return;
         cell = newCell;
-        kind = CLOUD_STORM;
+        kind = CLOUD_RAIN;
     }
 
     if (pos.y >= HEIGHT - 2) {
-        // At the ceiling. A calm cloud just sits here; a storm block counts down and then rains.
-        if (kind != CLOUD_STORM) {
-            // Saturate the sleep counter rather than returning straight away. There is no cell above
-            // to rise into, so this block is settled by construction -- and steam condensing on it
-            // (see updateSteam) tests exactly that, so leaving it reading "awake" forever would stop
-            // the cloud layer ever growing downward from the roof.
-            if (getCloudSleep(cell) < 255u) {
-                atomicCompSwap(cloudCells[idx], cell, packCloud(kind, getCloudWait(cell), 255u));
+        // At the ceiling. A calm block simply sits here -- there is nothing above to rise into, so
+        // it is at rest by construction and its moved bit must read false.
+        if (kind != CLOUD_RAIN) {
+            if (getCloudMoved(cell)) {
+                atomicCompSwap(cloudCells[idx], cell, packCloud(kind, false, 0u, 0u));
             }
             return;
         }
 
-        uint wait = getCloudWait(cell);
-        if (wait > 0u) {
-            atomicCompSwap(cloudCells[idx], cell, packCloud(CLOUD_STORM, wait - 1u, 0u));
+        // A raincloud at the ceiling picks how long to hang there, once, then counts up to it.
+        // Target zero means "not yet chosen" -- a real target is always at least rainWaitMinTicks,
+        // which the schema floors at 1, so zero is unambiguous.
+        uint target = getCloudTarget(cell);
+        if (target == 0u) {
+            uint lo = min(tuning.rainWaitMinTicks, tuning.rainWaitMaxTicks);
+            uint hi = max(tuning.rainWaitMinTicks, tuning.rainWaitMaxTicks);
+            float r = hash(vec3(pos) + vec3(pc.time, 17.0f, 3.0f));
+            target = lo + uint(r * float(hi - lo + 1u));
+            atomicCompSwap(cloudCells[idx], cell, packCloud(CLOUD_RAIN, false, 0u, target));
             return;
         }
 
-        // Never make water outside the simulated interior. Unreachable now that cloud movement is
-        // confined there too, but stated rather than assumed: a water voxel in the border row is
-        // one main() will never update again, so it would hang on the wall of the world forever.
+        uint counter = getCloudCounter(cell);
+        if (counter < target) {
+            atomicCompSwap(cloudCells[idx], cell, packCloud(CLOUD_RAIN, false, counter + 1u, target));
+            return;
+        }
+
+        // Time is up: become water. Never outside the simulated interior -- a water voxel in the
+        // border row is one main() would never update again, so it would hang on the wall forever.
         if (!cloudCellInBounds(pos)) return;
 
         uint g = readCell(idx);
         if (getType(g) != 0u) return;   // occupied: hold the block and try again next dispatch
         if (atomicCompSwap(grid[idx], g, pack(2u, 0u, 0u, 0u)) != g) return;
 
-        // Water exists now, so the cloud block must go -- and the counter must be told, because
-        // nothing else in the simulation knows this voxel appeared.
-        //
-        // Unconditional, not a compare-and-swap against the value read at the top of this function.
-        // Nothing can move into an occupied cloud cell (tryMoveCloud requires the destination to be
-        // empty) and only this invocation owns this cell, so there is no race to guard -- and a
-        // compare-and-swap that failed for any reason would leave a cloud block standing over water
-        // it had already produced, which is exactly the "cloud never disappeared" symptom.
+        // Unconditional, not a compare-and-swap: nothing can move into an occupied cloud cell and
+        // only this invocation owns this cell, so there is no race -- and a compare-and-swap that
+        // failed for any reason would leave a cloud block standing over water it had already made.
         atomicExchange(cloudCells[idx], 0u);
         incWater();
         if (uint(pos.y) > maxOccupiedY) atomicMax(maxOccupiedY, uint(pos.y));
         return;
     }
 
-    // --- Rise, with the same shape as a grain falling ---------------------------------------
-    //
-    // Sand's rules, mirrored in Y: a cheap "is there anywhere to go" precondition, then a cohesion
-    // test that lets a settled pile hold its shape, then straight up and two diagonals. Skipping the
-    // cohesion test would still give a working simulation -- just a boring one, because a field with
-    // no cohesion slumps until it is one flat sheet against the ceiling and every cloud looks the
-    // same.
+    // --- Rise, the way a grain falls ------------------------------------------------------------
     float randVal = hash(vec3(pos) + vec3(pc.time * 2.3f, 7.0f, 13.0f));
-    uint sleep = getCloudSleep(cell);
+    uint counter = getCloudCounter(cell);
+    uint target  = getCloudTarget(cell);
 
-    // Precondition, five reads: straight up and the four diagonals above. A block walled in by its
-    // own pile answers no here and skips the 26-cell cohesion scan below, which is most of the cost
-    // of a settled field.
-    bool canRise = false;
-    for (int i = 0; i < 5 && !canRise; i++) {
-        ivec3 t = pos + ((i == 0) ? ivec3(0, 1, 0)
-                       : (i == 1) ? ivec3( 1, 1, 0)
-                       : (i == 2) ? ivec3(-1, 1, 0)
-                       : (i == 3) ? ivec3(0, 1,  1)
-                                  : ivec3(0, 1, -1));
-        if (!cloudCellInBounds(t)) continue;
-        if (getCloudKind(cloudCells[getIndex(t)]) == CLOUD_NONE) canRise = true;
-    }
-
-    if (!canRise) {
-        // Nowhere to go. Age the sleep counter and stop -- and note this does NOT touch
-        // cloudChangedCount, which is exactly how a settled field becomes a still one and eventually
-        // a storm.
-        atomicCompSwap(cloudCells[idx], cell, packCloud(kind, getCloudWait(cell), min(sleep + 1u, 255u)));
-        return;
-    }
-
-    bool isClumped = false;
-    if (sleep > tuning.wakeSleepThreshold && tuning.cloudClumpThreshold > 0u) {
-        uint clump = 0u;
-        for (int x = -1; x <= 1; x++) {
-            for (int y = -1; y <= 1; y++) {
-                for (int z = -1; z <= 1; z++) {
-                    if (x == 0 && y == 0 && z == 0) continue;
-                    ivec3 n = pos + ivec3(x, y, z);
-                    if (n.x < 0 || n.x >= WIDTH || n.y < 0 || n.y >= HEIGHT ||
-                        n.z < 0 || n.z >= DEPTH) continue;
-                    if (getCloudKind(cloudCells[getIndex(n)]) != CLOUD_NONE) clump++;
-                }
-            }
-        }
-        if (clump >= tuning.cloudClumpThreshold) isClumped = true;
-    }
-
-    if (isClumped) {
-        atomicCompSwap(cloudCells[idx], cell, packCloud(kind, getCloudWait(cell), min(sleep + 1u, 255u)));
-        return;
-    }
-
-    // Bounded like the slides, though the ceiling branch above already guarantees pos.y <= HEIGHT-3
-    // here. Stated anyway: the guarantee is four screens away and one early-return away from being
-    // untrue, and the cost of it being untrue is a cloud block welded into the border row.
     ivec3 upPos = pos + ivec3(0, 1, 0);
-    uint upIndex = getIndex(upPos);
-    if (cloudCellInBounds(upPos) && getCloudKind(cloudCells[upIndex]) == CLOUD_NONE) {
-        // Sleep resets on a move, so a block that is going somewhere keeps being asked every
-        // dispatch and only a block that has stopped pays the cohesion scan.
-        if (tryMoveCloud(idx, packCloud(kind, getCloudWait(cell), 0u), upIndex, cell)) {
-            atomicAdd(cloudChangedCount, 1u);
+    if (cloudCellInBounds(upPos) && getCloudKind(cloudCells[getIndex(upPos)]) == CLOUD_NONE) {
+        if (tryMoveCloud(idx, packCloud(kind, true, counter, target), getIndex(upPos), cell)) {
+            atomicAdd(cloudMovedCount, 1u);
             return;
         }
     }
@@ -2813,14 +2794,17 @@ void updateCloudBlock(ivec3 pos) {
         if (!cloudCellInBounds(t)) continue;
         uint tIndex = getIndex(t);
         if (getCloudKind(cloudCells[tIndex]) != CLOUD_NONE) continue;
-        if (tryMoveCloud(idx, packCloud(kind, getCloudWait(cell), 0u), tIndex, cell)) {
-            atomicAdd(cloudChangedCount, 1u);
+        if (tryMoveCloud(idx, packCloud(kind, true, counter, target), tIndex, cell)) {
+            atomicAdd(cloudMovedCount, 1u);
             return;
         }
     }
 
-    // Tried and failed: it is hemmed in by blocks that moved first. Age towards sleep anyway.
-    atomicCompSwap(cloudCells[idx], cell, packCloud(kind, getCloudWait(cell), min(sleep + 1u, 255u)));
+    // Went nowhere. Clear the moved bit so the next dispatch sees a block at rest -- this is the
+    // only thing that makes "did anything move last tick" mean last tick rather than ever.
+    if (getCloudMoved(cell)) {
+        atomicCompSwap(cloudCells[idx], cell, packCloud(kind, false, counter, target));
+    }
 }
 
 // FUNCTION: main

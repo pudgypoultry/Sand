@@ -43,6 +43,7 @@ private:
     void onDeviceReady(WGPUDevice device);  // the far end of that chain; finishes setup
     void configureSurface(uint32_t width, uint32_t height);
     void syncCanvasSize();
+    void pollSimState();   // copy SimStats out and map it, for the profiler
     void frame();
     void drawFrame();
 
@@ -90,8 +91,16 @@ private:
     WGPUBuffer gridBuffer   = nullptr;  // binding 0, storage: one uint per voxel
     WGPUBuffer cloudBuffer  = nullptr;  // binding 4, storage: the cloud field, parallel to the grid
     WGPUBuffer statsBuffer  = nullptr;  // binding 1, storage: the SimStats block
+
     WGPUBuffer tuningBuffer = nullptr;  // binding 2, uniform: TuningParams
     WGPUBuffer frameBuffer  = nullptr;  // binding 3, uniform: FrameConstants
+    // A host-readable copy of the SimStats scalars, for the profiler's weather line. Not bound to
+    // anything -- the GPU never sees it; the frame's encoder copies into it and the CPU maps it.
+    //
+    // The desktop reads those numbers straight off mapped memory. WebGPU has no host-visible storage
+    // buffer, so the same three values cost a staging buffer, a copy and an asynchronous map.
+    WGPUBuffer statsReadback = nullptr;
+    bool       readbackPending = false;   // a map is in flight; do not copy into or re-map it
 
     // Two of each, because the grid's usage differs by stage and a bind group is only valid with
     // the layout it was created against. The render pass binds it read-only -- WebGPU permits
