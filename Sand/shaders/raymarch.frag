@@ -1080,10 +1080,24 @@ bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, float tEnter, float tExit, ve
                     float mid = (baseY + capY) * 0.5f;
                     float edgeFactor = clamp(abs(cellCenter.y - mid) / max(thickness * 0.5f, 0.001f),
                                              0.0f, 1.0f);
+                    // Density deliberately does NOT enter here. It used to -- the threshold was
+                    // pushed toward 1 for a thin column -- and that was wrong twice over.
+                    //
+                    // It made cloud sparse: a column a tenth of the way to full put the threshold at
+                    // 0.94, against a hash that is uniform on 0..1, so about one cell in sixteen
+                    // survived and the sky was a scatter of isolated cubes rather than cloud.
+                    //
+                    // And it made cloud unstable, which is the worse half. The count changes every
+                    // dispatch as blocks rise and rainclouds fall, so the threshold moved every
+                    // frame -- and up at 0.94 a small move flips a large share of the cells at once,
+                    // because that is where the tail of a uniform distribution is steepest. The
+                    // whole silhouette rearranged between consecutive frames.
+                    //
+                    // Shape now comes from geometry alone, which is stable frame to frame, and
+                    // density drives opacity instead, where a change is a smooth fade rather than a
+                    // rearrangement.
                     float threshold = mix(tuning.cloudEdgeThresholdMin,
                                           tuning.cloudEdgeThresholdMax, edgeFactor);
-                    // A shallow column fills almost nothing; a full one fills as the tuning says.
-                    threshold = mix(1.0f, threshold, density);
 
                     float fillHash = hash(vec3(cellPos));
                     if (fillHash > threshold) {
@@ -1496,7 +1510,11 @@ void main() {
             //
             // Published min above max is the shader's way of saying there is no cloud at all, in
             // which case there is nothing to march.
-            float bandLo = float(cloudMinY);
+            // Backed off by one cloud cell. The band's floor is the lowest cloud block anywhere, so
+            // it moves as blocks come and go -- and starting the march exactly on it risks beginning
+            // inside the first fillable cell rather than before it, which would change the first hit
+            // as the floor drifted. Starting a cell early is always safe; starting late is not.
+            float bandLo = float(cloudMinY) - max(tuning.cloudVoxelSize, 1.0f);
             float bandHi = float(cloudMaxY)
                          + max(tuning.cloudColumnFullCount, 1.0f)
                            * max(tuning.cloudThicknessPerBlock, 0.01f);

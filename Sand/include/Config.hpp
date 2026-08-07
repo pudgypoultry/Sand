@@ -289,7 +289,9 @@ struct TuningParams {
     uint32_t rainWaitMaxTicks = 2048;
     // How many cloud blocks in a column count as a fully opaque cloud. The divisor that makes cloud
     // density independent of world size.
-    float cloudColumnFullCount = 24.0f;
+    // Lowered from 24: with density no longer thinning the fill pattern it drives opacity alone,
+    // and 24 blocks deep is a lot of cloud to demand before the sky looks solid.
+    float cloudColumnFullCount = 10.0f;
     // World units of cloud drawn per cloud block in the column, rising from the top of the pile.
     float cloudThicknessPerBlock = 1.5f;
     // Cloud neighbours (of 26) at which a block counts as clumped and stops trying to move. The
