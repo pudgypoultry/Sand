@@ -12,14 +12,15 @@ namespace SimStats {
 
 inline constexpr uint32_t kBlackHoleMax = 8;
 
-// The fourteen scalars at the top: waterVoxelCount, waterHighMark, cloudWaterCount, rainPhase,
+// The eighteen scalars at the top: waterVoxelCount, waterHighMark, cloudWaterCount, rainPhase,
 // rainPhaseTimeBits, rainTargetLevel, rainCandidateCount, rainCandidateEstimate, cloudChargeBits,
-// cloudBlockCount, cloudMovedCount, cloudStillTicks, simTick, lastRainTick.
+// cloudBlockCount, cloudMovedCount, cloudStillTicks, simTick, lastRainTick, cloudMinYAcc,
+// cloudMaxYAcc, cloudMinY, cloudMaxY.
 //
 // waterHighMark, cloudWaterCount and rainTargetLevel are dead -- weather is driven by the cloud
 // field going still rather than by a water deficit -- but they are still declared, in the shaders
 // too, so that removing them cannot shift the offset of anything after them.
-inline constexpr uint32_t kCloudScalarCount = 14;
+inline constexpr uint32_t kCloudScalarCount = 18;
 
 // Individually named because the profiler reads these three back rather than the whole block.
 inline constexpr uint32_t kRainPhase   = 3;

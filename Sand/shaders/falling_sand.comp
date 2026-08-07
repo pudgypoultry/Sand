@@ -56,6 +56,13 @@ layout(std430, binding = 1) buffer SimStats {
     uint cloudStillTicks;        // UNUSED: the storm check samples rather than accumulating
     uint simTick;                // dispatches since startup; the clock the checks run on
     uint lastRainTick;           // simTick at the last rain event, for the profiler
+    // The global Y range of the cloud field, so the renderer can start its march at the band
+    // instead of at the edge of the world. Accumulator pair and published pair, rotated once
+    // per dispatch like every other census here. Published min > max means no cloud at all.
+    uint cloudMinYAcc;
+    uint cloudMaxYAcc;
+    uint cloudMinY;
+    uint cloudMaxY;
     uint blackHoleCount;         // live table entries; 0 lets every voxel skip the scan entirely
     uint maxOccupiedY;           // ceiling on where matter can be; lets the renderer skip empty sky
     uint blackHoles[BLACK_HOLE_MAX];      // 0 = free slot, else BH_ACTIVE | linear voxel index
@@ -2507,6 +2514,14 @@ void updateSimState() {
     cloudBlockCount = 0u;
     cloudMovedCount = 0u;
 
+    // The band, rotated the same way. The min accumulator restarts at the maximum a uint can hold
+    // rather than at zero, which is what makes atomicMin meaningful -- and leaves min > max as an
+    // unambiguous "there is no cloud", which the renderer uses to skip the march entirely.
+    cloudMinY = cloudMinYAcc;
+    cloudMaxY = cloudMaxYAcc;
+    cloudMinYAcc = 0xFFFFFFFFu;
+    cloudMaxYAcc = 0u;
+
     // --- Group cloud charge ---------------------------------------------------------------------
     // One value the whole sky renders from, so it thickens and greys together rather than cloud by
     // cloud. Clear while gathering, full once it is raining. Eased rather than assigned, so the
@@ -2593,7 +2608,15 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
             // steam voxel sharing a cell with a cloud block has nowhere to condense.
             if ((sType == 0u || sType == 5u) &&
                 getCloudKind(cloudCells[getIndex(scatterPos)]) == CLOUD_NONE) {
-                if (tryMove(currentIndex, rawValue, getIndex(scatterPos), pack(6u, 0u, 0u, newAge))) return;
+                // Carries the sleep counter forward rather than resetting it. Scattering is a
+                // lateral random walk, not progress towards the roof, and the counter exists to
+                // detect steam that cannot ascend. Resetting it here meant a voxel blocked from
+                // above kept clearing its own timer by drifting sideways -- ten CONSECUTIVE still
+                // ticks at a 30% scatter chance is a 2.8% event, so stalled steam wandered for
+                // hundreds of ticks instead of condensing. Only a successful rise resets it.
+                uint carried = min(currentSleep + 1u, 255u);
+                if (tryMove(currentIndex, rawValue, getIndex(scatterPos),
+                            pack(6u, 0u, carried, newAge))) return;
             }
         }
     }
@@ -2729,6 +2752,8 @@ void updateCloudBlock(ivec3 pos) {
     atomicAdd(cloudBlockCount, 1u);
     atomicAdd(cloudColumn[base + 0u], 1u);
     atomicMax(cloudColumn[base + 1u], uint(pos.y));
+    atomicMin(cloudMinYAcc, uint(pos.y));
+    atomicMax(cloudMaxYAcc, uint(pos.y));
 
     // --- Becoming a raincloud -------------------------------------------------------------------
     // Two ways in, and both matter. A rain event converts the whole field at once, which is what

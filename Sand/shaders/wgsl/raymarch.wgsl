@@ -4,7 +4,7 @@
 // Edit raymarch.frag and re-run that script instead; edits here are overwritten and, worse,
 // silently diverge from the shader the desktop build uses.
 //
-// source-sha256: 6bd8528a7bb518b9b99519cd10469467e7f2e3e179e5273a9377b07897745983
+// source-sha256: e2ff2455a0beba2473307731d72505b79e3a69c43b6cd34dd8ec7f336d43abfc
 
 struct TuningParams {
     gridWidth: u32,
@@ -131,6 +131,10 @@ struct SimStats {
     cloudStillTicks: u32,
     simTick: u32,
     lastRainTick: u32,
+    cloudMinYAcc: u32,
+    cloudMaxYAcc: u32,
+    cloudMinY: u32,
+    cloudMaxY: u32,
     blackHoleCount: u32,
     maxOccupiedY: u32,
     blackHoles: array<u32, 8>,
@@ -182,15 +186,15 @@ var<storage> unnamed_2: CloudGrid;
 var<private> outColor: vec4<f32>;
 
 fn hash_u0028_vf3_u003b(p: ptr<function, vec3<f32>>) -> f32 {
-    let _e259 = (*p);
-    return fract((sin(dot(_e259, vec3<f32>(12.9898f, 78.233f, 45.164f))) * 43758.547f));
+    let _e263 = (*p);
+    return fract((sin(dot(_e263, vec3<f32>(12.9898f, 78.233f, 45.164f))) * 43758.547f));
 }
 
 fn cloudColumnBase_u0028_i1_u003b_i1_u003b(x: ptr<function, i32>, z: ptr<function, i32>) -> u32 {
-    let _e260 = (*x);
-    let _e261 = (*z);
-    let _e263 = tuning.gridWidth;
-    return (bitcast<u32>((_e260 + (_e261 * bitcast<i32>(_e263)))) * 4u);
+    let _e264 = (*x);
+    let _e265 = (*z);
+    let _e267 = tuning.gridWidth;
+    return (bitcast<u32>((_e264 + (_e265 * bitcast<i32>(_e267)))) * 4u);
 }
 
 fn sampleCloudColumn_u0028_i1_u003b_i1_u003b_f1_u003b_f1_u003b(x_1: ptr<function, i32>, z_1: ptr<function, i32>, count: ptr<function, f32>, topY: ptr<function, f32>) {
@@ -200,41 +204,41 @@ fn sampleCloudColumn_u0028_i1_u003b_i1_u003b_f1_u003b_f1_u003b(x_1: ptr<function
     var phi_2383_: bool;
     var phi_2395_: bool;
 
-    let _e265 = (*x_1);
-    let _e266 = (_e265 < 0i);
-    phi_2383_ = _e266;
-    if !(_e266) {
-        let _e268 = (*x_1);
-        let _e270 = tuning.gridWidth;
-        phi_2383_ = (_e268 >= bitcast<i32>(_e270));
+    let _e269 = (*x_1);
+    let _e270 = (_e269 < 0i);
+    phi_2383_ = _e270;
+    if !(_e270) {
+        let _e272 = (*x_1);
+        let _e274 = tuning.gridWidth;
+        phi_2383_ = (_e272 >= bitcast<i32>(_e274));
     }
-    let _e274 = phi_2383_;
-    let _e275 = (*z_1);
-    let _e277 = (_e274 || (_e275 < 0i));
-    phi_2395_ = _e277;
-    if !(_e277) {
-        let _e279 = (*z_1);
-        let _e281 = tuning.gridDepth;
-        phi_2395_ = (_e279 >= bitcast<i32>(_e281));
+    let _e278 = phi_2383_;
+    let _e279 = (*z_1);
+    let _e281 = (_e278 || (_e279 < 0i));
+    phi_2395_ = _e281;
+    if !(_e281) {
+        let _e283 = (*z_1);
+        let _e285 = tuning.gridDepth;
+        phi_2395_ = (_e283 >= bitcast<i32>(_e285));
     }
-    let _e285 = phi_2395_;
-    if _e285 {
+    let _e289 = phi_2395_;
+    if _e289 {
         (*count) = 0f;
         (*topY) = 0f;
         return;
     }
-    let _e286 = (*x_1);
-    param = _e286;
-    let _e287 = (*z_1);
-    param_1 = _e287;
-    let _e288 = cloudColumnBase_u0028_i1_u003b_i1_u003b((&param), (&param_1));
-    b = _e288;
-    let _e289 = b;
-    let _e293 = unnamed.cloudColumn[(_e289 + 2u)];
-    (*count) = f32(_e293);
-    let _e295 = b;
-    let _e299 = unnamed.cloudColumn[(_e295 + 3u)];
-    (*topY) = f32(_e299);
+    let _e290 = (*x_1);
+    param = _e290;
+    let _e291 = (*z_1);
+    param_1 = _e291;
+    let _e292 = cloudColumnBase_u0028_i1_u003b_i1_u003b((&param), (&param_1));
+    b = _e292;
+    let _e293 = b;
+    let _e297 = unnamed.cloudColumn[(_e293 + 2u)];
+    (*count) = f32(_e297);
+    let _e299 = b;
+    let _e303 = unnamed.cloudColumn[(_e299 + 3u)];
+    (*topY) = f32(_e303);
     return;
 }
 
@@ -270,67 +274,67 @@ fn smoothedCloudColumn_u0028_i1_u003b_i1_u003b_i1_u003b_f1_u003b_f1_u003b(x_2: p
     var param_20: f32;
     var param_21: f32;
 
-    let _e293 = (*x_2);
-    param_2 = _e293;
-    let _e294 = (*z_2);
-    param_3 = _e294;
-    sampleCloudColumn_u0028_i1_u003b_i1_u003b_f1_u003b_f1_u003b((&param_2), (&param_3), (&param_4), (&param_5));
-    let _e295 = param_4;
-    c0_ = _e295;
-    let _e296 = param_5;
-    y0_ = _e296;
     let _e297 = (*x_2);
-    let _e298 = (*spread);
-    param_6 = (_e297 - _e298);
-    let _e300 = (*z_2);
-    param_7 = _e300;
+    param_2 = _e297;
+    let _e298 = (*z_2);
+    param_3 = _e298;
+    sampleCloudColumn_u0028_i1_u003b_i1_u003b_f1_u003b_f1_u003b((&param_2), (&param_3), (&param_4), (&param_5));
+    let _e299 = param_4;
+    c0_ = _e299;
+    let _e300 = param_5;
+    y0_ = _e300;
+    let _e301 = (*x_2);
+    let _e302 = (*spread);
+    param_6 = (_e301 - _e302);
+    let _e304 = (*z_2);
+    param_7 = _e304;
     sampleCloudColumn_u0028_i1_u003b_i1_u003b_f1_u003b_f1_u003b((&param_6), (&param_7), (&param_8), (&param_9));
-    let _e301 = param_8;
-    c1_ = _e301;
-    let _e302 = param_9;
-    y1_ = _e302;
-    let _e303 = (*x_2);
-    let _e304 = (*spread);
-    param_10 = (_e303 + _e304);
-    let _e306 = (*z_2);
-    param_11 = _e306;
+    let _e305 = param_8;
+    c1_ = _e305;
+    let _e306 = param_9;
+    y1_ = _e306;
+    let _e307 = (*x_2);
+    let _e308 = (*spread);
+    param_10 = (_e307 + _e308);
+    let _e310 = (*z_2);
+    param_11 = _e310;
     sampleCloudColumn_u0028_i1_u003b_i1_u003b_f1_u003b_f1_u003b((&param_10), (&param_11), (&param_12), (&param_13));
-    let _e307 = param_12;
-    c2_ = _e307;
-    let _e308 = param_13;
-    y2_ = _e308;
-    let _e309 = (*z_2);
-    let _e310 = (*spread);
-    let _e312 = (*x_2);
-    param_14 = _e312;
-    param_15 = (_e309 - _e310);
+    let _e311 = param_12;
+    c2_ = _e311;
+    let _e312 = param_13;
+    y2_ = _e312;
+    let _e313 = (*z_2);
+    let _e314 = (*spread);
+    let _e316 = (*x_2);
+    param_14 = _e316;
+    param_15 = (_e313 - _e314);
     sampleCloudColumn_u0028_i1_u003b_i1_u003b_f1_u003b_f1_u003b((&param_14), (&param_15), (&param_16), (&param_17));
-    let _e313 = param_16;
-    c3_ = _e313;
-    let _e314 = param_17;
-    y3_ = _e314;
-    let _e315 = (*z_2);
-    let _e316 = (*spread);
-    let _e318 = (*x_2);
-    param_18 = _e318;
-    param_19 = (_e315 + _e316);
+    let _e317 = param_16;
+    c3_ = _e317;
+    let _e318 = param_17;
+    y3_ = _e318;
+    let _e319 = (*z_2);
+    let _e320 = (*spread);
+    let _e322 = (*x_2);
+    param_18 = _e322;
+    param_19 = (_e319 + _e320);
     sampleCloudColumn_u0028_i1_u003b_i1_u003b_f1_u003b_f1_u003b((&param_18), (&param_19), (&param_20), (&param_21));
-    let _e319 = param_20;
-    c4_ = _e319;
-    let _e320 = param_21;
-    y4_ = _e320;
-    let _e321 = c0_;
-    let _e323 = c1_;
-    let _e325 = c2_;
-    let _e327 = c3_;
-    let _e329 = c4_;
-    (*count_1) = ((((((_e321 * 2f) + _e323) + _e325) + _e327) + _e329) / 6f);
-    let _e332 = y0_;
-    let _e333 = y1_;
-    let _e335 = y2_;
-    let _e336 = y3_;
-    let _e339 = y4_;
-    (*topY_1) = max(max(max(_e332, _e333), max(_e335, _e336)), _e339);
+    let _e323 = param_20;
+    c4_ = _e323;
+    let _e324 = param_21;
+    y4_ = _e324;
+    let _e325 = c0_;
+    let _e327 = c1_;
+    let _e329 = c2_;
+    let _e331 = c3_;
+    let _e333 = c4_;
+    (*count_1) = ((((((_e325 * 2f) + _e327) + _e329) + _e331) + _e333) / 6f);
+    let _e336 = y0_;
+    let _e337 = y1_;
+    let _e339 = y2_;
+    let _e340 = y3_;
+    let _e343 = y4_;
+    (*topY_1) = max(max(max(_e336, _e337), max(_e339, _e340)), _e343);
     return;
 }
 
@@ -374,267 +378,267 @@ fn marchBlockyCloud_u0028_vf3_u003b_vf3_u003b_f1_u003b_f1_u003b_vf3_u003b_f1_u00
     var baseColor: vec3<f32>;
     var stormColor: vec3<f32>;
     var diffuse: f32;
-    var phi_2693_: bool;
-    var phi_2704_: bool;
-    var phi_2745_: bool;
+    var phi_2694_: bool;
+    var phi_2705_: bool;
+    var phi_2746_: bool;
 
-    let _e306 = (*tEnter);
-    (*tEnter) = max(_e306, 0f);
-    let _e308 = (*tEnter);
-    let _e309 = (*tExit);
-    if (_e308 >= _e309) {
+    let _e310 = (*tEnter);
+    (*tEnter) = max(_e310, 0f);
+    let _e312 = (*tEnter);
+    let _e313 = (*tExit);
+    if (_e312 >= _e313) {
         return false;
     }
-    let _e311 = (*rayOrigin);
-    let _e312 = (*rayDir);
-    let _e313 = (*tEnter);
-    startPos = (_e311 + (_e312 * _e313));
-    let _e316 = startPos;
-    let _e318 = tuning.cloudVoxelSize;
-    cellPos = vec3<i32>(floor((_e316 / vec3(_e318))));
-    let _e323 = (*rayDir);
-    stepDir = vec3<i32>(sign(_e323));
-    let _e327 = (*rayDir)[0u];
-    if (_e327 == 0f) {
+    let _e315 = (*rayOrigin);
+    let _e316 = (*rayDir);
+    let _e317 = (*tEnter);
+    startPos = (_e315 + (_e316 * _e317));
+    let _e320 = startPos;
+    let _e322 = tuning.cloudVoxelSize;
+    cellPos = vec3<i32>(floor((_e320 / vec3(_e322))));
+    let _e327 = (*rayDir);
+    stepDir = vec3<i32>(sign(_e327));
+    let _e331 = (*rayDir)[0u];
+    if (_e331 == 0f) {
         local = 100000000f;
     } else {
-        let _e330 = tuning.cloudVoxelSize;
-        let _e332 = (*rayDir)[0u];
-        local = abs((_e330 / _e332));
+        let _e334 = tuning.cloudVoxelSize;
+        let _e336 = (*rayDir)[0u];
+        local = abs((_e334 / _e336));
     }
-    let _e335 = local;
-    let _e337 = (*rayDir)[1u];
-    if (_e337 == 0f) {
+    let _e339 = local;
+    let _e341 = (*rayDir)[1u];
+    if (_e341 == 0f) {
         local_1 = 100000000f;
     } else {
-        let _e340 = tuning.cloudVoxelSize;
-        let _e342 = (*rayDir)[1u];
-        local_1 = abs((_e340 / _e342));
+        let _e344 = tuning.cloudVoxelSize;
+        let _e346 = (*rayDir)[1u];
+        local_1 = abs((_e344 / _e346));
     }
-    let _e345 = local_1;
-    let _e347 = (*rayDir)[2u];
-    if (_e347 == 0f) {
+    let _e349 = local_1;
+    let _e351 = (*rayDir)[2u];
+    if (_e351 == 0f) {
         local_2 = 100000000f;
     } else {
-        let _e350 = tuning.cloudVoxelSize;
-        let _e352 = (*rayDir)[2u];
-        local_2 = abs((_e350 / _e352));
+        let _e354 = tuning.cloudVoxelSize;
+        let _e356 = (*rayDir)[2u];
+        local_2 = abs((_e354 / _e356));
     }
-    let _e355 = local_2;
-    tDelta = vec3<f32>(_e335, _e345, _e355);
-    let _e357 = startPos;
-    let _e359 = tuning.cloudVoxelSize;
-    let _e362 = cellPos;
-    fracPos = ((_e357 / vec3(_e359)) - vec3<f32>(_e362));
-    let _e365 = (*tEnter);
-    let _e367 = stepDir[0u];
-    if (_e367 > 0i) {
-        let _e370 = fracPos[0u];
-        let _e373 = tDelta[0u];
-        local_3 = ((1f - _e370) * _e373);
+    let _e359 = local_2;
+    tDelta = vec3<f32>(_e339, _e349, _e359);
+    let _e361 = startPos;
+    let _e363 = tuning.cloudVoxelSize;
+    let _e366 = cellPos;
+    fracPos = ((_e361 / vec3(_e363)) - vec3<f32>(_e366));
+    let _e369 = (*tEnter);
+    let _e371 = stepDir[0u];
+    if (_e371 > 0i) {
+        let _e374 = fracPos[0u];
+        let _e377 = tDelta[0u];
+        local_3 = ((1f - _e374) * _e377);
     } else {
-        let _e376 = fracPos[0u];
-        let _e378 = tDelta[0u];
-        local_3 = (_e376 * _e378);
+        let _e380 = fracPos[0u];
+        let _e382 = tDelta[0u];
+        local_3 = (_e380 * _e382);
     }
-    let _e380 = local_3;
-    let _e382 = stepDir[1u];
-    if (_e382 > 0i) {
-        let _e385 = fracPos[1u];
-        let _e388 = tDelta[1u];
-        local_4 = ((1f - _e385) * _e388);
+    let _e384 = local_3;
+    let _e386 = stepDir[1u];
+    if (_e386 > 0i) {
+        let _e389 = fracPos[1u];
+        let _e392 = tDelta[1u];
+        local_4 = ((1f - _e389) * _e392);
     } else {
-        let _e391 = fracPos[1u];
-        let _e393 = tDelta[1u];
-        local_4 = (_e391 * _e393);
+        let _e395 = fracPos[1u];
+        let _e397 = tDelta[1u];
+        local_4 = (_e395 * _e397);
     }
-    let _e395 = local_4;
-    let _e397 = stepDir[2u];
-    if (_e397 > 0i) {
-        let _e400 = fracPos[2u];
-        let _e403 = tDelta[2u];
-        local_5 = ((1f - _e400) * _e403);
+    let _e399 = local_4;
+    let _e401 = stepDir[2u];
+    if (_e401 > 0i) {
+        let _e404 = fracPos[2u];
+        let _e407 = tDelta[2u];
+        local_5 = ((1f - _e404) * _e407);
     } else {
-        let _e406 = fracPos[2u];
-        let _e408 = tDelta[2u];
-        local_5 = (_e406 * _e408);
+        let _e410 = fracPos[2u];
+        let _e412 = tDelta[2u];
+        local_5 = (_e410 * _e412);
     }
-    let _e410 = local_5;
-    tMax = (vec3(_e365) + vec3<f32>(_e380, _e395, _e410));
+    let _e414 = local_5;
+    tMax = (vec3(_e369) + vec3<f32>(_e384, _e399, _e414));
     normal = vec3<f32>(0f, 1f, 0f);
-    let _e414 = (*tEnter);
-    t = _e414;
-    let _e416 = tuning.cloudVoxelSize;
-    spread_1 = max(1i, i32(_e416));
+    let _e418 = (*tEnter);
+    t = _e418;
+    let _e420 = tuning.cloudVoxelSize;
+    spread_1 = max(1i, i32(_e420));
     i = 0i;
     loop {
-        let _e419 = i;
-        let _e421 = tuning.maxCloudSteps;
-        if (_e419 < bitcast<i32>(_e421)) {
-            let _e424 = t;
-            let _e425 = (*tExit);
-            if (_e424 > _e425) {
+        let _e423 = i;
+        let _e425 = tuning.maxCloudSteps;
+        if (_e423 < bitcast<i32>(_e425)) {
+            let _e428 = t;
+            let _e429 = (*tExit);
+            if (_e428 > _e429) {
                 break;
             }
-            let _e427 = cellPos;
-            let _e432 = tuning.cloudVoxelSize;
-            cellCenter = ((vec3<f32>(_e427) + vec3(0.5f)) * _e432);
-            let _e435 = cellCenter[0u];
-            cx = i32(floor(_e435));
-            let _e439 = cellCenter[2u];
-            cz = i32(floor(_e439));
-            let _e442 = cx;
-            let _e443 = (_e442 >= 0i);
-            phi_2693_ = _e443;
-            if _e443 {
-                let _e444 = cx;
-                let _e446 = tuning.gridWidth;
-                phi_2693_ = (_e444 < bitcast<i32>(_e446));
+            let _e431 = cellPos;
+            let _e436 = tuning.cloudVoxelSize;
+            cellCenter = ((vec3<f32>(_e431) + vec3(0.5f)) * _e436);
+            let _e439 = cellCenter[0u];
+            cx = i32(floor(_e439));
+            let _e443 = cellCenter[2u];
+            cz = i32(floor(_e443));
+            let _e446 = cx;
+            let _e447 = (_e446 >= 0i);
+            phi_2694_ = _e447;
+            if _e447 {
+                let _e448 = cx;
+                let _e450 = tuning.gridWidth;
+                phi_2694_ = (_e448 < bitcast<i32>(_e450));
             }
-            let _e450 = phi_2693_;
-            let _e451 = cz;
-            let _e453 = (_e450 && (_e451 >= 0i));
-            phi_2704_ = _e453;
-            if _e453 {
-                let _e454 = cz;
-                let _e456 = tuning.gridDepth;
-                phi_2704_ = (_e454 < bitcast<i32>(_e456));
+            let _e454 = phi_2694_;
+            let _e455 = cz;
+            let _e457 = (_e454 && (_e455 >= 0i));
+            phi_2705_ = _e457;
+            if _e457 {
+                let _e458 = cz;
+                let _e460 = tuning.gridDepth;
+                phi_2705_ = (_e458 < bitcast<i32>(_e460));
             }
-            let _e460 = phi_2704_;
-            if _e460 {
-                let _e461 = cx;
-                param_22 = _e461;
-                let _e462 = cz;
-                param_23 = _e462;
-                let _e463 = spread_1;
-                param_24 = _e463;
+            let _e464 = phi_2705_;
+            if _e464 {
+                let _e465 = cx;
+                param_22 = _e465;
+                let _e466 = cz;
+                param_23 = _e466;
+                let _e467 = spread_1;
+                param_24 = _e467;
                 smoothedCloudColumn_u0028_i1_u003b_i1_u003b_i1_u003b_f1_u003b_f1_u003b((&param_22), (&param_23), (&param_24), (&param_25), (&param_26));
-                let _e464 = param_25;
-                count_2 = _e464;
-                let _e465 = param_26;
-                baseY = _e465;
-                let _e466 = count_2;
-                if (_e466 > 0f) {
-                    let _e468 = count_2;
-                    let _e470 = tuning.cloudThicknessPerBlock;
-                    thickness = (_e468 * max(_e470, 0.01f));
-                    let _e473 = baseY;
-                    let _e474 = thickness;
-                    capY = (_e473 + _e474);
-                    let _e477 = cellCenter[1u];
-                    let _e478 = baseY;
-                    let _e479 = (_e477 >= _e478);
-                    phi_2745_ = _e479;
-                    if _e479 {
-                        let _e481 = cellCenter[1u];
-                        let _e482 = capY;
-                        phi_2745_ = (_e481 <= _e482);
+                let _e468 = param_25;
+                count_2 = _e468;
+                let _e469 = param_26;
+                baseY = _e469;
+                let _e470 = count_2;
+                if (_e470 > 0f) {
+                    let _e472 = count_2;
+                    let _e474 = tuning.cloudThicknessPerBlock;
+                    thickness = (_e472 * max(_e474, 0.01f));
+                    let _e477 = baseY;
+                    let _e478 = thickness;
+                    capY = (_e477 + _e478);
+                    let _e481 = cellCenter[1u];
+                    let _e482 = baseY;
+                    let _e483 = (_e481 >= _e482);
+                    phi_2746_ = _e483;
+                    if _e483 {
+                        let _e485 = cellCenter[1u];
+                        let _e486 = capY;
+                        phi_2746_ = (_e485 <= _e486);
                     }
-                    let _e485 = phi_2745_;
-                    if _e485 {
-                        let _e486 = count_2;
-                        let _e488 = tuning.cloudColumnFullCount;
-                        density = clamp((_e486 / max(_e488, 1f)), 0f, 1f);
-                        let _e492 = baseY;
-                        let _e493 = capY;
-                        mid = ((_e492 + _e493) * 0.5f);
-                        let _e497 = cellCenter[1u];
-                        let _e498 = mid;
-                        let _e501 = thickness;
-                        edgeFactor = clamp((abs((_e497 - _e498)) / max((_e501 * 0.5f), 0.001f)), 0f, 1f);
-                        let _e507 = tuning.cloudEdgeThresholdMin;
-                        let _e509 = tuning.cloudEdgeThresholdMax;
-                        let _e510 = edgeFactor;
-                        threshold = mix(_e507, _e509, _e510);
-                        let _e512 = threshold;
-                        let _e513 = density;
-                        threshold = mix(1f, _e512, _e513);
-                        let _e515 = cellPos;
-                        param_27 = vec3<f32>(_e515);
-                        let _e517 = hash_u0028_vf3_u003b((&param_27));
-                        fillHash = _e517;
-                        let _e518 = fillHash;
-                        let _e519 = threshold;
-                        if (_e518 > _e519) {
-                            let _e521 = t;
-                            (*tHit) = _e521;
-                            let _e522 = density;
-                            (*hitDensity) = _e522;
-                            let _e523 = cellPos;
-                            param_28 = ((vec3<f32>(_e523) * 3.71f) + vec3<f32>(91f, 5f, 7f));
-                            let _e527 = hash_u0028_vf3_u003b((&param_28));
-                            shadeHash = _e527;
-                            let _e528 = shadeHash;
-                            baseColor = mix(vec3<f32>(0.9f, 0.91f, 0.94f), vec3<f32>(1f, 1f, 1f), vec3(_e528));
+                    let _e489 = phi_2746_;
+                    if _e489 {
+                        let _e490 = count_2;
+                        let _e492 = tuning.cloudColumnFullCount;
+                        density = clamp((_e490 / max(_e492, 1f)), 0f, 1f);
+                        let _e496 = baseY;
+                        let _e497 = capY;
+                        mid = ((_e496 + _e497) * 0.5f);
+                        let _e501 = cellCenter[1u];
+                        let _e502 = mid;
+                        let _e505 = thickness;
+                        edgeFactor = clamp((abs((_e501 - _e502)) / max((_e505 * 0.5f), 0.001f)), 0f, 1f);
+                        let _e511 = tuning.cloudEdgeThresholdMin;
+                        let _e513 = tuning.cloudEdgeThresholdMax;
+                        let _e514 = edgeFactor;
+                        threshold = mix(_e511, _e513, _e514);
+                        let _e516 = threshold;
+                        let _e517 = density;
+                        threshold = mix(1f, _e516, _e517);
+                        let _e519 = cellPos;
+                        param_27 = vec3<f32>(_e519);
+                        let _e521 = hash_u0028_vf3_u003b((&param_27));
+                        fillHash = _e521;
+                        let _e522 = fillHash;
+                        let _e523 = threshold;
+                        if (_e522 > _e523) {
+                            let _e525 = t;
+                            (*tHit) = _e525;
+                            let _e526 = density;
+                            (*hitDensity) = _e526;
+                            let _e527 = cellPos;
+                            param_28 = ((vec3<f32>(_e527) * 3.71f) + vec3<f32>(91f, 5f, 7f));
+                            let _e531 = hash_u0028_vf3_u003b((&param_28));
+                            shadeHash = _e531;
+                            let _e532 = shadeHash;
+                            baseColor = mix(vec3<f32>(0.9f, 0.91f, 0.94f), vec3<f32>(1f, 1f, 1f), vec3(_e532));
                             stormColor = vec3<f32>(0.32f, 0.33f, 0.36f);
-                            let _e531 = baseColor;
-                            let _e532 = stormColor;
-                            let _e533 = (*greyness);
-                            baseColor = mix(_e531, _e532, vec3(_e533));
-                            let _e536 = normal;
-                            let _e537 = (*sunDir);
-                            diffuse = (0.6f + (0.4f * max(dot(_e536, _e537), 0f)));
-                            let _e542 = baseColor;
-                            let _e543 = diffuse;
-                            (*hitColor) = (_e542 * _e543);
+                            let _e535 = baseColor;
+                            let _e536 = stormColor;
+                            let _e537 = (*greyness);
+                            baseColor = mix(_e535, _e536, vec3(_e537));
+                            let _e540 = normal;
+                            let _e541 = (*sunDir);
+                            diffuse = (0.6f + (0.4f * max(dot(_e540, _e541), 0f)));
+                            let _e546 = baseColor;
+                            let _e547 = diffuse;
+                            (*hitColor) = (_e546 * _e547);
                             return true;
                         }
                     }
                 }
             }
-            let _e546 = tMax[0u];
-            let _e548 = tMax[1u];
-            if (_e546 < _e548) {
-                let _e551 = tMax[0u];
-                let _e553 = tMax[2u];
-                if (_e551 < _e553) {
-                    let _e556 = stepDir[0u];
-                    let _e558 = cellPos[0u];
-                    cellPos[0u] = (_e558 + _e556);
-                    let _e562 = tMax[0u];
-                    t = _e562;
-                    let _e564 = tDelta[0u];
+            let _e550 = tMax[0u];
+            let _e552 = tMax[1u];
+            if (_e550 < _e552) {
+                let _e555 = tMax[0u];
+                let _e557 = tMax[2u];
+                if (_e555 < _e557) {
+                    let _e560 = stepDir[0u];
+                    let _e562 = cellPos[0u];
+                    cellPos[0u] = (_e562 + _e560);
                     let _e566 = tMax[0u];
-                    tMax[0u] = (_e566 + _e564);
-                    let _e570 = stepDir[0u];
-                    normal = vec3<f32>(f32(-(_e570)), 0f, 0f);
+                    t = _e566;
+                    let _e568 = tDelta[0u];
+                    let _e570 = tMax[0u];
+                    tMax[0u] = (_e570 + _e568);
+                    let _e574 = stepDir[0u];
+                    normal = vec3<f32>(f32(-(_e574)), 0f, 0f);
                 } else {
-                    let _e575 = stepDir[2u];
-                    let _e577 = cellPos[2u];
-                    cellPos[2u] = (_e577 + _e575);
-                    let _e581 = tMax[2u];
-                    t = _e581;
-                    let _e583 = tDelta[2u];
+                    let _e579 = stepDir[2u];
+                    let _e581 = cellPos[2u];
+                    cellPos[2u] = (_e581 + _e579);
                     let _e585 = tMax[2u];
-                    tMax[2u] = (_e585 + _e583);
-                    let _e589 = stepDir[2u];
-                    normal = vec3<f32>(0f, 0f, f32(-(_e589)));
+                    t = _e585;
+                    let _e587 = tDelta[2u];
+                    let _e589 = tMax[2u];
+                    tMax[2u] = (_e589 + _e587);
+                    let _e593 = stepDir[2u];
+                    normal = vec3<f32>(0f, 0f, f32(-(_e593)));
                 }
             } else {
-                let _e594 = tMax[1u];
-                let _e596 = tMax[2u];
-                if (_e594 < _e596) {
-                    let _e599 = stepDir[1u];
-                    let _e601 = cellPos[1u];
-                    cellPos[1u] = (_e601 + _e599);
-                    let _e605 = tMax[1u];
-                    t = _e605;
-                    let _e607 = tDelta[1u];
+                let _e598 = tMax[1u];
+                let _e600 = tMax[2u];
+                if (_e598 < _e600) {
+                    let _e603 = stepDir[1u];
+                    let _e605 = cellPos[1u];
+                    cellPos[1u] = (_e605 + _e603);
                     let _e609 = tMax[1u];
-                    tMax[1u] = (_e609 + _e607);
-                    let _e613 = stepDir[1u];
-                    normal = vec3<f32>(0f, f32(-(_e613)), 0f);
+                    t = _e609;
+                    let _e611 = tDelta[1u];
+                    let _e613 = tMax[1u];
+                    tMax[1u] = (_e613 + _e611);
+                    let _e617 = stepDir[1u];
+                    normal = vec3<f32>(0f, f32(-(_e617)), 0f);
                 } else {
-                    let _e618 = stepDir[2u];
-                    let _e620 = cellPos[2u];
-                    cellPos[2u] = (_e620 + _e618);
-                    let _e624 = tMax[2u];
-                    t = _e624;
-                    let _e626 = tDelta[2u];
+                    let _e622 = stepDir[2u];
+                    let _e624 = cellPos[2u];
+                    cellPos[2u] = (_e624 + _e622);
                     let _e628 = tMax[2u];
-                    tMax[2u] = (_e628 + _e626);
-                    let _e632 = stepDir[2u];
-                    normal = vec3<f32>(0f, 0f, f32(-(_e632)));
+                    t = _e628;
+                    let _e630 = tDelta[2u];
+                    let _e632 = tMax[2u];
+                    tMax[2u] = (_e632 + _e630);
+                    let _e636 = stepDir[2u];
+                    normal = vec3<f32>(0f, 0f, f32(-(_e636)));
                 }
             }
             continue;
@@ -642,8 +646,8 @@ fn marchBlockyCloud_u0028_vf3_u003b_vf3_u003b_f1_u003b_f1_u003b_vf3_u003b_f1_u00
             break;
         }
         continuing {
-            let _e636 = i;
-            i = (_e636 + 1i);
+            let _e640 = i;
+            i = (_e640 + 1i);
         }
     }
     return false;
@@ -653,34 +657,34 @@ fn renderBlackHole_u0028_vf3_u003b_vf3_u003b(normal_1: ptr<function, vec3<f32>>,
     var rim: f32;
     var glow: f32;
 
-    let _e262 = (*normal_1);
-    let _e263 = (*rayDir_1);
-    rim = (1f - abs(dot(_e262, _e263)));
-    let _e267 = rim;
-    glow = pow(clamp(_e267, 0f, 1f), 4f);
-    let _e270 = glow;
-    return mix(vec3<f32>(0.01f, 0.01f, 0.02f), vec3<f32>(0.85f, 0.45f, 1f), vec3((_e270 * 0.7f)));
+    let _e266 = (*normal_1);
+    let _e267 = (*rayDir_1);
+    rim = (1f - abs(dot(_e266, _e267)));
+    let _e271 = rim;
+    glow = pow(clamp(_e271, 0f, 1f), 4f);
+    let _e274 = glow;
+    return mix(vec3<f32>(0.01f, 0.01f, 0.02f), vec3<f32>(0.85f, 0.45f, 1f), vec3((_e274 * 0.7f)));
 }
 
 fn bhDecode_u0028_u1_u003b(code: ptr<function, u32>) -> vec3<i32> {
     var i_1: u32;
 
-    let _e260 = (*code);
-    i_1 = (_e260 & 1073741823u);
-    let _e262 = i_1;
-    let _e264 = tuning.gridWidth;
-    let _e269 = i_1;
-    let _e271 = tuning.gridWidth;
-    let _e276 = tuning.gridHeight;
-    let _e281 = i_1;
-    let _e283 = tuning.gridWidth;
-    let _e286 = tuning.gridHeight;
-    return vec3<i32>(bitcast<i32>((_e262 % bitcast<u32>(bitcast<i32>(_e264)))), bitcast<i32>(((_e269 / bitcast<u32>(bitcast<i32>(_e271))) % bitcast<u32>(bitcast<i32>(_e276)))), bitcast<i32>((_e281 / bitcast<u32>((bitcast<i32>(_e283) * bitcast<i32>(_e286))))));
+    let _e264 = (*code);
+    i_1 = (_e264 & 1073741823u);
+    let _e266 = i_1;
+    let _e268 = tuning.gridWidth;
+    let _e273 = i_1;
+    let _e275 = tuning.gridWidth;
+    let _e280 = tuning.gridHeight;
+    let _e285 = i_1;
+    let _e287 = tuning.gridWidth;
+    let _e290 = tuning.gridHeight;
+    return vec3<i32>(bitcast<i32>((_e266 % bitcast<u32>(bitcast<i32>(_e268)))), bitcast<i32>(((_e273 / bitcast<u32>(bitcast<i32>(_e275))) % bitcast<u32>(bitcast<i32>(_e280)))), bitcast<i32>((_e285 / bitcast<u32>((bitcast<i32>(_e287) * bitcast<i32>(_e290))))));
 }
 
 fn bhBodyRadius_u0028_u1_u003b(level: ptr<function, u32>) -> f32 {
-    let _e259 = (*level);
-    return (f32(_e259) + 0.5f);
+    let _e263 = (*level);
+    return (f32(_e263) + 0.5f);
 }
 
 fn bhLevel_u0028_u1_u003b(mass: ptr<function, u32>) -> u32 {
@@ -693,36 +697,36 @@ fn bhLevel_u0028_u1_u003b(mass: ptr<function, u32>) -> u32 {
     level_1 = 0u;
     l = 1u;
     loop {
-        let _e264 = l;
-        let _e266 = tuning.blackHoleMaxLevel;
-        if (_e264 <= min(_e266, 16u)) {
-            let _e269 = l;
-            param_29 = _e269;
-            let _e270 = bhBodyRadius_u0028_u1_u003b((&param_29));
-            r = _e270;
-            let _e271 = r;
-            let _e273 = r;
+        let _e268 = l;
+        let _e270 = tuning.blackHoleMaxLevel;
+        if (_e268 <= min(_e270, 16u)) {
+            let _e273 = l;
+            param_29 = _e273;
+            let _e274 = bhBodyRadius_u0028_u1_u003b((&param_29));
+            r = _e274;
             let _e275 = r;
-            volume = (((4.18879f * _e271) * _e273) * _e275);
-            let _e277 = (*mass);
-            let _e280 = tuning.blackHoleGrowthCost;
-            let _e281 = volume;
-            if (f32(_e277) < (_e280 * _e281)) {
+            let _e277 = r;
+            let _e279 = r;
+            volume = (((4.18879f * _e275) * _e277) * _e279);
+            let _e281 = (*mass);
+            let _e284 = tuning.blackHoleGrowthCost;
+            let _e285 = volume;
+            if (f32(_e281) < (_e284 * _e285)) {
                 break;
             }
-            let _e284 = l;
-            level_1 = _e284;
+            let _e288 = l;
+            level_1 = _e288;
             continue;
         } else {
             break;
         }
         continuing {
-            let _e285 = l;
-            l = (_e285 + bitcast<u32>(1i));
+            let _e289 = l;
+            l = (_e289 + bitcast<u32>(1i));
         }
     }
-    let _e288 = level_1;
-    return _e288;
+    let _e292 = level_1;
+    return _e292;
 }
 
 fn accretionGlow_u0028_vf3_u003b_vi3_u003b(color: ptr<function, vec3<f32>>, voxelPos: ptr<function, vec3<i32>>) -> vec3<f32> {
@@ -739,82 +743,82 @@ fn accretionGlow_u0028_vf3_u003b_vi3_u003b(color: ptr<function, vec3<f32>>, voxe
     var phi_2268_: bool;
     var phi_2297_: bool;
 
-    let _e271 = unnamed.blackHoleCount;
-    let _e272 = (_e271 == 0u);
-    phi_2268_ = _e272;
-    if !(_e272) {
-        let _e275 = tuning.blackHoleGlow;
-        phi_2268_ = (_e275 <= 0f);
+    let _e275 = unnamed.blackHoleCount;
+    let _e276 = (_e275 == 0u);
+    phi_2268_ = _e276;
+    if !(_e276) {
+        let _e279 = tuning.blackHoleGlow;
+        phi_2268_ = (_e279 <= 0f);
     }
-    let _e278 = phi_2268_;
-    if _e278 {
-        let _e279 = (*color);
-        return _e279;
+    let _e282 = phi_2268_;
+    if _e282 {
+        let _e283 = (*color);
+        return _e283;
     }
-    let _e281 = tuning.blackHoleRadius;
-    radius = f32(_e281);
-    let _e283 = radius;
-    let _e284 = radius;
-    closestSq = (_e283 * _e284);
+    let _e285 = tuning.blackHoleRadius;
+    radius = f32(_e285);
+    let _e287 = radius;
+    let _e288 = radius;
+    closestSq = (_e287 * _e288);
     seen = 0u;
     i_2 = 0i;
     loop {
-        let _e286 = i_2;
-        let _e287 = (_e286 < 8i);
-        phi_2297_ = _e287;
-        if _e287 {
-            let _e288 = seen;
-            let _e290 = unnamed.blackHoleCount;
-            phi_2297_ = (_e288 < _e290);
+        let _e290 = i_2;
+        let _e291 = (_e290 < 8i);
+        phi_2297_ = _e291;
+        if _e291 {
+            let _e292 = seen;
+            let _e294 = unnamed.blackHoleCount;
+            phi_2297_ = (_e292 < _e294);
         }
-        let _e293 = phi_2297_;
-        if _e293 {
-            let _e294 = i_2;
-            let _e297 = unnamed.blackHoles[_e294];
-            code_1 = _e297;
-            let _e298 = code_1;
-            if (_e298 == 0u) {
+        let _e297 = phi_2297_;
+        if _e297 {
+            let _e298 = i_2;
+            let _e301 = unnamed.blackHoles[_e298];
+            code_1 = _e301;
+            let _e302 = code_1;
+            if (_e302 == 0u) {
                 continue;
             }
-            let _e300 = seen;
-            seen = (_e300 + bitcast<u32>(1i));
-            let _e303 = code_1;
-            param_30 = _e303;
-            let _e304 = bhDecode_u0028_u1_u003b((&param_30));
-            let _e305 = (*voxelPos);
-            d = vec3<f32>((_e304 - _e305));
-            let _e308 = closestSq;
-            let _e309 = d;
-            let _e310 = d;
-            closestSq = min(_e308, dot(_e309, _e310));
+            let _e304 = seen;
+            seen = (_e304 + bitcast<u32>(1i));
+            let _e307 = code_1;
+            param_30 = _e307;
+            let _e308 = bhDecode_u0028_u1_u003b((&param_30));
+            let _e309 = (*voxelPos);
+            d = vec3<f32>((_e308 - _e309));
+            let _e312 = closestSq;
+            let _e313 = d;
+            let _e314 = d;
+            closestSq = min(_e312, dot(_e313, _e314));
             continue;
         } else {
             break;
         }
         continuing {
-            let _e313 = i_2;
-            i_2 = (_e313 + 1i);
+            let _e317 = i_2;
+            i_2 = (_e317 + 1i);
         }
     }
-    let _e315 = closestSq;
-    let _e316 = radius;
-    let _e317 = radius;
-    if (_e315 >= (_e316 * _e317)) {
-        let _e320 = (*color);
-        return _e320;
+    let _e319 = closestSq;
+    let _e320 = radius;
+    let _e321 = radius;
+    if (_e319 >= (_e320 * _e321)) {
+        let _e324 = (*color);
+        return _e324;
     }
-    let _e321 = closestSq;
-    closest = sqrt(_e321);
-    let _e323 = closest;
-    let _e324 = radius;
-    let _e329 = tuning.blackHoleGlow;
-    heat = (pow((1f - (_e323 / _e324)), 3f) * _e329);
-    let _e331 = heat;
-    hot = mix(vec3<f32>(1f, 0.45f, 0.1f), vec3<f32>(1f, 0.95f, 0.85f), vec3(clamp(_e331, 0f, 1f)));
-    let _e335 = (*color);
-    let _e336 = hot;
-    let _e337 = heat;
-    return mix(_e335, _e336, vec3(clamp(_e337, 0f, 1f)));
+    let _e325 = closestSq;
+    closest = sqrt(_e325);
+    let _e327 = closest;
+    let _e328 = radius;
+    let _e333 = tuning.blackHoleGlow;
+    heat = (pow((1f - (_e327 / _e328)), 3f) * _e333);
+    let _e335 = heat;
+    hot = mix(vec3<f32>(1f, 0.45f, 0.1f), vec3<f32>(1f, 0.95f, 0.85f), vec3(clamp(_e335, 0f, 1f)));
+    let _e339 = (*color);
+    let _e340 = hot;
+    let _e341 = heat;
+    return mix(_e339, _e340, vec3(clamp(_e341, 0f, 1f)));
 }
 
 fn renderLeaf_u0028_u1_u003b_vi3_u003b_vf3_u003b(rawVoxel: ptr<function, u32>, voxelPos_1: ptr<function, vec3<i32>>, baseLighting: ptr<function, vec3<f32>>) -> vec3<f32> {
@@ -826,31 +830,31 @@ fn renderLeaf_u0028_u1_u003b_vi3_u003b_vf3_u003b(rawVoxel: ptr<function, u32>, v
     var outer: vec3<f32>;
     var leaf: vec3<f32>;
 
-    let _e268 = (*voxelPos_1);
-    param_31 = vec3<f32>(_e268);
-    let _e270 = hash_u0028_vf3_u003b((&param_31));
-    n = _e270;
-    let _e271 = (*rawVoxel);
-    dist = ((_e271 >> bitcast<u32>(24i)) & 255u);
-    let _e275 = dist;
-    if (_e275 == 255u) {
-        let _e277 = n;
-        let _e280 = (*baseLighting);
-        return (mix(vec3<f32>(0.34f, 0.22f, 0.07f), vec3<f32>(0.52f, 0.38f, 0.12f), vec3(_e277)) * _e280);
+    let _e272 = (*voxelPos_1);
+    param_31 = vec3<f32>(_e272);
+    let _e274 = hash_u0028_vf3_u003b((&param_31));
+    n = _e274;
+    let _e275 = (*rawVoxel);
+    dist = ((_e275 >> bitcast<u32>(24i)) & 255u);
+    let _e279 = dist;
+    if (_e279 == 255u) {
+        let _e281 = n;
+        let _e284 = (*baseLighting);
+        return (mix(vec3<f32>(0.34f, 0.22f, 0.07f), vec3<f32>(0.52f, 0.38f, 0.12f), vec3(_e281)) * _e284);
     }
-    let _e282 = dist;
-    let _e285 = tuning.treeLeafReach;
-    depth = clamp((f32(_e282) / max(f32(_e285), 1f)), 0f, 1f);
+    let _e286 = dist;
+    let _e289 = tuning.treeLeafReach;
+    depth = clamp((f32(_e286) / max(f32(_e289), 1f)), 0f, 1f);
     inner = vec3<f32>(0.1f, 0.3f, 0.09f);
     outer = vec3<f32>(0.28f, 0.52f, 0.16f);
-    let _e290 = inner;
-    let _e291 = outer;
-    let _e292 = depth;
-    let _e294 = n;
-    leaf = mix(_e290, _e291, vec3(((_e292 * 0.7f) + (_e294 * 0.3f))));
-    let _e299 = leaf;
-    let _e300 = (*baseLighting);
-    return (_e299 * _e300);
+    let _e294 = inner;
+    let _e295 = outer;
+    let _e296 = depth;
+    let _e298 = n;
+    leaf = mix(_e294, _e295, vec3(((_e296 * 0.7f) + (_e298 * 0.3f))));
+    let _e303 = leaf;
+    let _e304 = (*baseLighting);
+    return (_e303 * _e304);
 }
 
 fn renderTrunk_u0028_vi3_u003b_vf3_u003b_vf3_u003b(voxelPos_2: ptr<function, vec3<i32>>, subCell: ptr<function, vec3<f32>>, baseLighting_1: ptr<function, vec3<f32>>) -> vec3<f32> {
@@ -858,18 +862,18 @@ fn renderTrunk_u0028_vi3_u003b_vf3_u003b_vf3_u003b(voxelPos_2: ptr<function, vec
     var param_32: vec3<f32>;
     var bark: vec3<f32>;
 
-    let _e265 = (*voxelPos_2)[0u];
-    let _e268 = (*voxelPos_2)[1u];
-    let _e272 = (*subCell)[1u];
-    let _e276 = (*voxelPos_2)[2u];
-    param_32 = vec3<f32>(f32(_e265), ((f32(_e268) * 0.35f) + (_e272 * 0.2f)), f32(_e276));
-    let _e279 = hash_u0028_vf3_u003b((&param_32));
-    grain = _e279;
-    let _e280 = grain;
-    bark = mix(vec3<f32>(0.2f, 0.13f, 0.07f), vec3<f32>(0.38f, 0.25f, 0.13f), vec3(_e280));
-    let _e283 = bark;
-    let _e284 = (*baseLighting_1);
-    return (_e283 * _e284);
+    let _e269 = (*voxelPos_2)[0u];
+    let _e272 = (*voxelPos_2)[1u];
+    let _e276 = (*subCell)[1u];
+    let _e280 = (*voxelPos_2)[2u];
+    param_32 = vec3<f32>(f32(_e269), ((f32(_e272) * 0.35f) + (_e276 * 0.2f)), f32(_e280));
+    let _e283 = hash_u0028_vf3_u003b((&param_32));
+    grain = _e283;
+    let _e284 = grain;
+    bark = mix(vec3<f32>(0.2f, 0.13f, 0.07f), vec3<f32>(0.38f, 0.25f, 0.13f), vec3(_e284));
+    let _e287 = bark;
+    let _e288 = (*baseLighting_1);
+    return (_e287 * _e288);
 }
 
 fn renderLocust_u0028_vi3_u003b_vf3_u003b_vf3_u003b(voxelPos_3: ptr<function, vec3<i32>>, subCell_1: ptr<function, vec3<f32>>, baseLighting_2: ptr<function, vec3<f32>>) -> vec3<f32> {
@@ -877,16 +881,16 @@ fn renderLocust_u0028_vi3_u003b_vf3_u003b_vf3_u003b(voxelPos_3: ptr<function, ve
     var param_33: vec3<f32>;
     var shell: vec3<f32>;
 
-    let _e264 = (*subCell_1);
-    let _e266 = (*voxelPos_3);
-    param_33 = ((_e264 * 1.37f) + (vec3<f32>(_e266) * 0.11f));
-    let _e270 = hash_u0028_vf3_u003b((&param_33));
-    n_1 = _e270;
-    let _e271 = n_1;
-    shell = mix(vec3<f32>(0.15f, 0.1f, 0.035f), vec3<f32>(0.55f, 0.4f, 0.11f), vec3(_e271));
-    let _e274 = shell;
-    let _e275 = (*baseLighting_2);
-    return (_e274 * _e275);
+    let _e268 = (*subCell_1);
+    let _e270 = (*voxelPos_3);
+    param_33 = ((_e268 * 1.37f) + (vec3<f32>(_e270) * 0.11f));
+    let _e274 = hash_u0028_vf3_u003b((&param_33));
+    n_1 = _e274;
+    let _e275 = n_1;
+    shell = mix(vec3<f32>(0.15f, 0.1f, 0.035f), vec3<f32>(0.55f, 0.4f, 0.11f), vec3(_e275));
+    let _e278 = shell;
+    let _e279 = (*baseLighting_2);
+    return (_e278 * _e279);
 }
 
 fn renderDarkStone_u0028_vi3_u003b_vf3_u003b(voxelPos_4: ptr<function, vec3<i32>>, baseLighting_3: ptr<function, vec3<f32>>) -> vec3<f32> {
@@ -894,26 +898,26 @@ fn renderDarkStone_u0028_vi3_u003b_vf3_u003b(voxelPos_4: ptr<function, vec3<i32>
     var param_34: vec3<f32>;
     var val: f32;
 
-    let _e263 = (*voxelPos_4);
-    param_34 = vec3<f32>(_e263);
-    let _e265 = hash_u0028_vf3_u003b((&param_34));
-    noise = _e265;
-    let _e266 = noise;
-    val = (0.1f + (_e266 * 0.06f));
-    let _e269 = val;
-    let _e271 = val;
+    let _e267 = (*voxelPos_4);
+    param_34 = vec3<f32>(_e267);
+    let _e269 = hash_u0028_vf3_u003b((&param_34));
+    noise = _e269;
+    let _e270 = noise;
+    val = (0.1f + (_e270 * 0.06f));
     let _e273 = val;
-    let _e276 = (*baseLighting_3);
-    return (vec3<f32>((_e269 * 1.08f), (_e271 * 0.94f), (_e273 * 0.92f)) * _e276);
+    let _e275 = val;
+    let _e277 = val;
+    let _e280 = (*baseLighting_3);
+    return (vec3<f32>((_e273 * 1.08f), (_e275 * 0.94f), (_e277 * 0.92f)) * _e280);
 }
 
 fn lavaStageColor_u0028_i1_u003b(stage: ptr<function, i32>) -> vec3<f32> {
     var indexable: array<vec3<f32>, 6>;
 
-    let _e260 = (*stage);
+    let _e264 = (*stage);
     indexable = array<vec3<f32>, 6>(vec3<f32>(1f, 0.62f, 0.22f), vec3<f32>(1f, 0.4f, 0.07f), vec3<f32>(0.96f, 0.29f, 0.05f), vec3<f32>(0.86f, 0.2f, 0.04f), vec3<f32>(0.7f, 0.13f, 0.03f), vec3<f32>(0.44f, 0.07f, 0.02f));
-    let _e264 = indexable[clamp((_e260 + 1i), 0i, 5i)];
-    return _e264;
+    let _e268 = indexable[clamp((_e264 + 1i), 0i, 5i)];
+    return _e268;
 }
 
 fn renderLava_u0028_u1_u003b_vi3_u003b(rawVoxel_1: ptr<function, u32>, voxelPos_5: ptr<function, vec3<i32>>) -> vec3<f32> {
@@ -932,61 +936,61 @@ fn renderLava_u0028_u1_u003b_vi3_u003b(rawVoxel_1: ptr<function, u32>, voxelPos_
     var molten: vec3<f32>;
     var param_42: vec3<f32>;
 
-    let _e274 = (*rawVoxel_1);
-    stage_1 = clamp((bitcast<i32>((_e274 & 255u)) - 8i), 0i, 3i);
-    let _e280 = pc.time;
-    let _e282 = tuning.lavaChurnRate;
-    let _e284 = (*voxelPos_5);
-    param_35 = vec3<f32>(_e284);
-    let _e286 = hash_u0028_vf3_u003b((&param_35));
-    phase = fract(((_e280 * _e282) + _e286));
-    let _e289 = phase;
-    if (_e289 < 0.33333334f) {
-        let _e291 = stage_1;
-        param_36 = (_e291 - 1i);
-        let _e293 = lavaStageColor_u0028_i1_u003b((&param_36));
-        from_ = _e293;
-        let _e294 = stage_1;
-        param_37 = _e294;
-        let _e295 = lavaStageColor_u0028_i1_u003b((&param_37));
-        to = _e295;
-        let _e296 = phase;
-        leg = (_e296 * 3f);
+    let _e278 = (*rawVoxel_1);
+    stage_1 = clamp((bitcast<i32>((_e278 & 255u)) - 8i), 0i, 3i);
+    let _e284 = pc.time;
+    let _e286 = tuning.lavaChurnRate;
+    let _e288 = (*voxelPos_5);
+    param_35 = vec3<f32>(_e288);
+    let _e290 = hash_u0028_vf3_u003b((&param_35));
+    phase = fract(((_e284 * _e286) + _e290));
+    let _e293 = phase;
+    if (_e293 < 0.33333334f) {
+        let _e295 = stage_1;
+        param_36 = (_e295 - 1i);
+        let _e297 = lavaStageColor_u0028_i1_u003b((&param_36));
+        from_ = _e297;
+        let _e298 = stage_1;
+        param_37 = _e298;
+        let _e299 = lavaStageColor_u0028_i1_u003b((&param_37));
+        to = _e299;
+        let _e300 = phase;
+        leg = (_e300 * 3f);
     } else {
-        let _e298 = phase;
-        if (_e298 < 0.6666667f) {
-            let _e300 = stage_1;
-            param_38 = _e300;
-            let _e301 = lavaStageColor_u0028_i1_u003b((&param_38));
-            from_ = _e301;
-            let _e302 = stage_1;
-            param_39 = (_e302 + 1i);
-            let _e304 = lavaStageColor_u0028_i1_u003b((&param_39));
-            to = _e304;
-            let _e305 = phase;
-            leg = ((_e305 * 3f) - 1f);
+        let _e302 = phase;
+        if (_e302 < 0.6666667f) {
+            let _e304 = stage_1;
+            param_38 = _e304;
+            let _e305 = lavaStageColor_u0028_i1_u003b((&param_38));
+            from_ = _e305;
+            let _e306 = stage_1;
+            param_39 = (_e306 + 1i);
+            let _e308 = lavaStageColor_u0028_i1_u003b((&param_39));
+            to = _e308;
+            let _e309 = phase;
+            leg = ((_e309 * 3f) - 1f);
         } else {
-            let _e308 = stage_1;
-            param_40 = (_e308 + 1i);
-            let _e310 = lavaStageColor_u0028_i1_u003b((&param_40));
-            from_ = _e310;
-            let _e311 = stage_1;
-            param_41 = (_e311 - 1i);
-            let _e313 = lavaStageColor_u0028_i1_u003b((&param_41));
-            to = _e313;
-            let _e314 = phase;
-            leg = ((_e314 * 3f) - 2f);
+            let _e312 = stage_1;
+            param_40 = (_e312 + 1i);
+            let _e314 = lavaStageColor_u0028_i1_u003b((&param_40));
+            from_ = _e314;
+            let _e315 = stage_1;
+            param_41 = (_e315 - 1i);
+            let _e317 = lavaStageColor_u0028_i1_u003b((&param_41));
+            to = _e317;
+            let _e318 = phase;
+            leg = ((_e318 * 3f) - 2f);
         }
     }
-    let _e317 = from_;
-    let _e318 = to;
-    let _e319 = leg;
-    molten = mix(_e317, _e318, vec3(smoothstep(0f, 1f, _e319)));
-    let _e323 = molten;
-    let _e324 = (*voxelPos_5);
-    param_42 = (vec3<f32>(_e324) * 1.7f);
-    let _e327 = hash_u0028_vf3_u003b((&param_42));
-    return (_e323 * (0.9f + (_e327 * 0.1f)));
+    let _e321 = from_;
+    let _e322 = to;
+    let _e323 = leg;
+    molten = mix(_e321, _e322, vec3(smoothstep(0f, 1f, _e323)));
+    let _e327 = molten;
+    let _e328 = (*voxelPos_5);
+    param_42 = (vec3<f32>(_e328) * 1.7f);
+    let _e331 = hash_u0028_vf3_u003b((&param_42));
+    return (_e327 * (0.9f + (_e331 * 0.1f)));
 }
 
 fn renderSteam_u0028_vi3_u003b_vf3_u003b(voxelPos_6: ptr<function, vec3<i32>>, baseLighting_4: ptr<function, vec3<f32>>) -> vec3<f32> {
@@ -995,18 +999,18 @@ fn renderSteam_u0028_vi3_u003b_vf3_u003b(voxelPos_6: ptr<function, vec3<i32>>, b
     var val_1: f32;
     var baseColor_1: vec3<f32>;
 
-    let _e264 = (*voxelPos_6);
-    let _e267 = pc.time;
-    param_43 = (vec3<f32>(_e264) + vec3(_e267));
-    let _e270 = hash_u0028_vf3_u003b((&param_43));
-    noise_1 = _e270;
-    let _e271 = noise_1;
-    val_1 = (0.85f + (_e271 * 0.15f));
-    let _e274 = val_1;
-    baseColor_1 = vec3(_e274);
-    let _e276 = baseColor_1;
-    let _e277 = (*baseLighting_4);
-    return ((_e276 * _e277) * 0.9f);
+    let _e268 = (*voxelPos_6);
+    let _e271 = pc.time;
+    param_43 = (vec3<f32>(_e268) + vec3(_e271));
+    let _e274 = hash_u0028_vf3_u003b((&param_43));
+    noise_1 = _e274;
+    let _e275 = noise_1;
+    val_1 = (0.85f + (_e275 * 0.15f));
+    let _e278 = val_1;
+    baseColor_1 = vec3(_e278);
+    let _e280 = baseColor_1;
+    let _e281 = (*baseLighting_4);
+    return ((_e280 * _e281) * 0.9f);
 }
 
 fn renderFire_u0028_u1_u003b_vi3_u003b(rawVoxel_2: ptr<function, u32>, voxelPos_7: ptr<function, vec3<i32>>) -> vec3<f32> {
@@ -1018,24 +1022,24 @@ fn renderFire_u0028_u1_u003b_vi3_u003b(rawVoxel_2: ptr<function, u32>, voxelPos_
     var edgeColor: vec3<f32>;
     var fireColor: vec3<f32>;
 
-    let _e267 = (*voxelPos_7);
-    let _e270 = pc.time;
-    param_44 = (vec3<f32>(_e267) + vec3((_e270 * 10f)));
-    let _e274 = hash_u0028_vf3_u003b((&param_44));
-    noise_2 = _e274;
-    let _e275 = (*rawVoxel_2);
-    age = ((_e275 >> bitcast<u32>(24i)) & 255u);
-    let _e279 = age;
-    life = clamp((f32(_e279) / 30f), 0f, 1f);
+    let _e271 = (*voxelPos_7);
+    let _e274 = pc.time;
+    param_44 = (vec3<f32>(_e271) + vec3((_e274 * 10f)));
+    let _e278 = hash_u0028_vf3_u003b((&param_44));
+    noise_2 = _e278;
+    let _e279 = (*rawVoxel_2);
+    age = ((_e279 >> bitcast<u32>(24i)) & 255u);
+    let _e283 = age;
+    life = clamp((f32(_e283) / 30f), 0f, 1f);
     coreColor = vec3<f32>(1f, 0.9f, 0.2f);
     edgeColor = vec3<f32>(1f, 0.3f, 0f);
-    let _e283 = coreColor;
-    let _e284 = edgeColor;
-    let _e285 = life;
-    let _e286 = noise_2;
-    fireColor = mix(_e283, _e284, vec3((_e285 + (_e286 * 0.3f))));
-    let _e291 = fireColor;
-    return (_e291 * 1.5f);
+    let _e287 = coreColor;
+    let _e288 = edgeColor;
+    let _e289 = life;
+    let _e290 = noise_2;
+    fireColor = mix(_e287, _e288, vec3((_e289 + (_e290 * 0.3f))));
+    let _e295 = fireColor;
+    return (_e295 * 1.5f);
 }
 
 fn renderDirt_u0028_u1_u003b_vi3_u003b_vf3_u003b_vf3_u003b(rawVoxel_3: ptr<function, u32>, voxelPos_8: ptr<function, vec3<i32>>, ddaNormal: ptr<function, vec3<f32>>, baseLighting_5: ptr<function, vec3<f32>>) -> vec3<f32> {
@@ -1053,60 +1057,60 @@ fn renderDirt_u0028_u1_u003b_vi3_u003b_vf3_u003b_vf3_u003b(rawVoxel_3: ptr<funct
     var drown: f32;
     var phi_1269_: bool;
 
-    let _e274 = (*voxelPos_8);
-    param_45 = vec3<f32>(_e274);
-    let _e276 = hash_u0028_vf3_u003b((&param_45));
-    noise_3 = _e276;
-    let _e277 = noise_3;
-    val_2 = (0.8f + (_e277 * 0.2f));
-    let _e280 = (*rawVoxel_3);
-    moisture = ((_e280 >> bitcast<u32>(24i)) & 255u);
-    let _e284 = moisture;
-    wetness = clamp((f32(_e284) / 30f), 0f, 1f);
-    let _e288 = val_2;
-    let _e290 = val_2;
+    let _e278 = (*voxelPos_8);
+    param_45 = vec3<f32>(_e278);
+    let _e280 = hash_u0028_vf3_u003b((&param_45));
+    noise_3 = _e280;
+    let _e281 = noise_3;
+    val_2 = (0.8f + (_e281 * 0.2f));
+    let _e284 = (*rawVoxel_3);
+    moisture = ((_e284 >> bitcast<u32>(24i)) & 255u);
+    let _e288 = moisture;
+    wetness = clamp((f32(_e288) / 30f), 0f, 1f);
     let _e292 = val_2;
-    dryColor = vec3<f32>((0.4f * _e288), (0.25f * _e290), (0.1f * _e292));
-    let _e295 = val_2;
-    let _e297 = val_2;
+    let _e294 = val_2;
+    let _e296 = val_2;
+    dryColor = vec3<f32>((0.4f * _e292), (0.25f * _e294), (0.1f * _e296));
     let _e299 = val_2;
-    wetColor = vec3<f32>((0.15f * _e295), (0.08f * _e297), (0.03f * _e299));
-    let _e302 = dryColor;
-    let _e303 = wetColor;
-    let _e304 = wetness;
-    baseColor_2 = mix(_e302, _e303, vec3(_e304));
-    let _e307 = (*rawVoxel_3);
-    floraState = ((_e307 >> bitcast<u32>(8i)) & 255u);
-    let _e311 = floraState;
-    let _e312 = (_e311 > 10u);
-    phi_1269_ = _e312;
-    if _e312 {
-        let _e314 = (*ddaNormal)[1u];
-        phi_1269_ = (_e314 > 0.5f);
+    let _e301 = val_2;
+    let _e303 = val_2;
+    wetColor = vec3<f32>((0.15f * _e299), (0.08f * _e301), (0.03f * _e303));
+    let _e306 = dryColor;
+    let _e307 = wetColor;
+    let _e308 = wetness;
+    baseColor_2 = mix(_e306, _e307, vec3(_e308));
+    let _e311 = (*rawVoxel_3);
+    floraState = ((_e311 >> bitcast<u32>(8i)) & 255u);
+    let _e315 = floraState;
+    let _e316 = (_e315 > 10u);
+    phi_1269_ = _e316;
+    if _e316 {
+        let _e318 = (*ddaNormal)[1u];
+        phi_1269_ = (_e318 > 0.5f);
     }
-    let _e317 = phi_1269_;
-    if _e317 {
-        let _e318 = floraState;
-        grassGrow = clamp((f32((_e318 - 10u)) / 90f), 0f, 1f);
-        let _e323 = noise_3;
-        let _e326 = noise_3;
-        grassColor = vec3<f32>((0.15f + (_e323 * 0.1f)), (0.45f + (_e326 * 0.15f)), 0.15f);
-        let _e330 = floraState;
-        if (_e330 > 100u) {
-            let _e332 = floraState;
-            drown = clamp((f32((_e332 - 100u)) / 100f), 0f, 1f);
-            let _e337 = grassColor;
-            let _e338 = drown;
-            grassColor = mix(_e337, vec3<f32>(0.35f, 0.35f, 0.15f), vec3(_e338));
+    let _e321 = phi_1269_;
+    if _e321 {
+        let _e322 = floraState;
+        grassGrow = clamp((f32((_e322 - 10u)) / 90f), 0f, 1f);
+        let _e327 = noise_3;
+        let _e330 = noise_3;
+        grassColor = vec3<f32>((0.15f + (_e327 * 0.1f)), (0.45f + (_e330 * 0.15f)), 0.15f);
+        let _e334 = floraState;
+        if (_e334 > 100u) {
+            let _e336 = floraState;
+            drown = clamp((f32((_e336 - 100u)) / 100f), 0f, 1f);
+            let _e341 = grassColor;
+            let _e342 = drown;
+            grassColor = mix(_e341, vec3<f32>(0.35f, 0.35f, 0.15f), vec3(_e342));
         }
-        let _e341 = baseColor_2;
-        let _e342 = grassColor;
-        let _e343 = grassGrow;
-        baseColor_2 = mix(_e341, _e342, vec3(_e343));
+        let _e345 = baseColor_2;
+        let _e346 = grassColor;
+        let _e347 = grassGrow;
+        baseColor_2 = mix(_e345, _e346, vec3(_e347));
     }
-    let _e346 = baseColor_2;
-    let _e347 = (*baseLighting_5);
-    return (_e346 * _e347);
+    let _e350 = baseColor_2;
+    let _e351 = (*baseLighting_5);
+    return (_e350 * _e351);
 }
 
 fn renderStone_u0028_vi3_u003b_vf3_u003b(voxelPos_9: ptr<function, vec3<i32>>, baseLighting_6: ptr<function, vec3<f32>>) -> vec3<f32> {
@@ -1115,17 +1119,17 @@ fn renderStone_u0028_vi3_u003b_vf3_u003b(voxelPos_9: ptr<function, vec3<i32>>, b
     var val_3: f32;
     var baseColor_3: vec3<f32>;
 
-    let _e264 = (*voxelPos_9);
-    param_46 = vec3<f32>(_e264);
-    let _e266 = hash_u0028_vf3_u003b((&param_46));
-    noise_4 = _e266;
-    let _e267 = noise_4;
-    val_3 = (0.4f + (_e267 * 0.3f));
-    let _e270 = val_3;
-    baseColor_3 = vec3(_e270);
-    let _e272 = baseColor_3;
-    let _e273 = (*baseLighting_6);
-    return (_e272 * _e273);
+    let _e268 = (*voxelPos_9);
+    param_46 = vec3<f32>(_e268);
+    let _e270 = hash_u0028_vf3_u003b((&param_46));
+    noise_4 = _e270;
+    let _e271 = noise_4;
+    val_3 = (0.4f + (_e271 * 0.3f));
+    let _e274 = val_3;
+    baseColor_3 = vec3(_e274);
+    let _e276 = baseColor_3;
+    let _e277 = (*baseLighting_6);
+    return (_e276 * _e277);
 }
 
 fn renderWater_u0028_vi3_u003b_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b_f1_u003b_vf3_u003b(voxelPos_10: ptr<function, vec3<i32>>, normal_2: ptr<function, vec3<f32>>, rayOrigin_1: ptr<function, vec3<f32>>, sunDir_1: ptr<function, vec3<f32>>, sunColor: ptr<function, vec3<f32>>, shadow: ptr<function, f32>, baseLighting_7: ptr<function, vec3<f32>>) -> vec3<f32> {
@@ -1136,23 +1140,23 @@ fn renderWater_u0028_vi3_u003b_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b_f1_u003b_
     var finalLighting: vec3<f32>;
 
     baseColor_4 = vec3<f32>(0.1f, 0.4f, 0.9f);
-    let _e270 = (*rayOrigin_1);
-    let _e271 = (*voxelPos_10);
-    viewDir = normalize((_e270 - vec3<f32>(_e271)));
-    let _e275 = (*sunDir_1);
-    let _e277 = (*normal_2);
-    reflectDir = reflect(-(_e275), _e277);
-    let _e279 = viewDir;
-    let _e280 = reflectDir;
-    spec = pow(max(dot(_e279, _e280), 0f), 32f);
-    let _e284 = (*baseLighting_7);
-    let _e285 = (*sunColor);
-    let _e286 = spec;
-    let _e289 = (*shadow);
-    finalLighting = (_e284 + (((_e285 * _e286) * 0.5f) * _e289));
-    let _e292 = baseColor_4;
-    let _e293 = finalLighting;
-    return (_e292 * _e293);
+    let _e274 = (*rayOrigin_1);
+    let _e275 = (*voxelPos_10);
+    viewDir = normalize((_e274 - vec3<f32>(_e275)));
+    let _e279 = (*sunDir_1);
+    let _e281 = (*normal_2);
+    reflectDir = reflect(-(_e279), _e281);
+    let _e283 = viewDir;
+    let _e284 = reflectDir;
+    spec = pow(max(dot(_e283, _e284), 0f), 32f);
+    let _e288 = (*baseLighting_7);
+    let _e289 = (*sunColor);
+    let _e290 = spec;
+    let _e293 = (*shadow);
+    finalLighting = (_e288 + (((_e289 * _e290) * 0.5f) * _e293));
+    let _e296 = baseColor_4;
+    let _e297 = finalLighting;
+    return (_e296 * _e297);
 }
 
 fn renderSand_u0028_u1_u003b_vf3_u003b(rawVoxel_4: ptr<function, u32>, baseLighting_8: ptr<function, vec3<f32>>) -> vec3<f32> {
@@ -1162,19 +1166,19 @@ fn renderSand_u0028_u1_u003b_vf3_u003b(rawVoxel_4: ptr<function, u32>, baseLight
     var wetColor_1: vec3<f32>;
     var baseColor_5: vec3<f32>;
 
-    let _e265 = (*rawVoxel_4);
-    moisture_1 = ((_e265 >> bitcast<u32>(24i)) & 255u);
-    let _e269 = moisture_1;
-    wetness_1 = clamp((f32(_e269) / 10f), 0f, 1f);
+    let _e269 = (*rawVoxel_4);
+    moisture_1 = ((_e269 >> bitcast<u32>(24i)) & 255u);
+    let _e273 = moisture_1;
+    wetness_1 = clamp((f32(_e273) / 10f), 0f, 1f);
     dryColor_1 = vec3<f32>(0.9f, 0.8f, 0.2f);
     wetColor_1 = vec3<f32>(0.65f, 0.55f, 0.15f);
-    let _e273 = dryColor_1;
-    let _e274 = wetColor_1;
-    let _e275 = wetness_1;
-    baseColor_5 = mix(_e273, _e274, vec3(_e275));
-    let _e278 = baseColor_5;
-    let _e279 = (*baseLighting_8);
-    return (_e278 * _e279);
+    let _e277 = dryColor_1;
+    let _e278 = wetColor_1;
+    let _e279 = wetness_1;
+    baseColor_5 = mix(_e277, _e278, vec3(_e279));
+    let _e282 = baseColor_5;
+    let _e283 = (*baseLighting_8);
+    return (_e282 * _e283);
 }
 
 fn getVoxel_u0028_vi3_u003b(pos: ptr<function, vec3<i32>>) -> u32 {
@@ -1185,54 +1189,54 @@ fn getVoxel_u0028_vi3_u003b(pos: ptr<function, vec3<i32>>) -> u32 {
     var phi_310_: bool;
     var phi_320_: bool;
 
-    let _e261 = (*pos)[0u];
-    let _e262 = (_e261 < 0i);
-    phi_284_ = _e262;
-    if !(_e262) {
-        let _e265 = (*pos)[0u];
-        let _e267 = tuning.gridWidth;
-        phi_284_ = (_e265 >= bitcast<i32>(_e267));
+    let _e265 = (*pos)[0u];
+    let _e266 = (_e265 < 0i);
+    phi_284_ = _e266;
+    if !(_e266) {
+        let _e269 = (*pos)[0u];
+        let _e271 = tuning.gridWidth;
+        phi_284_ = (_e269 >= bitcast<i32>(_e271));
     }
-    let _e271 = phi_284_;
-    phi_292_ = _e271;
-    if !(_e271) {
-        let _e274 = (*pos)[1u];
-        phi_292_ = (_e274 < 0i);
+    let _e275 = phi_284_;
+    phi_292_ = _e275;
+    if !(_e275) {
+        let _e278 = (*pos)[1u];
+        phi_292_ = (_e278 < 0i);
     }
-    let _e277 = phi_292_;
-    phi_302_ = _e277;
-    if !(_e277) {
-        let _e280 = (*pos)[1u];
-        let _e282 = tuning.gridHeight;
-        phi_302_ = (_e280 >= bitcast<i32>(_e282));
+    let _e281 = phi_292_;
+    phi_302_ = _e281;
+    if !(_e281) {
+        let _e284 = (*pos)[1u];
+        let _e286 = tuning.gridHeight;
+        phi_302_ = (_e284 >= bitcast<i32>(_e286));
     }
-    let _e286 = phi_302_;
-    phi_310_ = _e286;
-    if !(_e286) {
-        let _e289 = (*pos)[2u];
-        phi_310_ = (_e289 < 0i);
+    let _e290 = phi_302_;
+    phi_310_ = _e290;
+    if !(_e290) {
+        let _e293 = (*pos)[2u];
+        phi_310_ = (_e293 < 0i);
     }
-    let _e292 = phi_310_;
-    phi_320_ = _e292;
-    if !(_e292) {
-        let _e295 = (*pos)[2u];
-        let _e297 = tuning.gridDepth;
-        phi_320_ = (_e295 >= bitcast<i32>(_e297));
+    let _e296 = phi_310_;
+    phi_320_ = _e296;
+    if !(_e296) {
+        let _e299 = (*pos)[2u];
+        let _e301 = tuning.gridDepth;
+        phi_320_ = (_e299 >= bitcast<i32>(_e301));
     }
-    let _e301 = phi_320_;
-    if _e301 {
+    let _e305 = phi_320_;
+    if _e305 {
         return 0u;
     }
-    let _e303 = (*pos)[0u];
-    let _e305 = (*pos)[1u];
-    let _e307 = tuning.gridWidth;
-    let _e312 = (*pos)[2u];
-    let _e314 = tuning.gridWidth;
-    let _e318 = tuning.gridHeight;
-    index = bitcast<u32>(((_e303 + (_e305 * bitcast<i32>(_e307))) + ((_e312 * bitcast<i32>(_e314)) * bitcast<i32>(_e318))));
-    let _e323 = index;
-    let _e326 = unnamed_1.grid[_e323];
-    return _e326;
+    let _e307 = (*pos)[0u];
+    let _e309 = (*pos)[1u];
+    let _e311 = tuning.gridWidth;
+    let _e316 = (*pos)[2u];
+    let _e318 = tuning.gridWidth;
+    let _e322 = tuning.gridHeight;
+    index = bitcast<u32>(((_e307 + (_e309 * bitcast<i32>(_e311))) + ((_e316 * bitcast<i32>(_e318)) * bitcast<i32>(_e322))));
+    let _e327 = index;
+    let _e330 = unnamed_1.grid[_e327];
+    return _e330;
 }
 
 fn calculateShadow_u0028_vi3_u003b_vf3_u003b_vf3_u003b_i1_u003b(hitVoxelPos: ptr<function, vec3<i32>>, hitNormal: ptr<function, vec3<f32>>, lightDir: ptr<function, vec3<f32>>, ceilingY: ptr<function, i32>) -> f32 {
@@ -1253,139 +1257,139 @@ fn calculateShadow_u0028_vi3_u003b_vf3_u003b_vf3_u003b_i1_u003b(hitVoxelPos: ptr
     var phi_623_: bool;
     var phi_633_: bool;
 
-    let _e273 = (*hitVoxelPos);
-    let _e274 = (*hitNormal);
-    voxelPos_11 = (_e273 + vec3<i32>(round(_e274)));
-    let _e278 = (*lightDir);
-    stepDir_1 = vec3<i32>(sign(_e278));
-    let _e282 = (*lightDir)[0u];
-    if (_e282 == 0f) {
+    let _e277 = (*hitVoxelPos);
+    let _e278 = (*hitNormal);
+    voxelPos_11 = (_e277 + vec3<i32>(round(_e278)));
+    let _e282 = (*lightDir);
+    stepDir_1 = vec3<i32>(sign(_e282));
+    let _e286 = (*lightDir)[0u];
+    if (_e286 == 0f) {
         local_6 = 100000000f;
     } else {
-        let _e285 = (*lightDir)[0u];
-        local_6 = abs((1f / _e285));
+        let _e289 = (*lightDir)[0u];
+        local_6 = abs((1f / _e289));
     }
-    let _e288 = local_6;
-    let _e290 = (*lightDir)[1u];
-    if (_e290 == 0f) {
+    let _e292 = local_6;
+    let _e294 = (*lightDir)[1u];
+    if (_e294 == 0f) {
         local_7 = 100000000f;
     } else {
-        let _e293 = (*lightDir)[1u];
-        local_7 = abs((1f / _e293));
+        let _e297 = (*lightDir)[1u];
+        local_7 = abs((1f / _e297));
     }
-    let _e296 = local_7;
-    let _e298 = (*lightDir)[2u];
-    if (_e298 == 0f) {
+    let _e300 = local_7;
+    let _e302 = (*lightDir)[2u];
+    if (_e302 == 0f) {
         local_8 = 100000000f;
     } else {
-        let _e301 = (*lightDir)[2u];
-        local_8 = abs((1f / _e301));
+        let _e305 = (*lightDir)[2u];
+        local_8 = abs((1f / _e305));
     }
-    let _e304 = local_8;
-    tDelta_1 = vec3<f32>(_e288, _e296, _e304);
-    let _e306 = tDelta_1;
-    tMax_1 = (_e306 * 0.5f);
+    let _e308 = local_8;
+    tDelta_1 = vec3<f32>(_e292, _e300, _e308);
+    let _e310 = tDelta_1;
+    tMax_1 = (_e310 * 0.5f);
     transmittance = 1f;
     i_3 = 0i;
     loop {
-        let _e308 = i_3;
-        let _e310 = tuning.shadowMaxSteps;
-        if (_e308 < bitcast<i32>(_e310)) {
-            let _e314 = voxelPos_11[0u];
-            let _e315 = (_e314 < 0i);
-            phi_601_ = _e315;
-            if !(_e315) {
-                let _e318 = voxelPos_11[0u];
-                let _e320 = tuning.gridWidth;
-                phi_601_ = (_e318 >= bitcast<i32>(_e320));
+        let _e312 = i_3;
+        let _e314 = tuning.shadowMaxSteps;
+        if (_e312 < bitcast<i32>(_e314)) {
+            let _e318 = voxelPos_11[0u];
+            let _e319 = (_e318 < 0i);
+            phi_601_ = _e319;
+            if !(_e319) {
+                let _e322 = voxelPos_11[0u];
+                let _e324 = tuning.gridWidth;
+                phi_601_ = (_e322 >= bitcast<i32>(_e324));
             }
-            let _e324 = phi_601_;
-            phi_608_ = _e324;
-            if !(_e324) {
-                let _e327 = voxelPos_11[1u];
-                phi_608_ = (_e327 < 0i);
+            let _e328 = phi_601_;
+            phi_608_ = _e328;
+            if !(_e328) {
+                let _e331 = voxelPos_11[1u];
+                phi_608_ = (_e331 < 0i);
             }
-            let _e330 = phi_608_;
-            phi_616_ = _e330;
-            if !(_e330) {
-                let _e333 = voxelPos_11[1u];
-                let _e334 = (*ceilingY);
-                phi_616_ = (_e333 >= _e334);
+            let _e334 = phi_608_;
+            phi_616_ = _e334;
+            if !(_e334) {
+                let _e337 = voxelPos_11[1u];
+                let _e338 = (*ceilingY);
+                phi_616_ = (_e337 >= _e338);
             }
-            let _e337 = phi_616_;
-            phi_623_ = _e337;
-            if !(_e337) {
-                let _e340 = voxelPos_11[2u];
-                phi_623_ = (_e340 < 0i);
+            let _e341 = phi_616_;
+            phi_623_ = _e341;
+            if !(_e341) {
+                let _e344 = voxelPos_11[2u];
+                phi_623_ = (_e344 < 0i);
             }
-            let _e343 = phi_623_;
-            phi_633_ = _e343;
-            if !(_e343) {
-                let _e346 = voxelPos_11[2u];
-                let _e348 = tuning.gridDepth;
-                phi_633_ = (_e346 >= bitcast<i32>(_e348));
+            let _e347 = phi_623_;
+            phi_633_ = _e347;
+            if !(_e347) {
+                let _e350 = voxelPos_11[2u];
+                let _e352 = tuning.gridDepth;
+                phi_633_ = (_e350 >= bitcast<i32>(_e352));
             }
-            let _e352 = phi_633_;
-            if _e352 {
-                let _e353 = transmittance;
-                return _e353;
+            let _e356 = phi_633_;
+            if _e356 {
+                let _e357 = transmittance;
+                return _e357;
             }
-            let _e354 = voxelPos_11;
-            param_47 = _e354;
-            let _e355 = getVoxel_u0028_vi3_u003b((&param_47));
-            blockerType = (_e355 & 255u);
-            let _e357 = blockerType;
-            if (_e357 == 2u) {
-                let _e360 = tuning.waterShadowTransmit;
-                let _e361 = transmittance;
-                transmittance = (_e361 * _e360);
-                let _e363 = transmittance;
-                if (_e363 < 0.02f) {
+            let _e358 = voxelPos_11;
+            param_47 = _e358;
+            let _e359 = getVoxel_u0028_vi3_u003b((&param_47));
+            blockerType = (_e359 & 255u);
+            let _e361 = blockerType;
+            if (_e361 == 2u) {
+                let _e364 = tuning.waterShadowTransmit;
+                let _e365 = transmittance;
+                transmittance = (_e365 * _e364);
+                let _e367 = transmittance;
+                if (_e367 < 0.02f) {
                     return 0f;
                 }
             } else {
-                let _e365 = blockerType;
-                if (_e365 != 0u) {
+                let _e369 = blockerType;
+                if (_e369 != 0u) {
                     return 0f;
                 }
             }
-            let _e368 = tMax_1[0u];
-            let _e370 = tMax_1[1u];
-            if (_e368 < _e370) {
-                let _e373 = tMax_1[0u];
-                let _e375 = tMax_1[2u];
-                if (_e373 < _e375) {
-                    let _e378 = stepDir_1[0u];
-                    let _e380 = voxelPos_11[0u];
-                    voxelPos_11[0u] = (_e380 + _e378);
-                    let _e384 = tDelta_1[0u];
-                    let _e386 = tMax_1[0u];
-                    tMax_1[0u] = (_e386 + _e384);
+            let _e372 = tMax_1[0u];
+            let _e374 = tMax_1[1u];
+            if (_e372 < _e374) {
+                let _e377 = tMax_1[0u];
+                let _e379 = tMax_1[2u];
+                if (_e377 < _e379) {
+                    let _e382 = stepDir_1[0u];
+                    let _e384 = voxelPos_11[0u];
+                    voxelPos_11[0u] = (_e384 + _e382);
+                    let _e388 = tDelta_1[0u];
+                    let _e390 = tMax_1[0u];
+                    tMax_1[0u] = (_e390 + _e388);
                 } else {
-                    let _e390 = stepDir_1[2u];
-                    let _e392 = voxelPos_11[2u];
-                    voxelPos_11[2u] = (_e392 + _e390);
-                    let _e396 = tDelta_1[2u];
-                    let _e398 = tMax_1[2u];
-                    tMax_1[2u] = (_e398 + _e396);
+                    let _e394 = stepDir_1[2u];
+                    let _e396 = voxelPos_11[2u];
+                    voxelPos_11[2u] = (_e396 + _e394);
+                    let _e400 = tDelta_1[2u];
+                    let _e402 = tMax_1[2u];
+                    tMax_1[2u] = (_e402 + _e400);
                 }
             } else {
-                let _e402 = tMax_1[1u];
-                let _e404 = tMax_1[2u];
-                if (_e402 < _e404) {
-                    let _e407 = stepDir_1[1u];
-                    let _e409 = voxelPos_11[1u];
-                    voxelPos_11[1u] = (_e409 + _e407);
-                    let _e413 = tDelta_1[1u];
-                    let _e415 = tMax_1[1u];
-                    tMax_1[1u] = (_e415 + _e413);
+                let _e406 = tMax_1[1u];
+                let _e408 = tMax_1[2u];
+                if (_e406 < _e408) {
+                    let _e411 = stepDir_1[1u];
+                    let _e413 = voxelPos_11[1u];
+                    voxelPos_11[1u] = (_e413 + _e411);
+                    let _e417 = tDelta_1[1u];
+                    let _e419 = tMax_1[1u];
+                    tMax_1[1u] = (_e419 + _e417);
                 } else {
-                    let _e419 = stepDir_1[2u];
-                    let _e421 = voxelPos_11[2u];
-                    voxelPos_11[2u] = (_e421 + _e419);
-                    let _e425 = tDelta_1[2u];
-                    let _e427 = tMax_1[2u];
-                    tMax_1[2u] = (_e427 + _e425);
+                    let _e423 = stepDir_1[2u];
+                    let _e425 = voxelPos_11[2u];
+                    voxelPos_11[2u] = (_e425 + _e423);
+                    let _e429 = tDelta_1[2u];
+                    let _e431 = tMax_1[2u];
+                    tMax_1[2u] = (_e431 + _e429);
                 }
             }
             continue;
@@ -1393,12 +1397,12 @@ fn calculateShadow_u0028_vi3_u003b_vf3_u003b_vf3_u003b_i1_u003b(hitVoxelPos: ptr
             break;
         }
         continuing {
-            let _e430 = i_3;
-            i_3 = (_e430 + 1i);
+            let _e434 = i_3;
+            i_3 = (_e434 + 1i);
         }
     }
-    let _e432 = transmittance;
-    return _e432;
+    let _e436 = transmittance;
+    return _e436;
 }
 
 fn getSmoothNormal_u0028_vi3_u003b(p_1: ptr<function, vec3<i32>>) -> vec3<f32> {
@@ -1412,51 +1416,51 @@ fn getSmoothNormal_u0028_vi3_u003b(p_1: ptr<function, vec3<i32>>) -> vec3<f32> {
     n_2 = vec3<f32>(0f, 0f, 0f);
     x_3 = -1i;
     loop {
-        let _e265 = x_3;
-        if (_e265 <= 1i) {
+        let _e269 = x_3;
+        if (_e269 <= 1i) {
             y = -1i;
             loop {
-                let _e267 = y;
-                if (_e267 <= 1i) {
+                let _e271 = y;
+                if (_e271 <= 1i) {
                     z_3 = -1i;
                     loop {
-                        let _e269 = z_3;
-                        if (_e269 <= 1i) {
-                            let _e271 = x_3;
-                            let _e273 = y;
-                            let _e276 = z_3;
-                            if (((_e271 == 0i) && (_e273 == 0i)) && (_e276 == 0i)) {
+                        let _e273 = z_3;
+                        if (_e273 <= 1i) {
+                            let _e275 = x_3;
+                            let _e277 = y;
+                            let _e280 = z_3;
+                            if (((_e275 == 0i) && (_e277 == 0i)) && (_e280 == 0i)) {
                                 continue;
                             }
-                            let _e279 = (*p_1);
-                            let _e280 = x_3;
-                            let _e281 = y;
-                            let _e282 = z_3;
-                            param_48 = (_e279 + vec3<i32>(_e280, _e281, _e282));
-                            let _e285 = getVoxel_u0028_vi3_u003b((&param_48));
-                            if ((_e285 & 255u) == 0u) {
+                            let _e283 = (*p_1);
+                            let _e284 = x_3;
+                            let _e285 = y;
+                            let _e286 = z_3;
+                            param_48 = (_e283 + vec3<i32>(_e284, _e285, _e286));
+                            let _e289 = getVoxel_u0028_vi3_u003b((&param_48));
+                            if ((_e289 & 255u) == 0u) {
                                 continue;
                             }
-                            let _e288 = x_3;
-                            let _e290 = y;
-                            let _e292 = z_3;
-                            offset = vec3<f32>(f32(_e288), f32(_e290), f32(_e292));
-                            let _e295 = offset;
-                            let _e296 = x_3;
-                            let _e297 = x_3;
-                            let _e299 = y;
-                            let _e300 = y;
-                            let _e303 = z_3;
-                            let _e304 = z_3;
-                            let _e310 = n_2;
-                            n_2 = (_e310 - (_e295 * inverseSqrt(f32((((_e296 * _e297) + (_e299 * _e300)) + (_e303 * _e304))))));
+                            let _e292 = x_3;
+                            let _e294 = y;
+                            let _e296 = z_3;
+                            offset = vec3<f32>(f32(_e292), f32(_e294), f32(_e296));
+                            let _e299 = offset;
+                            let _e300 = x_3;
+                            let _e301 = x_3;
+                            let _e303 = y;
+                            let _e304 = y;
+                            let _e307 = z_3;
+                            let _e308 = z_3;
+                            let _e314 = n_2;
+                            n_2 = (_e314 - (_e299 * inverseSqrt(f32((((_e300 * _e301) + (_e303 * _e304)) + (_e307 * _e308))))));
                             continue;
                         } else {
                             break;
                         }
                         continuing {
-                            let _e312 = z_3;
-                            z_3 = (_e312 + 1i);
+                            let _e316 = z_3;
+                            z_3 = (_e316 + 1i);
                         }
                     }
                     continue;
@@ -1464,8 +1468,8 @@ fn getSmoothNormal_u0028_vi3_u003b(p_1: ptr<function, vec3<i32>>) -> vec3<f32> {
                     break;
                 }
                 continuing {
-                    let _e314 = y;
-                    y = (_e314 + 1i);
+                    let _e318 = y;
+                    y = (_e318 + 1i);
                 }
             }
             continue;
@@ -1473,16 +1477,16 @@ fn getSmoothNormal_u0028_vi3_u003b(p_1: ptr<function, vec3<i32>>) -> vec3<f32> {
             break;
         }
         continuing {
-            let _e316 = x_3;
-            x_3 = (_e316 + 1i);
+            let _e320 = x_3;
+            x_3 = (_e320 + 1i);
         }
     }
-    let _e318 = n_2;
-    if (length(_e318) < 0.1f) {
+    let _e322 = n_2;
+    if (length(_e322) < 0.1f) {
         return vec3<f32>(0f, 1f, 0f);
     }
-    let _e321 = n_2;
-    return normalize(_e321);
+    let _e325 = n_2;
+    return normalize(_e325);
 }
 
 fn waterWaveGradient_u0028_vf2_u003b_f1_u003b(p_2: ptr<function, vec2<f32>>, t_1: ptr<function, f32>) -> vec2<f32> {
@@ -1500,64 +1504,64 @@ fn waterWaveGradient_u0028_vf2_u003b_f1_u003b(p_2: ptr<function, vec2<f32>>, t_1
     var indexable_5: array<f32, 5>;
     var envelope: f32;
 
-    let _e274 = tuning.waterWaveScale;
-    scale = max(_e274, 0.001f);
-    let _e276 = (*t_1);
-    let _e278 = tuning.waterWaveSpeed;
-    wt = ((_e276 * _e278) * 0.35f);
-    let _e281 = (*p_2);
-    let _e283 = (*p_2)[1u];
-    let _e285 = wt;
-    let _e289 = (*p_2)[0u];
-    let _e291 = wt;
-    q = (_e281 + (vec2<f32>(sin(((_e283 * 0.043f) + _e285)), sin(((_e289 * 0.037f) - (_e291 * 0.8f)))) * 6f));
+    let _e278 = tuning.waterWaveScale;
+    scale = max(_e278, 0.001f);
+    let _e280 = (*t_1);
+    let _e282 = tuning.waterWaveSpeed;
+    wt = ((_e280 * _e282) * 0.35f);
+    let _e285 = (*p_2);
+    let _e287 = (*p_2)[1u];
+    let _e289 = wt;
+    let _e293 = (*p_2)[0u];
+    let _e295 = wt;
+    q = (_e285 + (vec2<f32>(sin(((_e287 * 0.043f) + _e289)), sin(((_e293 * 0.037f) - (_e295 * 0.8f)))) * 6f));
     grad = vec2<f32>(0f, 0f);
     i_4 = 0i;
     loop {
-        let _e298 = i_4;
-        if (_e298 < 5i) {
-            let _e300 = i_4;
+        let _e302 = i_4;
+        if (_e302 < 5i) {
+            let _e304 = i_4;
             indexable_1 = array<f32, 5>(0.11f, 0.19f, 0.31f, 0.53f, 0.87f);
-            let _e302 = indexable_1[_e300];
-            let _e303 = scale;
-            f = (_e302 * _e303);
-            let _e305 = i_4;
+            let _e306 = indexable_1[_e304];
+            let _e307 = scale;
+            f = (_e306 * _e307);
+            let _e309 = i_4;
             indexable_2 = array<vec2<f32>, 5>(vec2<f32>(0.86f, 0.51f), vec2<f32>(-0.421f, 0.907f), vec2<f32>(0.707f, -0.707f), vec2<f32>(-0.966f, -0.259f), vec2<f32>(0.259f, 0.966f));
-            let _e307 = indexable_2[_e305];
-            let _e308 = q;
-            let _e310 = f;
-            let _e312 = (*t_1);
-            let _e313 = i_4;
+            let _e311 = indexable_2[_e309];
+            let _e312 = q;
+            let _e314 = f;
+            let _e316 = (*t_1);
+            let _e317 = i_4;
             indexable_3 = array<f32, 5>(1f, 1.37f, 0.83f, 1.71f, 0.61f);
-            let _e315 = indexable_3[_e313];
-            let _e318 = tuning.waterWaveSpeed;
-            phase_1 = ((dot(_e307, _e308) * _e310) + ((_e312 * _e315) * _e318));
-            let _e321 = i_4;
+            let _e319 = indexable_3[_e317];
+            let _e322 = tuning.waterWaveSpeed;
+            phase_1 = ((dot(_e311, _e312) * _e314) + ((_e316 * _e319) * _e322));
+            let _e325 = i_4;
             indexable_4 = array<vec2<f32>, 5>(vec2<f32>(0.86f, 0.51f), vec2<f32>(-0.421f, 0.907f), vec2<f32>(0.707f, -0.707f), vec2<f32>(-0.966f, -0.259f), vec2<f32>(0.259f, 0.966f));
-            let _e323 = indexable_4[_e321];
-            let _e324 = i_4;
+            let _e327 = indexable_4[_e325];
+            let _e328 = i_4;
             indexable_5 = array<f32, 5>(1f, 0.62f, 0.38f, 0.24f, 0.15f);
-            let _e326 = indexable_5[_e324];
-            let _e327 = f;
-            let _e329 = phase_1;
-            let _e333 = grad;
-            grad = (_e333 + (_e323 * ((_e326 * _e327) * cos(_e329))));
+            let _e330 = indexable_5[_e328];
+            let _e331 = f;
+            let _e333 = phase_1;
+            let _e337 = grad;
+            grad = (_e337 + (_e327 * ((_e330 * _e331) * cos(_e333))));
             continue;
         } else {
             break;
         }
         continuing {
-            let _e335 = i_4;
-            i_4 = (_e335 + 1i);
+            let _e339 = i_4;
+            i_4 = (_e339 + 1i);
         }
     }
-    let _e338 = (*p_2)[0u];
-    let _e341 = (*p_2)[1u];
-    let _e344 = (*t_1);
-    envelope = (0.45f + (0.55f * sin((((_e338 * 0.021f) + (_e341 * 0.017f)) + (_e344 * 0.11f)))));
-    let _e350 = grad;
-    let _e351 = envelope;
-    return (_e350 * _e351);
+    let _e342 = (*p_2)[0u];
+    let _e345 = (*p_2)[1u];
+    let _e348 = (*t_1);
+    envelope = (0.45f + (0.55f * sin((((_e342 * 0.021f) + (_e345 * 0.017f)) + (_e348 * 0.11f)))));
+    let _e354 = grad;
+    let _e355 = envelope;
+    return (_e354 * _e355);
 }
 
 fn applyWaterWaves_u0028_vf3_u003b_vi3_u003b(normal_3: ptr<function, vec3<f32>>, voxelPos_12: ptr<function, vec3<i32>>) -> vec3<f32> {
@@ -1566,30 +1570,30 @@ fn applyWaterWaves_u0028_vf3_u003b_vi3_u003b(normal_3: ptr<function, vec3<f32>>,
     var param_49: vec2<f32>;
     var param_50: f32;
 
-    let _e265 = tuning.waterWaveStrength;
-    if (_e265 <= 0f) {
-        let _e267 = (*normal_3);
-        return _e267;
+    let _e269 = tuning.waterWaveStrength;
+    if (_e269 <= 0f) {
+        let _e271 = (*normal_3);
+        return _e271;
     }
-    let _e269 = (*normal_3)[1u];
-    upness = clamp(_e269, 0f, 1f);
-    let _e271 = upness;
-    if (_e271 <= 0f) {
-        let _e273 = (*normal_3);
-        return _e273;
+    let _e273 = (*normal_3)[1u];
+    upness = clamp(_e273, 0f, 1f);
+    let _e275 = upness;
+    if (_e275 <= 0f) {
+        let _e277 = (*normal_3);
+        return _e277;
     }
-    let _e274 = (*voxelPos_12);
-    param_49 = (vec2<f32>(_e274.xz) + vec2<f32>(0.5f, 0.5f));
-    let _e279 = pc.time;
-    param_50 = _e279;
-    let _e280 = waterWaveGradient_u0028_vf2_u003b_f1_u003b((&param_49), (&param_50));
-    grad_1 = _e280;
-    let _e281 = (*normal_3);
-    let _e283 = grad_1[0u];
-    let _e286 = grad_1[1u];
-    let _e290 = tuning.waterWaveStrength;
-    let _e292 = upness;
-    return normalize((_e281 + ((vec3<f32>(-(_e283), 0f, -(_e286)) * _e290) * _e292)));
+    let _e278 = (*voxelPos_12);
+    param_49 = (vec2<f32>(_e278.xz) + vec2<f32>(0.5f, 0.5f));
+    let _e283 = pc.time;
+    param_50 = _e283;
+    let _e284 = waterWaveGradient_u0028_vf2_u003b_f1_u003b((&param_49), (&param_50));
+    grad_1 = _e284;
+    let _e285 = (*normal_3);
+    let _e287 = grad_1[0u];
+    let _e290 = grad_1[1u];
+    let _e294 = tuning.waterWaveStrength;
+    let _e296 = upness;
+    return normalize((_e285 + ((vec3<f32>(-(_e287), 0f, -(_e290)) * _e294) * _e296)));
 }
 
 fn getWaterNormal_u0028_vi3_u003b(p_3: ptr<function, vec3<i32>>) -> vec3<f32> {
@@ -1603,55 +1607,55 @@ fn getWaterNormal_u0028_vi3_u003b(p_3: ptr<function, vec3<i32>>) -> vec3<f32> {
     n_3 = vec3<f32>(0f, 0f, 0f);
     x_4 = -2i;
     loop {
-        let _e265 = x_4;
-        if (_e265 <= 2i) {
+        let _e269 = x_4;
+        if (_e269 <= 2i) {
             y_1 = -2i;
             loop {
-                let _e267 = y_1;
-                if (_e267 <= 2i) {
+                let _e271 = y_1;
+                if (_e271 <= 2i) {
                     z_4 = -2i;
                     loop {
-                        let _e269 = z_4;
-                        if (_e269 <= 2i) {
-                            let _e271 = x_4;
-                            let _e273 = y_1;
-                            let _e276 = z_4;
-                            if (((_e271 == 0i) && (_e273 == 0i)) && (_e276 == 0i)) {
+                        let _e273 = z_4;
+                        if (_e273 <= 2i) {
+                            let _e275 = x_4;
+                            let _e277 = y_1;
+                            let _e280 = z_4;
+                            if (((_e275 == 0i) && (_e277 == 0i)) && (_e280 == 0i)) {
                                 continue;
                             }
-                            let _e279 = x_4;
-                            let _e280 = x_4;
-                            let _e282 = y_1;
-                            let _e283 = y_1;
-                            let _e286 = z_4;
-                            let _e287 = z_4;
-                            d2_ = (((_e279 * _e280) + (_e282 * _e283)) + (_e286 * _e287));
-                            let _e290 = d2_;
-                            if (_e290 > 6i) {
+                            let _e283 = x_4;
+                            let _e284 = x_4;
+                            let _e286 = y_1;
+                            let _e287 = y_1;
+                            let _e290 = z_4;
+                            let _e291 = z_4;
+                            d2_ = (((_e283 * _e284) + (_e286 * _e287)) + (_e290 * _e291));
+                            let _e294 = d2_;
+                            if (_e294 > 6i) {
                                 continue;
                             }
-                            let _e292 = (*p_3);
-                            let _e293 = x_4;
-                            let _e294 = y_1;
-                            let _e295 = z_4;
-                            param_51 = (_e292 + vec3<i32>(_e293, _e294, _e295));
-                            let _e298 = getVoxel_u0028_vi3_u003b((&param_51));
-                            if ((_e298 & 255u) == 0u) {
+                            let _e296 = (*p_3);
+                            let _e297 = x_4;
+                            let _e298 = y_1;
+                            let _e299 = z_4;
+                            param_51 = (_e296 + vec3<i32>(_e297, _e298, _e299));
+                            let _e302 = getVoxel_u0028_vi3_u003b((&param_51));
+                            if ((_e302 & 255u) == 0u) {
                                 continue;
                             }
-                            let _e301 = x_4;
-                            let _e303 = y_1;
-                            let _e305 = z_4;
-                            let _e308 = d2_;
-                            let _e312 = n_3;
-                            n_3 = (_e312 - (vec3<f32>(f32(_e301), f32(_e303), f32(_e305)) / vec3(f32(_e308))));
+                            let _e305 = x_4;
+                            let _e307 = y_1;
+                            let _e309 = z_4;
+                            let _e312 = d2_;
+                            let _e316 = n_3;
+                            n_3 = (_e316 - (vec3<f32>(f32(_e305), f32(_e307), f32(_e309)) / vec3(f32(_e312))));
                             continue;
                         } else {
                             break;
                         }
                         continuing {
-                            let _e314 = z_4;
-                            z_4 = (_e314 + 1i);
+                            let _e318 = z_4;
+                            z_4 = (_e318 + 1i);
                         }
                     }
                     continue;
@@ -1659,8 +1663,8 @@ fn getWaterNormal_u0028_vi3_u003b(p_3: ptr<function, vec3<i32>>) -> vec3<f32> {
                     break;
                 }
                 continuing {
-                    let _e316 = y_1;
-                    y_1 = (_e316 + 1i);
+                    let _e320 = y_1;
+                    y_1 = (_e320 + 1i);
                 }
             }
             continue;
@@ -1668,27 +1672,27 @@ fn getWaterNormal_u0028_vi3_u003b(p_3: ptr<function, vec3<i32>>) -> vec3<f32> {
             break;
         }
         continuing {
-            let _e318 = x_4;
-            x_4 = (_e318 + 1i);
+            let _e322 = x_4;
+            x_4 = (_e322 + 1i);
         }
     }
-    let _e320 = n_3;
-    if (length(_e320) < 0.001f) {
+    let _e324 = n_3;
+    if (length(_e324) < 0.001f) {
         return vec3<f32>(0f, 1f, 0f);
     }
-    let _e323 = n_3;
-    return normalize(_e323);
+    let _e327 = n_3;
+    return normalize(_e327);
 }
 
 fn locustDensity_u0028_u1_u003b(type_38: ptr<function, u32>) -> f32 {
     var stage_2: f32;
 
-    let _e260 = (*type_38);
-    stage_2 = (f32((_e260 - 13u)) / 4f);
-    let _e265 = tuning.locustDensityMin;
-    let _e267 = tuning.locustDensityMax;
-    let _e268 = stage_2;
-    return clamp(mix(_e265, _e267, _e268), 0.02f, 0.98f);
+    let _e264 = (*type_38);
+    stage_2 = (f32((_e264 - 13u)) / 4f);
+    let _e269 = tuning.locustDensityMin;
+    let _e271 = tuning.locustDensityMax;
+    let _e272 = stage_2;
+    return clamp(mix(_e269, _e271, _e272), 0.02f, 0.98f);
 }
 
 fn trunkStems_u0028_vi3_u003b_vf2_u003b_vf2_u003b_i1_u003b(voxelPos_13: ptr<function, vec3<i32>>, a: ptr<function, vec2<f32>>, b_1: ptr<function, vec2<f32>>, count_3: ptr<function, i32>) {
@@ -1699,32 +1703,32 @@ fn trunkStems_u0028_vi3_u003b_vf2_u003b_vf2_u003b_i1_u003b(voxelPos_13: ptr<func
     var h2_: f32;
     var param_54: vec3<f32>;
 
-    let _e269 = (*voxelPos_13)[0u];
-    let _e272 = (*voxelPos_13)[2u];
-    param_52 = vec3<f32>(f32(_e269), 7f, f32(_e272));
-    let _e275 = hash_u0028_vf3_u003b((&param_52));
-    h0_ = _e275;
-    let _e277 = (*voxelPos_13)[0u];
-    let _e280 = (*voxelPos_13)[2u];
-    param_53 = vec3<f32>(f32(_e277), 19f, f32(_e280));
-    let _e283 = hash_u0028_vf3_u003b((&param_53));
-    h1_ = _e283;
-    let _e285 = (*voxelPos_13)[0u];
-    let _e288 = (*voxelPos_13)[2u];
-    param_54 = vec3<f32>(f32(_e285), 53f, f32(_e288));
-    let _e291 = hash_u0028_vf3_u003b((&param_54));
-    h2_ = _e291;
-    let _e292 = h2_;
-    let _e294 = tuning.treeTrunkColumns;
-    (*count_3) = (1i + i32((_e292 * f32(max(bitcast<i32>(_e294), 1i)))));
-    let _e301 = (*count_3);
-    (*count_3) = clamp(_e301, 1i, 2i);
-    let _e303 = h0_;
-    let _e306 = h1_;
-    (*a) = vec2<f32>((0.3f + (_e303 * 0.4f)), (0.3f + (_e306 * 0.4f)));
+    let _e273 = (*voxelPos_13)[0u];
+    let _e276 = (*voxelPos_13)[2u];
+    param_52 = vec3<f32>(f32(_e273), 7f, f32(_e276));
+    let _e279 = hash_u0028_vf3_u003b((&param_52));
+    h0_ = _e279;
+    let _e281 = (*voxelPos_13)[0u];
+    let _e284 = (*voxelPos_13)[2u];
+    param_53 = vec3<f32>(f32(_e281), 19f, f32(_e284));
+    let _e287 = hash_u0028_vf3_u003b((&param_53));
+    h1_ = _e287;
+    let _e289 = (*voxelPos_13)[0u];
+    let _e292 = (*voxelPos_13)[2u];
+    param_54 = vec3<f32>(f32(_e289), 53f, f32(_e292));
+    let _e295 = hash_u0028_vf3_u003b((&param_54));
+    h2_ = _e295;
+    let _e296 = h2_;
+    let _e298 = tuning.treeTrunkColumns;
+    (*count_3) = (1i + i32((_e296 * f32(max(bitcast<i32>(_e298), 1i)))));
+    let _e305 = (*count_3);
+    (*count_3) = clamp(_e305, 1i, 2i);
+    let _e307 = h0_;
     let _e310 = h1_;
-    let _e313 = h0_;
-    (*b_1) = vec2<f32>((0.3f + (_e310 * 0.4f)), (0.3f + (_e313 * 0.4f)));
+    (*a) = vec2<f32>((0.3f + (_e307 * 0.4f)), (0.3f + (_e310 * 0.4f)));
+    let _e314 = h1_;
+    let _e317 = h0_;
+    (*b_1) = vec2<f32>((0.3f + (_e314 * 0.4f)), (0.3f + (_e317 * 0.4f)));
     return;
 }
 
@@ -1742,59 +1746,59 @@ fn subOccupied_u0028_u1_u003b_u1_u003b_vi3_u003b_vi3_u003b_i1_u003b_vf3_u003b(ki
     var param_60: u32;
     var phi_1635_: bool;
 
-    let _e275 = (*kind);
-    if (_e275 == 1u) {
-        let _e277 = (*cell);
-        let _e282 = (*sub);
-        p_4 = ((vec2<f32>(_e277.xz) + vec2(0.5f)) / vec2(f32(_e282)));
-        let _e286 = (*voxelPos_14);
-        param_55 = _e286;
+    let _e279 = (*kind);
+    if (_e279 == 1u) {
+        let _e281 = (*cell);
+        let _e286 = (*sub);
+        p_4 = ((vec2<f32>(_e281.xz) + vec2(0.5f)) / vec2(f32(_e286)));
+        let _e290 = (*voxelPos_14);
+        param_55 = _e290;
         trunkStems_u0028_vi3_u003b_vf2_u003b_vf2_u003b_i1_u003b((&param_55), (&param_56), (&param_57), (&param_58));
-        let _e287 = param_56;
-        a_1 = _e287;
-        let _e288 = param_57;
-        b_2 = _e288;
-        let _e289 = param_58;
-        count_4 = _e289;
-        let _e291 = tuning.treeTrunkRadius;
-        r_1 = max(_e291, 0.02f);
-        let _e293 = p_4;
-        let _e294 = a_1;
-        let _e296 = p_4;
-        let _e297 = a_1;
-        let _e300 = r_1;
-        let _e301 = r_1;
-        if (dot((_e293 - _e294), (_e296 - _e297)) <= (_e300 * _e301)) {
+        let _e291 = param_56;
+        a_1 = _e291;
+        let _e292 = param_57;
+        b_2 = _e292;
+        let _e293 = param_58;
+        count_4 = _e293;
+        let _e295 = tuning.treeTrunkRadius;
+        r_1 = max(_e295, 0.02f);
+        let _e297 = p_4;
+        let _e298 = a_1;
+        let _e300 = p_4;
+        let _e301 = a_1;
+        let _e304 = r_1;
+        let _e305 = r_1;
+        if (dot((_e297 - _e298), (_e300 - _e301)) <= (_e304 * _e305)) {
             return true;
         }
-        let _e304 = count_4;
-        let _e305 = (_e304 > 1i);
-        phi_1635_ = _e305;
-        if _e305 {
-            let _e306 = p_4;
-            let _e307 = b_2;
-            let _e309 = p_4;
-            let _e310 = b_2;
-            let _e313 = r_1;
-            let _e314 = r_1;
-            phi_1635_ = (dot((_e306 - _e307), (_e309 - _e310)) <= (_e313 * _e314));
+        let _e308 = count_4;
+        let _e309 = (_e308 > 1i);
+        phi_1635_ = _e309;
+        if _e309 {
+            let _e310 = p_4;
+            let _e311 = b_2;
+            let _e313 = p_4;
+            let _e314 = b_2;
+            let _e317 = r_1;
+            let _e318 = r_1;
+            phi_1635_ = (dot((_e310 - _e311), (_e313 - _e314)) <= (_e317 * _e318));
         }
-        let _e318 = phi_1635_;
-        if _e318 {
+        let _e322 = phi_1635_;
+        if _e322 {
             return true;
         }
         return false;
     }
-    let _e319 = (*voxelPos_14);
-    let _e320 = (*sub);
-    let _e323 = (*cell);
-    let _e326 = (*jitter);
-    param_59 = (vec3<f32>(((_e319 * vec3(_e320)) + _e323)) + _e326);
-    let _e328 = hash_u0028_vf3_u003b((&param_59));
-    let _e329 = (*type_39);
-    param_60 = _e329;
-    let _e330 = locustDensity_u0028_u1_u003b((&param_60));
-    return (_e328 < _e330);
+    let _e323 = (*voxelPos_14);
+    let _e324 = (*sub);
+    let _e327 = (*cell);
+    let _e330 = (*jitter);
+    param_59 = (vec3<f32>(((_e323 * vec3(_e324)) + _e327)) + _e330);
+    let _e332 = hash_u0028_vf3_u003b((&param_59));
+    let _e333 = (*type_39);
+    param_60 = _e333;
+    let _e334 = locustDensity_u0028_u1_u003b((&param_60));
+    return (_e332 < _e334);
 }
 
 fn intersectAABB_u0028_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b(ro: ptr<function, vec3<f32>>, rd: ptr<function, vec3<f32>>, boxMin: ptr<function, vec3<f32>>, boxMax: ptr<function, vec3<f32>>) -> vec2<f32> {
@@ -1805,31 +1809,31 @@ fn intersectAABB_u0028_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b(ro: ptr<function,
     var tNear: f32;
     var tFar: f32;
 
-    let _e268 = (*boxMin);
-    let _e269 = (*ro);
-    let _e271 = (*rd);
-    tMin = ((_e268 - _e269) / _e271);
-    let _e273 = (*boxMax);
-    let _e274 = (*ro);
-    let _e276 = (*rd);
-    tMax_2 = ((_e273 - _e274) / _e276);
-    let _e278 = tMin;
-    let _e279 = tMax_2;
-    t1_ = min(_e278, _e279);
-    let _e281 = tMin;
-    let _e282 = tMax_2;
-    t2_ = max(_e281, _e282);
-    let _e285 = t1_[0u];
-    let _e287 = t1_[1u];
-    let _e290 = t1_[2u];
-    tNear = max(max(_e285, _e287), _e290);
-    let _e293 = t2_[0u];
-    let _e295 = t2_[1u];
-    let _e298 = t2_[2u];
-    tFar = min(min(_e293, _e295), _e298);
-    let _e300 = tNear;
-    let _e301 = tFar;
-    return vec2<f32>(_e300, _e301);
+    let _e272 = (*boxMin);
+    let _e273 = (*ro);
+    let _e275 = (*rd);
+    tMin = ((_e272 - _e273) / _e275);
+    let _e277 = (*boxMax);
+    let _e278 = (*ro);
+    let _e280 = (*rd);
+    tMax_2 = ((_e277 - _e278) / _e280);
+    let _e282 = tMin;
+    let _e283 = tMax_2;
+    t1_ = min(_e282, _e283);
+    let _e285 = tMin;
+    let _e286 = tMax_2;
+    t2_ = max(_e285, _e286);
+    let _e289 = t1_[0u];
+    let _e291 = t1_[1u];
+    let _e294 = t1_[2u];
+    tNear = max(max(_e289, _e291), _e294);
+    let _e297 = t2_[0u];
+    let _e299 = t2_[1u];
+    let _e302 = t2_[2u];
+    tFar = min(min(_e297, _e299), _e302);
+    let _e304 = tNear;
+    let _e305 = tFar;
+    return vec2<f32>(_e304, _e305);
 }
 
 fn subMarch_u0028_vi3_u003b_vf3_u003b_vf3_u003b_u1_u003b_u1_u003b_vf3_u003b_f1_u003b_vf3_u003b_vf3_u003b(voxelPos_15: ptr<function, vec3<i32>>, rayOrigin_2: ptr<function, vec3<f32>>, rayDir_2: ptr<function, vec3<f32>>, kind_1: ptr<function, u32>, type_40: ptr<function, u32>, entryNormal: ptr<function, vec3<f32>>, tHit_1: ptr<function, f32>, subNormal: ptr<function, vec3<f32>>, subCell_2: ptr<function, vec3<f32>>) -> bool {
@@ -1870,235 +1874,235 @@ fn subMarch_u0028_vi3_u003b_vf3_u003b_vf3_u003b_u1_u003b_u1_u003b_vf3_u003b_f1_u
     var phi_1897_: bool;
 
     (*tHit_1) = 0f;
-    let _e297 = (*entryNormal);
-    (*subNormal) = _e297;
+    let _e301 = (*entryNormal);
+    (*subNormal) = _e301;
     (*subCell_2) = vec3<f32>(0f, 0f, 0f);
-    let _e299 = tuning.locustSubdivision;
-    sub_1 = clamp(bitcast<i32>(_e299), 1i, 8i);
-    let _e302 = sub_1;
-    cellSize = (1f / f32(_e302));
-    let _e305 = (*voxelPos_15);
-    boxMin_1 = vec3<f32>(_e305);
-    let _e307 = boxMin_1;
-    let _e309 = (*rayOrigin_2);
-    param_61 = _e309;
-    let _e310 = (*rayDir_2);
-    param_62 = _e310;
+    let _e303 = tuning.locustSubdivision;
+    sub_1 = clamp(bitcast<i32>(_e303), 1i, 8i);
+    let _e306 = sub_1;
+    cellSize = (1f / f32(_e306));
+    let _e309 = (*voxelPos_15);
+    boxMin_1 = vec3<f32>(_e309);
     let _e311 = boxMin_1;
-    param_63 = _e311;
-    param_64 = (_e307 + vec3<f32>(1f, 1f, 1f));
-    let _e312 = intersectAABB_u0028_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b((&param_61), (&param_62), (&param_63), (&param_64));
-    span = _e312;
-    let _e314 = span[0u];
-    t_2 = max(_e314, 0f);
-    let _e316 = t_2;
-    let _e318 = span[1u];
-    if (_e316 > _e318) {
+    let _e313 = (*rayOrigin_2);
+    param_61 = _e313;
+    let _e314 = (*rayDir_2);
+    param_62 = _e314;
+    let _e315 = boxMin_1;
+    param_63 = _e315;
+    param_64 = (_e311 + vec3<f32>(1f, 1f, 1f));
+    let _e316 = intersectAABB_u0028_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b((&param_61), (&param_62), (&param_63), (&param_64));
+    span = _e316;
+    let _e318 = span[0u];
+    t_2 = max(_e318, 0f);
+    let _e320 = t_2;
+    let _e322 = span[1u];
+    if (_e320 > _e322) {
         return false;
     }
-    let _e320 = (*rayOrigin_2);
-    let _e321 = (*rayDir_2);
-    let _e322 = t_2;
-    let _e326 = boxMin_1;
-    let _e328 = sub_1;
-    local_9 = (((_e320 + (_e321 * (_e322 + 0.0001f))) - _e326) * f32(_e328));
-    let _e331 = local_9;
-    let _e334 = sub_1;
-    c = clamp(vec3<i32>(floor(_e331)), vec3<i32>(0i, 0i, 0i), vec3((_e334 - 1i)));
-    let _e338 = (*rayDir_2);
-    stepDir_2 = vec3<i32>(sign(_e338));
-    let _e342 = (*rayDir_2)[0u];
-    if (_e342 == 0f) {
+    let _e324 = (*rayOrigin_2);
+    let _e325 = (*rayDir_2);
+    let _e326 = t_2;
+    let _e330 = boxMin_1;
+    let _e332 = sub_1;
+    local_9 = (((_e324 + (_e325 * (_e326 + 0.0001f))) - _e330) * f32(_e332));
+    let _e335 = local_9;
+    let _e338 = sub_1;
+    c = clamp(vec3<i32>(floor(_e335)), vec3<i32>(0i, 0i, 0i), vec3((_e338 - 1i)));
+    let _e342 = (*rayDir_2);
+    stepDir_2 = vec3<i32>(sign(_e342));
+    let _e346 = (*rayDir_2)[0u];
+    if (_e346 == 0f) {
         local_10 = 1000000f;
     } else {
-        let _e344 = cellSize;
-        let _e346 = (*rayDir_2)[0u];
-        local_10 = abs((_e344 / _e346));
+        let _e348 = cellSize;
+        let _e350 = (*rayDir_2)[0u];
+        local_10 = abs((_e348 / _e350));
     }
-    let _e349 = local_10;
-    let _e351 = (*rayDir_2)[1u];
-    if (_e351 == 0f) {
+    let _e353 = local_10;
+    let _e355 = (*rayDir_2)[1u];
+    if (_e355 == 0f) {
         local_11 = 1000000f;
     } else {
-        let _e353 = cellSize;
-        let _e355 = (*rayDir_2)[1u];
-        local_11 = abs((_e353 / _e355));
+        let _e357 = cellSize;
+        let _e359 = (*rayDir_2)[1u];
+        local_11 = abs((_e357 / _e359));
     }
-    let _e358 = local_11;
-    let _e360 = (*rayDir_2)[2u];
-    if (_e360 == 0f) {
+    let _e362 = local_11;
+    let _e364 = (*rayDir_2)[2u];
+    if (_e364 == 0f) {
         local_12 = 1000000f;
     } else {
-        let _e362 = cellSize;
-        let _e364 = (*rayDir_2)[2u];
-        local_12 = abs((_e362 / _e364));
+        let _e366 = cellSize;
+        let _e368 = (*rayDir_2)[2u];
+        local_12 = abs((_e366 / _e368));
     }
-    let _e367 = local_12;
-    tDelta_2 = vec3<f32>(_e349, _e358, _e367);
-    let _e369 = local_9;
-    let _e370 = c;
-    fracPos_1 = (_e369 - vec3<f32>(_e370));
-    let _e373 = t_2;
-    let _e375 = stepDir_2[0u];
-    if (_e375 > 0i) {
-        let _e378 = fracPos_1[0u];
-        let _e381 = tDelta_2[0u];
-        local_13 = ((1f - _e378) * _e381);
+    let _e371 = local_12;
+    tDelta_2 = vec3<f32>(_e353, _e362, _e371);
+    let _e373 = local_9;
+    let _e374 = c;
+    fracPos_1 = (_e373 - vec3<f32>(_e374));
+    let _e377 = t_2;
+    let _e379 = stepDir_2[0u];
+    if (_e379 > 0i) {
+        let _e382 = fracPos_1[0u];
+        let _e385 = tDelta_2[0u];
+        local_13 = ((1f - _e382) * _e385);
     } else {
-        let _e384 = fracPos_1[0u];
-        let _e386 = tDelta_2[0u];
-        local_13 = (_e384 * _e386);
+        let _e388 = fracPos_1[0u];
+        let _e390 = tDelta_2[0u];
+        local_13 = (_e388 * _e390);
     }
-    let _e388 = local_13;
-    let _e390 = stepDir_2[1u];
-    if (_e390 > 0i) {
-        let _e393 = fracPos_1[1u];
-        let _e396 = tDelta_2[1u];
-        local_14 = ((1f - _e393) * _e396);
+    let _e392 = local_13;
+    let _e394 = stepDir_2[1u];
+    if (_e394 > 0i) {
+        let _e397 = fracPos_1[1u];
+        let _e400 = tDelta_2[1u];
+        local_14 = ((1f - _e397) * _e400);
     } else {
-        let _e399 = fracPos_1[1u];
-        let _e401 = tDelta_2[1u];
-        local_14 = (_e399 * _e401);
+        let _e403 = fracPos_1[1u];
+        let _e405 = tDelta_2[1u];
+        local_14 = (_e403 * _e405);
     }
-    let _e403 = local_14;
-    let _e405 = stepDir_2[2u];
-    if (_e405 > 0i) {
-        let _e408 = fracPos_1[2u];
-        let _e411 = tDelta_2[2u];
-        local_15 = ((1f - _e408) * _e411);
+    let _e407 = local_14;
+    let _e409 = stepDir_2[2u];
+    if (_e409 > 0i) {
+        let _e412 = fracPos_1[2u];
+        let _e415 = tDelta_2[2u];
+        local_15 = ((1f - _e412) * _e415);
     } else {
-        let _e414 = fracPos_1[2u];
-        let _e416 = tDelta_2[2u];
-        local_15 = (_e414 * _e416);
+        let _e418 = fracPos_1[2u];
+        let _e420 = tDelta_2[2u];
+        local_15 = (_e418 * _e420);
     }
-    let _e418 = local_15;
-    tMax_3 = (vec3(_e373) + vec3<f32>(_e388, _e403, _e418));
-    let _e422 = (*kind_1);
-    if (_e422 == 0u) {
-        let _e425 = pc.time;
-        let _e427 = tuning.locustCrawlRate;
-        local_16 = vec3((floor((_e425 * _e427)) * 1.7f));
+    let _e422 = local_15;
+    tMax_3 = (vec3(_e377) + vec3<f32>(_e392, _e407, _e422));
+    let _e426 = (*kind_1);
+    if (_e426 == 0u) {
+        let _e429 = pc.time;
+        let _e431 = tuning.locustCrawlRate;
+        local_16 = vec3((floor((_e429 * _e431)) * 1.7f));
     } else {
         local_16 = vec3<f32>(0f, 0f, 0f);
     }
-    let _e432 = local_16;
-    jitter_1 = _e432;
+    let _e436 = local_16;
+    jitter_1 = _e436;
     i_5 = 0i;
     loop {
-        let _e433 = i_5;
-        let _e434 = sub_1;
-        if (_e433 < (3i * _e434)) {
-            let _e438 = c[0u];
-            let _e439 = (_e438 < 0i);
-            phi_1867_ = _e439;
-            if !(_e439) {
-                let _e442 = c[0u];
-                let _e443 = sub_1;
-                phi_1867_ = (_e442 >= _e443);
+        let _e437 = i_5;
+        let _e438 = sub_1;
+        if (_e437 < (3i * _e438)) {
+            let _e442 = c[0u];
+            let _e443 = (_e442 < 0i);
+            phi_1867_ = _e443;
+            if !(_e443) {
+                let _e446 = c[0u];
+                let _e447 = sub_1;
+                phi_1867_ = (_e446 >= _e447);
             }
-            let _e446 = phi_1867_;
-            phi_1874_ = _e446;
-            if !(_e446) {
-                let _e449 = c[1u];
-                phi_1874_ = (_e449 < 0i);
+            let _e450 = phi_1867_;
+            phi_1874_ = _e450;
+            if !(_e450) {
+                let _e453 = c[1u];
+                phi_1874_ = (_e453 < 0i);
             }
-            let _e452 = phi_1874_;
-            phi_1882_ = _e452;
-            if !(_e452) {
-                let _e455 = c[1u];
-                let _e456 = sub_1;
-                phi_1882_ = (_e455 >= _e456);
+            let _e456 = phi_1874_;
+            phi_1882_ = _e456;
+            if !(_e456) {
+                let _e459 = c[1u];
+                let _e460 = sub_1;
+                phi_1882_ = (_e459 >= _e460);
             }
-            let _e459 = phi_1882_;
-            phi_1889_ = _e459;
-            if !(_e459) {
-                let _e462 = c[2u];
-                phi_1889_ = (_e462 < 0i);
+            let _e463 = phi_1882_;
+            phi_1889_ = _e463;
+            if !(_e463) {
+                let _e466 = c[2u];
+                phi_1889_ = (_e466 < 0i);
             }
-            let _e465 = phi_1889_;
-            phi_1897_ = _e465;
-            if !(_e465) {
-                let _e468 = c[2u];
-                let _e469 = sub_1;
-                phi_1897_ = (_e468 >= _e469);
+            let _e469 = phi_1889_;
+            phi_1897_ = _e469;
+            if !(_e469) {
+                let _e472 = c[2u];
+                let _e473 = sub_1;
+                phi_1897_ = (_e472 >= _e473);
             }
-            let _e472 = phi_1897_;
-            if _e472 {
+            let _e476 = phi_1897_;
+            if _e476 {
                 return false;
             }
-            let _e473 = (*kind_1);
-            param_65 = _e473;
-            let _e474 = (*type_40);
-            param_66 = _e474;
-            let _e475 = (*voxelPos_15);
-            param_67 = _e475;
-            let _e476 = c;
-            param_68 = _e476;
-            let _e477 = sub_1;
-            param_69 = _e477;
-            let _e478 = jitter_1;
-            param_70 = _e478;
-            let _e479 = subOccupied_u0028_u1_u003b_u1_u003b_vi3_u003b_vi3_u003b_i1_u003b_vf3_u003b((&param_65), (&param_66), (&param_67), (&param_68), (&param_69), (&param_70));
-            if _e479 {
-                let _e480 = t_2;
-                (*tHit_1) = _e480;
-                let _e481 = c;
-                (*subCell_2) = vec3<f32>(_e481);
+            let _e477 = (*kind_1);
+            param_65 = _e477;
+            let _e478 = (*type_40);
+            param_66 = _e478;
+            let _e479 = (*voxelPos_15);
+            param_67 = _e479;
+            let _e480 = c;
+            param_68 = _e480;
+            let _e481 = sub_1;
+            param_69 = _e481;
+            let _e482 = jitter_1;
+            param_70 = _e482;
+            let _e483 = subOccupied_u0028_u1_u003b_u1_u003b_vi3_u003b_vi3_u003b_i1_u003b_vf3_u003b((&param_65), (&param_66), (&param_67), (&param_68), (&param_69), (&param_70));
+            if _e483 {
+                let _e484 = t_2;
+                (*tHit_1) = _e484;
+                let _e485 = c;
+                (*subCell_2) = vec3<f32>(_e485);
                 return true;
             }
-            let _e484 = tMax_3[0u];
-            let _e486 = tMax_3[1u];
-            if (_e484 < _e486) {
-                let _e489 = tMax_3[0u];
-                let _e491 = tMax_3[2u];
-                if (_e489 < _e491) {
-                    let _e494 = stepDir_2[0u];
-                    let _e496 = c[0u];
-                    c[0u] = (_e496 + _e494);
-                    let _e500 = tMax_3[0u];
-                    t_2 = _e500;
-                    let _e502 = tDelta_2[0u];
+            let _e488 = tMax_3[0u];
+            let _e490 = tMax_3[1u];
+            if (_e488 < _e490) {
+                let _e493 = tMax_3[0u];
+                let _e495 = tMax_3[2u];
+                if (_e493 < _e495) {
+                    let _e498 = stepDir_2[0u];
+                    let _e500 = c[0u];
+                    c[0u] = (_e500 + _e498);
                     let _e504 = tMax_3[0u];
-                    tMax_3[0u] = (_e504 + _e502);
-                    let _e508 = stepDir_2[0u];
-                    (*subNormal) = vec3<f32>(f32(-(_e508)), 0f, 0f);
+                    t_2 = _e504;
+                    let _e506 = tDelta_2[0u];
+                    let _e508 = tMax_3[0u];
+                    tMax_3[0u] = (_e508 + _e506);
+                    let _e512 = stepDir_2[0u];
+                    (*subNormal) = vec3<f32>(f32(-(_e512)), 0f, 0f);
                 } else {
-                    let _e513 = stepDir_2[2u];
-                    let _e515 = c[2u];
-                    c[2u] = (_e515 + _e513);
-                    let _e519 = tMax_3[2u];
-                    t_2 = _e519;
-                    let _e521 = tDelta_2[2u];
+                    let _e517 = stepDir_2[2u];
+                    let _e519 = c[2u];
+                    c[2u] = (_e519 + _e517);
                     let _e523 = tMax_3[2u];
-                    tMax_3[2u] = (_e523 + _e521);
-                    let _e527 = stepDir_2[2u];
-                    (*subNormal) = vec3<f32>(0f, 0f, f32(-(_e527)));
+                    t_2 = _e523;
+                    let _e525 = tDelta_2[2u];
+                    let _e527 = tMax_3[2u];
+                    tMax_3[2u] = (_e527 + _e525);
+                    let _e531 = stepDir_2[2u];
+                    (*subNormal) = vec3<f32>(0f, 0f, f32(-(_e531)));
                 }
             } else {
-                let _e532 = tMax_3[1u];
-                let _e534 = tMax_3[2u];
-                if (_e532 < _e534) {
-                    let _e537 = stepDir_2[1u];
-                    let _e539 = c[1u];
-                    c[1u] = (_e539 + _e537);
-                    let _e543 = tMax_3[1u];
-                    t_2 = _e543;
-                    let _e545 = tDelta_2[1u];
+                let _e536 = tMax_3[1u];
+                let _e538 = tMax_3[2u];
+                if (_e536 < _e538) {
+                    let _e541 = stepDir_2[1u];
+                    let _e543 = c[1u];
+                    c[1u] = (_e543 + _e541);
                     let _e547 = tMax_3[1u];
-                    tMax_3[1u] = (_e547 + _e545);
-                    let _e551 = stepDir_2[1u];
-                    (*subNormal) = vec3<f32>(0f, f32(-(_e551)), 0f);
+                    t_2 = _e547;
+                    let _e549 = tDelta_2[1u];
+                    let _e551 = tMax_3[1u];
+                    tMax_3[1u] = (_e551 + _e549);
+                    let _e555 = stepDir_2[1u];
+                    (*subNormal) = vec3<f32>(0f, f32(-(_e555)), 0f);
                 } else {
-                    let _e556 = stepDir_2[2u];
-                    let _e558 = c[2u];
-                    c[2u] = (_e558 + _e556);
-                    let _e562 = tMax_3[2u];
-                    t_2 = _e562;
-                    let _e564 = tDelta_2[2u];
+                    let _e560 = stepDir_2[2u];
+                    let _e562 = c[2u];
+                    c[2u] = (_e562 + _e560);
                     let _e566 = tMax_3[2u];
-                    tMax_3[2u] = (_e566 + _e564);
-                    let _e570 = stepDir_2[2u];
-                    (*subNormal) = vec3<f32>(0f, 0f, f32(-(_e570)));
+                    t_2 = _e566;
+                    let _e568 = tDelta_2[2u];
+                    let _e570 = tMax_3[2u];
+                    tMax_3[2u] = (_e570 + _e568);
+                    let _e574 = stepDir_2[2u];
+                    (*subNormal) = vec3<f32>(0f, 0f, f32(-(_e574)));
                 }
             }
             continue;
@@ -2106,30 +2110,30 @@ fn subMarch_u0028_vi3_u003b_vf3_u003b_vf3_u003b_u1_u003b_u1_u003b_vf3_u003b_f1_u
             break;
         }
         continuing {
-            let _e574 = i_5;
-            i_5 = (_e574 + 1i);
+            let _e578 = i_5;
+            i_5 = (_e578 + 1i);
         }
     }
     return false;
 }
 
 fn isLocustType_u0028_u1_u003b(type_41: ptr<function, u32>) -> bool {
-    let _e259 = (*type_41);
-    let _e261 = (*type_41);
-    return ((_e259 >= 13u) && (_e261 <= 17u));
+    let _e263 = (*type_41);
+    let _e265 = (*type_41);
+    return ((_e263 >= 13u) && (_e265 <= 17u));
 }
 
 fn marchCeiling_u0028_() -> i32 {
-    let _e259 = tuning.gridHeight;
-    let _e262 = unnamed.maxOccupiedY;
-    return min(bitcast<i32>(_e259), (bitcast<i32>(_e262) + 2i));
+    let _e263 = tuning.gridHeight;
+    let _e266 = unnamed.maxOccupiedY;
+    return min(bitcast<i32>(_e263), (bitcast<i32>(_e266) + 2i));
 }
 
 fn worldExtent_u0028_() -> vec3<f32> {
-    let _e259 = tuning.gridWidth;
-    let _e263 = tuning.gridHeight;
-    let _e267 = tuning.gridDepth;
-    return vec3<f32>(f32(bitcast<i32>(_e259)), f32(bitcast<i32>(_e263)), f32(bitcast<i32>(_e267)));
+    let _e263 = tuning.gridWidth;
+    let _e267 = tuning.gridHeight;
+    let _e271 = tuning.gridDepth;
+    return vec3<f32>(f32(bitcast<i32>(_e263)), f32(bitcast<i32>(_e267)), f32(bitcast<i32>(_e271)));
 }
 
 fn isEdge_u0028_vf3_u003b(p_5: ptr<function, vec3<f32>>) -> bool {
@@ -2142,92 +2146,92 @@ fn isEdge_u0028_vf3_u003b(p_5: ptr<function, vec3<f32>>) -> bool {
 
     thickness_1 = 0.3f;
     boundCount = 0i;
-    let _e262 = worldExtent_u0028_();
-    extent = _e262;
-    let _e264 = (*p_5)[0u];
-    let _e265 = thickness_1;
-    let _e266 = (_e264 < _e265);
-    phi_476_ = _e266;
-    if !(_e266) {
-        let _e269 = (*p_5)[0u];
-        let _e271 = extent[0u];
-        let _e272 = thickness_1;
-        phi_476_ = (_e269 > (_e271 - _e272));
+    let _e266 = worldExtent_u0028_();
+    extent = _e266;
+    let _e268 = (*p_5)[0u];
+    let _e269 = thickness_1;
+    let _e270 = (_e268 < _e269);
+    phi_476_ = _e270;
+    if !(_e270) {
+        let _e273 = (*p_5)[0u];
+        let _e275 = extent[0u];
+        let _e276 = thickness_1;
+        phi_476_ = (_e273 > (_e275 - _e276));
     }
-    let _e276 = phi_476_;
-    if _e276 {
-        let _e277 = boundCount;
-        boundCount = (_e277 + 1i);
+    let _e280 = phi_476_;
+    if _e280 {
+        let _e281 = boundCount;
+        boundCount = (_e281 + 1i);
     }
-    let _e280 = (*p_5)[1u];
-    let _e281 = thickness_1;
-    let _e282 = (_e280 < _e281);
-    phi_495_ = _e282;
-    if !(_e282) {
-        let _e285 = (*p_5)[1u];
-        let _e287 = extent[1u];
-        let _e288 = thickness_1;
-        phi_495_ = (_e285 > (_e287 - _e288));
+    let _e284 = (*p_5)[1u];
+    let _e285 = thickness_1;
+    let _e286 = (_e284 < _e285);
+    phi_495_ = _e286;
+    if !(_e286) {
+        let _e289 = (*p_5)[1u];
+        let _e291 = extent[1u];
+        let _e292 = thickness_1;
+        phi_495_ = (_e289 > (_e291 - _e292));
     }
-    let _e292 = phi_495_;
-    if _e292 {
-        let _e293 = boundCount;
-        boundCount = (_e293 + 1i);
+    let _e296 = phi_495_;
+    if _e296 {
+        let _e297 = boundCount;
+        boundCount = (_e297 + 1i);
     }
-    let _e296 = (*p_5)[2u];
-    let _e297 = thickness_1;
-    let _e298 = (_e296 < _e297);
-    phi_514_ = _e298;
-    if !(_e298) {
-        let _e301 = (*p_5)[2u];
-        let _e303 = extent[2u];
-        let _e304 = thickness_1;
-        phi_514_ = (_e301 > (_e303 - _e304));
+    let _e300 = (*p_5)[2u];
+    let _e301 = thickness_1;
+    let _e302 = (_e300 < _e301);
+    phi_514_ = _e302;
+    if !(_e302) {
+        let _e305 = (*p_5)[2u];
+        let _e307 = extent[2u];
+        let _e308 = thickness_1;
+        phi_514_ = (_e305 > (_e307 - _e308));
     }
-    let _e308 = phi_514_;
-    if _e308 {
-        let _e309 = boundCount;
-        boundCount = (_e309 + 1i);
+    let _e312 = phi_514_;
+    if _e312 {
+        let _e313 = boundCount;
+        boundCount = (_e313 + 1i);
     }
-    let _e311 = boundCount;
-    return (_e311 >= 2i);
+    let _e315 = boundCount;
+    return (_e315 >= 2i);
 }
 
 fn rot_u0028_f1_u003b(a_2: ptr<function, f32>) -> mat2x2<f32> {
     var s: f32;
     var c_1: f32;
 
-    let _e261 = (*a_2);
-    s = sin(_e261);
-    let _e263 = (*a_2);
-    c_1 = cos(_e263);
-    let _e265 = c_1;
-    let _e266 = s;
-    let _e268 = s;
+    let _e265 = (*a_2);
+    s = sin(_e265);
+    let _e267 = (*a_2);
+    c_1 = cos(_e267);
     let _e269 = c_1;
-    return mat2x2<f32>(vec2<f32>(_e265, -(_e266)), vec2<f32>(_e268, _e269));
+    let _e270 = s;
+    let _e272 = s;
+    let _e273 = c_1;
+    return mat2x2<f32>(vec2<f32>(_e269, -(_e270)), vec2<f32>(_e272, _e273));
 }
 
 fn applyCameraRotation_u0028_vf3_u003b(v: ptr<function, vec3<f32>>) -> vec3<f32> {
     var param_71: f32;
     var param_72: f32;
 
-    let _e262 = pc.pitch;
-    param_71 = _e262;
-    let _e263 = rot_u0028_f1_u003b((&param_71));
-    let _e264 = (*v);
-    let _e266 = (_e264.yz * _e263);
-    (*v)[1u] = _e266.x;
-    (*v)[2u] = _e266.y;
-    let _e272 = pc.yaw;
-    param_72 = _e272;
-    let _e273 = rot_u0028_f1_u003b((&param_72));
-    let _e274 = (*v);
-    let _e276 = (_e274.xz * _e273);
-    (*v)[0u] = _e276.x;
-    (*v)[2u] = _e276.y;
-    let _e281 = (*v);
-    return _e281;
+    let _e266 = pc.pitch;
+    param_71 = _e266;
+    let _e267 = rot_u0028_f1_u003b((&param_71));
+    let _e268 = (*v);
+    let _e270 = (_e268.yz * _e267);
+    (*v)[1u] = _e270.x;
+    (*v)[2u] = _e270.y;
+    let _e276 = pc.yaw;
+    param_72 = _e276;
+    let _e277 = rot_u0028_f1_u003b((&param_72));
+    let _e278 = (*v);
+    let _e280 = (_e278.xz * _e277);
+    (*v)[0u] = _e280.x;
+    (*v)[2u] = _e280.y;
+    let _e285 = (*v);
+    return _e285;
 }
 
 fn main_1() {
@@ -2383,8 +2387,10 @@ fn main_1() {
     var charge: f32;
     var cloudGreyness: f32;
     var crossedTime: f32;
-    var cloudCeiling: f32;
+    var bandLo: f32;
+    var bandHi: f32;
     var cloudClip: vec2<f32>;
+    var local_26: vec2<f32>;
     var param_146: vec3<f32>;
     var param_147: vec3<f32>;
     var param_148: vec3<f32>;
@@ -2442,230 +2448,230 @@ fn main_1() {
     var edgesFront: i32;
     var onBackEdge: bool;
     var edgesBack: i32;
-    var phi_3075_: bool;
-    var phi_3091_: bool;
-    var phi_3319_: bool;
-    var phi_3326_: bool;
-    var phi_3334_: bool;
-    var phi_3341_: bool;
-    var phi_3351_: bool;
-    var phi_3839_: bool;
-    var phi_4127_: bool;
-    var phi_4134_: bool;
-    var phi_4143_: bool;
-    var phi_4149_: bool;
-    var phi_4158_: bool;
-    var phi_4369_: bool;
-    var phi_4411_: bool;
-    var phi_4433_: bool;
-    var phi_4455_: bool;
-    var phi_4483_: bool;
-    var phi_4505_: bool;
-    var phi_4527_: bool;
+    var phi_3076_: bool;
+    var phi_3092_: bool;
+    var phi_3320_: bool;
+    var phi_3327_: bool;
+    var phi_3335_: bool;
+    var phi_3342_: bool;
+    var phi_3352_: bool;
+    var phi_3840_: bool;
+    var phi_4147_: bool;
+    var phi_4154_: bool;
+    var phi_4163_: bool;
+    var phi_4169_: bool;
+    var phi_4178_: bool;
+    var phi_4389_: bool;
+    var phi_4431_: bool;
+    var phi_4453_: bool;
+    var phi_4475_: bool;
+    var phi_4503_: bool;
+    var phi_4525_: bool;
+    var phi_4547_: bool;
 
-    let _e469 = inUV_1;
-    screenSpace = ((_e469 * 2f) - vec2(1f));
-    let _e474 = screenSpace[1u];
-    screenSpace[1u] = -(_e474);
-    let _e478 = pc.aspectScaleX;
-    let _e480 = screenSpace[0u];
-    screenSpace[0u] = (_e480 * _e478);
-    let _e484 = pc.aspectScaleY;
-    let _e486 = screenSpace[1u];
-    screenSpace[1u] = (_e486 * _e484);
-    let _e490 = pc.camX;
-    let _e492 = pc.camY;
-    let _e494 = pc.camZ;
-    baseOrigin = vec3<f32>(_e490, _e492, _e494);
+    let _e475 = inUV_1;
+    screenSpace = ((_e475 * 2f) - vec2(1f));
+    let _e480 = screenSpace[1u];
+    screenSpace[1u] = -(_e480);
+    let _e484 = pc.aspectScaleX;
+    let _e486 = screenSpace[0u];
+    screenSpace[0u] = (_e486 * _e484);
+    let _e490 = pc.aspectScaleY;
+    let _e492 = screenSpace[1u];
+    screenSpace[1u] = (_e492 * _e490);
+    let _e496 = pc.camX;
+    let _e498 = pc.camY;
+    let _e500 = pc.camZ;
+    baseOrigin = vec3<f32>(_e496, _e498, _e500);
     param_73 = vec3<f32>(0f, 0f, 1f);
-    let _e496 = applyCameraRotation_u0028_vf3_u003b((&param_73));
-    forward = _e496;
+    let _e502 = applyCameraRotation_u0028_vf3_u003b((&param_73));
+    forward = _e502;
     param_74 = vec3<f32>(1f, 0f, 0f);
-    let _e497 = applyCameraRotation_u0028_vf3_u003b((&param_74));
-    right = _e497;
+    let _e503 = applyCameraRotation_u0028_vf3_u003b((&param_74));
+    right = _e503;
     param_75 = vec3<f32>(0f, 1f, 0f);
-    let _e498 = applyCameraRotation_u0028_vf3_u003b((&param_75));
-    up = _e498;
-    let _e500 = pc.perspectiveBlend;
-    t_3 = clamp(_e500, 0f, 1f);
-    let _e502 = worldExtent_u0028_();
-    cubeCenter = (_e502 * 0.5f);
-    let _e504 = cubeCenter;
-    let _e505 = baseOrigin;
-    let _e507 = forward;
-    viewDistance = max(1f, dot((_e504 - _e505), _e507));
-    let _e510 = viewDistance;
-    let _e512 = pc.fovDistance;
-    orthoHalfSize = (_e510 / _e512);
-    let _e515 = screenSpace[0u];
-    let _e517 = screenSpace[1u];
-    let _e519 = pc.fovDistance;
-    let _e521 = t_3;
-    localDir = mix(vec3<f32>(0f, 0f, 1f), vec3<f32>(_e515, _e517, _e519), vec3(_e521));
-    let _e524 = right;
-    let _e526 = localDir[0u];
-    let _e528 = up;
-    let _e530 = localDir[1u];
-    let _e533 = forward;
-    let _e535 = localDir[2u];
-    rayDir_3 = normalize((((_e524 * _e526) + (_e528 * _e530)) + (_e533 * _e535)));
-    let _e539 = right;
-    let _e541 = screenSpace[0u];
-    let _e543 = up;
-    let _e545 = screenSpace[1u];
-    let _e548 = orthoHalfSize;
-    let _e550 = t_3;
-    originOffset = ((((_e539 * _e541) + (_e543 * _e545)) * _e548) * (1f - _e550));
-    let _e553 = baseOrigin;
-    let _e554 = originOffset;
-    rayOrigin_3 = (_e553 + _e554);
+    let _e504 = applyCameraRotation_u0028_vf3_u003b((&param_75));
+    up = _e504;
+    let _e506 = pc.perspectiveBlend;
+    t_3 = clamp(_e506, 0f, 1f);
+    let _e508 = worldExtent_u0028_();
+    cubeCenter = (_e508 * 0.5f);
+    let _e510 = cubeCenter;
+    let _e511 = baseOrigin;
+    let _e513 = forward;
+    viewDistance = max(1f, dot((_e510 - _e511), _e513));
+    let _e516 = viewDistance;
+    let _e518 = pc.fovDistance;
+    orthoHalfSize = (_e516 / _e518);
+    let _e521 = screenSpace[0u];
+    let _e523 = screenSpace[1u];
+    let _e525 = pc.fovDistance;
+    let _e527 = t_3;
+    localDir = mix(vec3<f32>(0f, 0f, 1f), vec3<f32>(_e521, _e523, _e525), vec3(_e527));
+    let _e530 = right;
+    let _e532 = localDir[0u];
+    let _e534 = up;
+    let _e536 = localDir[1u];
+    let _e539 = forward;
+    let _e541 = localDir[2u];
+    rayDir_3 = normalize((((_e530 * _e532) + (_e534 * _e536)) + (_e539 * _e541)));
+    let _e545 = right;
+    let _e547 = screenSpace[0u];
+    let _e549 = up;
+    let _e551 = screenSpace[1u];
+    let _e554 = orthoHalfSize;
+    let _e556 = t_3;
+    originOffset = ((((_e545 * _e547) + (_e549 * _e551)) * _e554) * (1f - _e556));
+    let _e559 = baseOrigin;
+    let _e560 = originOffset;
+    rayOrigin_3 = (_e559 + _e560);
     finalColor = vec4<f32>(0.05f, 0.05f, 0.1f, 1f);
     finalDist = 1000000f;
-    let _e556 = worldExtent_u0028_();
-    let _e557 = rayOrigin_3;
-    param_76 = _e557;
-    let _e558 = rayDir_3;
-    param_77 = _e558;
+    let _e562 = worldExtent_u0028_();
+    let _e563 = rayOrigin_3;
+    param_76 = _e563;
+    let _e564 = rayDir_3;
+    param_77 = _e564;
     param_78 = vec3<f32>(0f, 0f, 0f);
-    param_79 = _e556;
-    let _e559 = intersectAABB_u0028_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b((&param_76), (&param_77), (&param_78), (&param_79));
-    aabbHit = _e559;
+    param_79 = _e562;
+    let _e565 = intersectAABB_u0028_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b((&param_76), (&param_77), (&param_78), (&param_79));
+    aabbHit = _e565;
     hitFrontBox = false;
     hitBackBox = false;
-    let _e561 = aabbHit[0u];
-    let _e563 = aabbHit[1u];
-    let _e564 = (_e561 < _e563);
-    phi_3075_ = _e564;
-    if _e564 {
-        let _e566 = aabbHit[1u];
-        phi_3075_ = (_e566 > 0f);
+    let _e567 = aabbHit[0u];
+    let _e569 = aabbHit[1u];
+    let _e570 = (_e567 < _e569);
+    phi_3076_ = _e570;
+    if _e570 {
+        let _e572 = aabbHit[1u];
+        phi_3076_ = (_e572 > 0f);
     }
-    let _e569 = phi_3075_;
-    if _e569 {
-        let _e571 = aabbHit[0u];
-        let _e572 = (_e571 > 0f);
-        phi_3091_ = _e572;
-        if _e572 {
-            let _e573 = rayOrigin_3;
-            let _e574 = rayDir_3;
-            let _e576 = aabbHit[0u];
-            param_80 = (_e573 + (_e574 * _e576));
-            let _e579 = isEdge_u0028_vf3_u003b((&param_80));
-            phi_3091_ = _e579;
+    let _e575 = phi_3076_;
+    if _e575 {
+        let _e577 = aabbHit[0u];
+        let _e578 = (_e577 > 0f);
+        phi_3092_ = _e578;
+        if _e578 {
+            let _e579 = rayOrigin_3;
+            let _e580 = rayDir_3;
+            let _e582 = aabbHit[0u];
+            param_80 = (_e579 + (_e580 * _e582));
+            let _e585 = isEdge_u0028_vf3_u003b((&param_80));
+            phi_3092_ = _e585;
         }
-        let _e581 = phi_3091_;
-        if _e581 {
+        let _e587 = phi_3092_;
+        if _e587 {
             hitFrontBox = true;
         }
-        let _e582 = rayOrigin_3;
-        let _e583 = rayDir_3;
-        let _e585 = aabbHit[1u];
-        param_81 = (_e582 + (_e583 * _e585));
-        let _e588 = isEdge_u0028_vf3_u003b((&param_81));
-        if _e588 {
+        let _e588 = rayOrigin_3;
+        let _e589 = rayDir_3;
+        let _e591 = aabbHit[1u];
+        param_81 = (_e588 + (_e589 * _e591));
+        let _e594 = isEdge_u0028_vf3_u003b((&param_81));
+        if _e594 {
             hitBackBox = true;
         }
     }
-    let _e590 = pc.showCloudBlocks;
-    if (_e590 != 0i) {
-        let _e593 = tuning.gridHeight;
-        local_17 = bitcast<i32>(_e593);
+    let _e596 = pc.showCloudBlocks;
+    if (_e596 != 0i) {
+        let _e599 = tuning.gridHeight;
+        local_17 = bitcast<i32>(_e599);
     } else {
-        let _e595 = marchCeiling_u0028_();
-        local_17 = _e595;
+        let _e601 = marchCeiling_u0028_();
+        local_17 = _e601;
     }
-    let _e596 = local_17;
-    ceilingY_1 = _e596;
-    let _e598 = tuning.gridWidth;
-    let _e601 = ceilingY_1;
-    let _e604 = tuning.gridDepth;
-    let _e608 = rayOrigin_3;
-    param_82 = _e608;
-    let _e609 = rayDir_3;
-    param_83 = _e609;
+    let _e602 = local_17;
+    ceilingY_1 = _e602;
+    let _e604 = tuning.gridWidth;
+    let _e607 = ceilingY_1;
+    let _e610 = tuning.gridDepth;
+    let _e614 = rayOrigin_3;
+    param_82 = _e614;
+    let _e615 = rayDir_3;
+    param_83 = _e615;
     param_84 = vec3<f32>(0f, 0f, 0f);
-    param_85 = vec3<f32>(f32(bitcast<i32>(_e598)), f32(_e601), f32(bitcast<i32>(_e604)));
-    let _e610 = intersectAABB_u0028_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b((&param_82), (&param_83), (&param_84), (&param_85));
-    marchHit = _e610;
-    let _e611 = rayOrigin_3;
-    let _e612 = rayDir_3;
-    let _e614 = marchHit[0u];
-    currentPos = (_e611 + (_e612 * max(0f, _e614)));
-    let _e619 = marchHit[0u];
-    if (_e619 > 0f) {
-        let _e621 = rayDir_3;
-        let _e623 = currentPos;
-        currentPos = (_e623 + (_e621 * 0.001f));
+    param_85 = vec3<f32>(f32(bitcast<i32>(_e604)), f32(_e607), f32(bitcast<i32>(_e610)));
+    let _e616 = intersectAABB_u0028_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b((&param_82), (&param_83), (&param_84), (&param_85));
+    marchHit = _e616;
+    let _e617 = rayOrigin_3;
+    let _e618 = rayDir_3;
+    let _e620 = marchHit[0u];
+    currentPos = (_e617 + (_e618 * max(0f, _e620)));
+    let _e625 = marchHit[0u];
+    if (_e625 > 0f) {
+        let _e627 = rayDir_3;
+        let _e629 = currentPos;
+        currentPos = (_e629 + (_e627 * 0.001f));
     }
-    let _e625 = currentPos;
-    voxelPos_16 = vec3<i32>(floor(_e625));
-    let _e628 = rayDir_3;
-    stepDir_3 = vec3<i32>(sign(_e628));
-    let _e632 = rayDir_3[0u];
-    if (_e632 == 0f) {
+    let _e631 = currentPos;
+    voxelPos_16 = vec3<i32>(floor(_e631));
+    let _e634 = rayDir_3;
+    stepDir_3 = vec3<i32>(sign(_e634));
+    let _e638 = rayDir_3[0u];
+    if (_e638 == 0f) {
         local_18 = 100000000f;
     } else {
-        let _e635 = rayDir_3[0u];
-        local_18 = abs((1f / _e635));
+        let _e641 = rayDir_3[0u];
+        local_18 = abs((1f / _e641));
     }
-    let _e638 = local_18;
-    let _e640 = rayDir_3[1u];
-    if (_e640 == 0f) {
+    let _e644 = local_18;
+    let _e646 = rayDir_3[1u];
+    if (_e646 == 0f) {
         local_19 = 100000000f;
     } else {
-        let _e643 = rayDir_3[1u];
-        local_19 = abs((1f / _e643));
+        let _e649 = rayDir_3[1u];
+        local_19 = abs((1f / _e649));
     }
-    let _e646 = local_19;
-    let _e648 = rayDir_3[2u];
-    if (_e648 == 0f) {
+    let _e652 = local_19;
+    let _e654 = rayDir_3[2u];
+    if (_e654 == 0f) {
         local_20 = 100000000f;
     } else {
-        let _e651 = rayDir_3[2u];
-        local_20 = abs((1f / _e651));
+        let _e657 = rayDir_3[2u];
+        local_20 = abs((1f / _e657));
     }
-    let _e654 = local_20;
-    tDelta_3 = vec3<f32>(_e638, _e646, _e654);
-    let _e657 = stepDir_3[0u];
-    if (_e657 > 0i) {
-        let _e660 = currentPos[0u];
-        let _e664 = currentPos[0u];
-        let _e667 = tDelta_3[0u];
-        local_21 = (((floor(_e660) + 1f) - _e664) * _e667);
-    } else {
+    let _e660 = local_20;
+    tDelta_3 = vec3<f32>(_e644, _e652, _e660);
+    let _e663 = stepDir_3[0u];
+    if (_e663 > 0i) {
+        let _e666 = currentPos[0u];
         let _e670 = currentPos[0u];
-        let _e672 = currentPos[0u];
-        let _e676 = tDelta_3[0u];
-        local_21 = ((_e670 - floor(_e672)) * _e676);
-    }
-    let _e678 = local_21;
-    let _e680 = stepDir_3[1u];
-    if (_e680 > 0i) {
-        let _e683 = currentPos[1u];
-        let _e687 = currentPos[1u];
-        let _e690 = tDelta_3[1u];
-        local_22 = (((floor(_e683) + 1f) - _e687) * _e690);
+        let _e673 = tDelta_3[0u];
+        local_21 = (((floor(_e666) + 1f) - _e670) * _e673);
     } else {
+        let _e676 = currentPos[0u];
+        let _e678 = currentPos[0u];
+        let _e682 = tDelta_3[0u];
+        local_21 = ((_e676 - floor(_e678)) * _e682);
+    }
+    let _e684 = local_21;
+    let _e686 = stepDir_3[1u];
+    if (_e686 > 0i) {
+        let _e689 = currentPos[1u];
         let _e693 = currentPos[1u];
-        let _e695 = currentPos[1u];
-        let _e699 = tDelta_3[1u];
-        local_22 = ((_e693 - floor(_e695)) * _e699);
-    }
-    let _e701 = local_22;
-    let _e703 = stepDir_3[2u];
-    if (_e703 > 0i) {
-        let _e706 = currentPos[2u];
-        let _e710 = currentPos[2u];
-        let _e713 = tDelta_3[2u];
-        local_23 = (((floor(_e706) + 1f) - _e710) * _e713);
+        let _e696 = tDelta_3[1u];
+        local_22 = (((floor(_e689) + 1f) - _e693) * _e696);
     } else {
-        let _e716 = currentPos[2u];
-        let _e718 = currentPos[2u];
-        let _e722 = tDelta_3[2u];
-        local_23 = ((_e716 - floor(_e718)) * _e722);
+        let _e699 = currentPos[1u];
+        let _e701 = currentPos[1u];
+        let _e705 = tDelta_3[1u];
+        local_22 = ((_e699 - floor(_e701)) * _e705);
     }
-    let _e724 = local_23;
-    tMax_4 = vec3<f32>(_e678, _e701, _e724);
+    let _e707 = local_22;
+    let _e709 = stepDir_3[2u];
+    if (_e709 > 0i) {
+        let _e712 = currentPos[2u];
+        let _e716 = currentPos[2u];
+        let _e719 = tDelta_3[2u];
+        local_23 = (((floor(_e712) + 1f) - _e716) * _e719);
+    } else {
+        let _e722 = currentPos[2u];
+        let _e724 = currentPos[2u];
+        let _e728 = tDelta_3[2u];
+        local_23 = ((_e722 - floor(_e724)) * _e728);
+    }
+    let _e730 = local_23;
+    tMax_4 = vec3<f32>(_e684, _e707, _e730);
     normal_4 = vec3<f32>(0f, 0f, 0f);
     hit = false;
     hitType = 0u;
@@ -2673,189 +2679,189 @@ fn main_1() {
     subT = 0f;
     subNormal_1 = vec3<f32>(0f, 1f, 0f);
     subCell_3 = vec3<f32>(0f, 0f, 0f);
-    let _e727 = aabbHit[1u];
-    MAX_VISIBILITY = max(300f, (_e727 * 1.5f));
+    let _e733 = aabbHit[1u];
+    MAX_VISIBILITY = max(300f, (_e733 * 1.5f));
     i_6 = 0i;
     loop {
-        let _e730 = i_6;
-        let _e732 = tuning.marchMaxSteps;
-        if (_e730 < bitcast<i32>(_e732)) {
-            let _e736 = voxelPos_16[0u];
-            let _e737 = (_e736 < 0i);
-            phi_3319_ = _e737;
-            if !(_e737) {
-                let _e740 = voxelPos_16[0u];
-                let _e742 = tuning.gridWidth;
-                phi_3319_ = (_e740 >= bitcast<i32>(_e742));
+        let _e736 = i_6;
+        let _e738 = tuning.marchMaxSteps;
+        if (_e736 < bitcast<i32>(_e738)) {
+            let _e742 = voxelPos_16[0u];
+            let _e743 = (_e742 < 0i);
+            phi_3320_ = _e743;
+            if !(_e743) {
+                let _e746 = voxelPos_16[0u];
+                let _e748 = tuning.gridWidth;
+                phi_3320_ = (_e746 >= bitcast<i32>(_e748));
             }
-            let _e746 = phi_3319_;
-            phi_3326_ = _e746;
-            if !(_e746) {
-                let _e749 = voxelPos_16[1u];
-                phi_3326_ = (_e749 < 0i);
-            }
-            let _e752 = phi_3326_;
-            phi_3334_ = _e752;
+            let _e752 = phi_3320_;
+            phi_3327_ = _e752;
             if !(_e752) {
                 let _e755 = voxelPos_16[1u];
-                let _e756 = ceilingY_1;
-                phi_3334_ = (_e755 >= _e756);
+                phi_3327_ = (_e755 < 0i);
             }
-            let _e759 = phi_3334_;
-            phi_3341_ = _e759;
-            if !(_e759) {
-                let _e762 = voxelPos_16[2u];
-                phi_3341_ = (_e762 < 0i);
+            let _e758 = phi_3327_;
+            phi_3335_ = _e758;
+            if !(_e758) {
+                let _e761 = voxelPos_16[1u];
+                let _e762 = ceilingY_1;
+                phi_3335_ = (_e761 >= _e762);
             }
-            let _e765 = phi_3341_;
-            phi_3351_ = _e765;
+            let _e765 = phi_3335_;
+            phi_3342_ = _e765;
             if !(_e765) {
                 let _e768 = voxelPos_16[2u];
-                let _e770 = tuning.gridDepth;
-                phi_3351_ = (_e768 >= bitcast<i32>(_e770));
+                phi_3342_ = (_e768 < 0i);
             }
-            let _e774 = phi_3351_;
-            if _e774 {
+            let _e771 = phi_3342_;
+            phi_3352_ = _e771;
+            if !(_e771) {
+                let _e774 = voxelPos_16[2u];
+                let _e776 = tuning.gridDepth;
+                phi_3352_ = (_e774 >= bitcast<i32>(_e776));
+            }
+            let _e780 = phi_3352_;
+            if _e780 {
                 break;
             }
-            let _e775 = voxelPos_16;
-            param_86 = _e775;
-            let _e776 = getVoxel_u0028_vi3_u003b((&param_86));
-            rawVoxel_5 = _e776;
-            let _e777 = rawVoxel_5;
-            hitType = (_e777 & 255u);
-            let _e780 = pc.showCloudBlocks;
-            let _e782 = hitType;
-            if ((_e780 != 0i) && (_e782 == 0u)) {
-                let _e786 = voxelPos_16[0u];
-                let _e788 = voxelPos_16[1u];
-                let _e790 = tuning.gridWidth;
-                let _e795 = voxelPos_16[2u];
-                let _e797 = tuning.gridWidth;
-                let _e801 = tuning.gridHeight;
-                let _e808 = unnamed_2.cloudCells[bitcast<u32>(((_e786 + (_e788 * bitcast<i32>(_e790))) + ((_e795 * bitcast<i32>(_e797)) * bitcast<i32>(_e801))))];
-                c_2 = _e808;
-                let _e809 = c_2;
-                if ((_e809 & 3u) != 0u) {
+            let _e781 = voxelPos_16;
+            param_86 = _e781;
+            let _e782 = getVoxel_u0028_vi3_u003b((&param_86));
+            rawVoxel_5 = _e782;
+            let _e783 = rawVoxel_5;
+            hitType = (_e783 & 255u);
+            let _e786 = pc.showCloudBlocks;
+            let _e788 = hitType;
+            if ((_e786 != 0i) && (_e788 == 0u)) {
+                let _e792 = voxelPos_16[0u];
+                let _e794 = voxelPos_16[1u];
+                let _e796 = tuning.gridWidth;
+                let _e801 = voxelPos_16[2u];
+                let _e803 = tuning.gridWidth;
+                let _e807 = tuning.gridHeight;
+                let _e814 = unnamed_2.cloudCells[bitcast<u32>(((_e792 + (_e794 * bitcast<i32>(_e796))) + ((_e801 * bitcast<i32>(_e803)) * bitcast<i32>(_e807))))];
+                c_2 = _e814;
+                let _e815 = c_2;
+                if ((_e815 & 3u) != 0u) {
                     hitType = 200u;
-                    let _e812 = c_2;
-                    hitRawVoxel = _e812;
+                    let _e818 = c_2;
+                    hitRawVoxel = _e818;
                     hit = true;
                     break;
                 }
             }
-            let _e813 = hitType;
-            if (_e813 == 7u) {
+            let _e819 = hitType;
+            if (_e819 == 7u) {
                 hitType = 0u;
             }
-            let _e815 = hitType;
-            if (_e815 != 0u) {
-                let _e817 = hitType;
-                if (_e817 == 6u) {
-                    let _e819 = rawVoxel_5;
-                    age_1 = ((_e819 >> bitcast<u32>(24i)) & 255u);
-                    let _e823 = age_1;
-                    targetAlpha = mix(1f, 0.3f, clamp((f32(_e823) / 100f), 0f, 1f));
-                    let _e828 = inUV_1;
-                    let _e830 = pc.time;
-                    dither = fract((sin(dot((_e828 + vec2((_e830 * 0.1f))), vec2<f32>(12.9898f, 78.233f))) * 43758.547f));
-                    let _e838 = dither;
-                    let _e839 = targetAlpha;
-                    if (_e838 > _e839) {
+            let _e821 = hitType;
+            if (_e821 != 0u) {
+                let _e823 = hitType;
+                if (_e823 == 6u) {
+                    let _e825 = rawVoxel_5;
+                    age_1 = ((_e825 >> bitcast<u32>(24i)) & 255u);
+                    let _e829 = age_1;
+                    targetAlpha = mix(1f, 0.3f, clamp((f32(_e829) / 100f), 0f, 1f));
+                    let _e834 = inUV_1;
+                    let _e836 = pc.time;
+                    dither = fract((sin(dot((_e834 + vec2((_e836 * 0.1f))), vec2<f32>(12.9898f, 78.233f))) * 43758.547f));
+                    let _e844 = dither;
+                    let _e845 = targetAlpha;
+                    if (_e844 > _e845) {
                         hitType = 0u;
                     } else {
                         hit = true;
-                        let _e841 = rawVoxel_5;
-                        hitRawVoxel = _e841;
+                        let _e847 = rawVoxel_5;
+                        hitRawVoxel = _e847;
                         break;
                     }
                 } else {
-                    let _e842 = hitType;
-                    param_87 = _e842;
-                    let _e843 = isLocustType_u0028_u1_u003b((&param_87));
-                    let _e844 = hitType;
-                    if (_e843 || (_e844 == 18u)) {
-                        let _e847 = hitType;
-                        kind_2 = select(0u, 1u, (_e847 == 18u));
-                        let _e850 = voxelPos_16;
-                        param_88 = _e850;
-                        let _e851 = rayOrigin_3;
-                        param_89 = _e851;
-                        let _e852 = rayDir_3;
-                        param_90 = _e852;
-                        let _e853 = kind_2;
-                        param_91 = _e853;
-                        let _e854 = hitType;
-                        param_92 = _e854;
-                        let _e855 = normal_4;
-                        param_93 = _e855;
-                        let _e856 = subMarch_u0028_vi3_u003b_vf3_u003b_vf3_u003b_u1_u003b_u1_u003b_vf3_u003b_f1_u003b_vf3_u003b_vf3_u003b((&param_88), (&param_89), (&param_90), (&param_91), (&param_92), (&param_93), (&param_94), (&param_95), (&param_96));
-                        let _e857 = param_94;
-                        subT = _e857;
-                        let _e858 = param_95;
-                        subNormal_1 = _e858;
-                        let _e859 = param_96;
-                        subCell_3 = _e859;
-                        if _e856 {
+                    let _e848 = hitType;
+                    param_87 = _e848;
+                    let _e849 = isLocustType_u0028_u1_u003b((&param_87));
+                    let _e850 = hitType;
+                    if (_e849 || (_e850 == 18u)) {
+                        let _e853 = hitType;
+                        kind_2 = select(0u, 1u, (_e853 == 18u));
+                        let _e856 = voxelPos_16;
+                        param_88 = _e856;
+                        let _e857 = rayOrigin_3;
+                        param_89 = _e857;
+                        let _e858 = rayDir_3;
+                        param_90 = _e858;
+                        let _e859 = kind_2;
+                        param_91 = _e859;
+                        let _e860 = hitType;
+                        param_92 = _e860;
+                        let _e861 = normal_4;
+                        param_93 = _e861;
+                        let _e862 = subMarch_u0028_vi3_u003b_vf3_u003b_vf3_u003b_u1_u003b_u1_u003b_vf3_u003b_f1_u003b_vf3_u003b_vf3_u003b((&param_88), (&param_89), (&param_90), (&param_91), (&param_92), (&param_93), (&param_94), (&param_95), (&param_96));
+                        let _e863 = param_94;
+                        subT = _e863;
+                        let _e864 = param_95;
+                        subNormal_1 = _e864;
+                        let _e865 = param_96;
+                        subCell_3 = _e865;
+                        if _e862 {
                             hit = true;
-                            let _e860 = rawVoxel_5;
-                            hitRawVoxel = _e860;
+                            let _e866 = rawVoxel_5;
+                            hitRawVoxel = _e866;
                             break;
                         }
                         hitType = 0u;
                     } else {
                         hit = true;
-                        let _e861 = rawVoxel_5;
-                        hitRawVoxel = _e861;
+                        let _e867 = rawVoxel_5;
+                        hitRawVoxel = _e867;
                         break;
                     }
                 }
             }
-            let _e863 = tMax_4[0u];
-            let _e865 = tMax_4[1u];
-            if (_e863 < _e865) {
-                let _e868 = tMax_4[0u];
-                let _e870 = tMax_4[2u];
-                if (_e868 < _e870) {
-                    let _e873 = stepDir_3[0u];
-                    let _e875 = voxelPos_16[0u];
-                    voxelPos_16[0u] = (_e875 + _e873);
-                    let _e879 = tDelta_3[0u];
-                    let _e881 = tMax_4[0u];
-                    tMax_4[0u] = (_e881 + _e879);
-                    let _e885 = stepDir_3[0u];
-                    normal_4 = vec3<f32>(f32(-(_e885)), 0f, 0f);
+            let _e869 = tMax_4[0u];
+            let _e871 = tMax_4[1u];
+            if (_e869 < _e871) {
+                let _e874 = tMax_4[0u];
+                let _e876 = tMax_4[2u];
+                if (_e874 < _e876) {
+                    let _e879 = stepDir_3[0u];
+                    let _e881 = voxelPos_16[0u];
+                    voxelPos_16[0u] = (_e881 + _e879);
+                    let _e885 = tDelta_3[0u];
+                    let _e887 = tMax_4[0u];
+                    tMax_4[0u] = (_e887 + _e885);
+                    let _e891 = stepDir_3[0u];
+                    normal_4 = vec3<f32>(f32(-(_e891)), 0f, 0f);
                 } else {
-                    let _e890 = stepDir_3[2u];
-                    let _e892 = voxelPos_16[2u];
-                    voxelPos_16[2u] = (_e892 + _e890);
-                    let _e896 = tDelta_3[2u];
-                    let _e898 = tMax_4[2u];
-                    tMax_4[2u] = (_e898 + _e896);
-                    let _e902 = stepDir_3[2u];
-                    normal_4 = vec3<f32>(0f, 0f, f32(-(_e902)));
+                    let _e896 = stepDir_3[2u];
+                    let _e898 = voxelPos_16[2u];
+                    voxelPos_16[2u] = (_e898 + _e896);
+                    let _e902 = tDelta_3[2u];
+                    let _e904 = tMax_4[2u];
+                    tMax_4[2u] = (_e904 + _e902);
+                    let _e908 = stepDir_3[2u];
+                    normal_4 = vec3<f32>(0f, 0f, f32(-(_e908)));
                 }
             } else {
-                let _e907 = tMax_4[1u];
-                let _e909 = tMax_4[2u];
-                if (_e907 < _e909) {
-                    let _e912 = stepDir_3[1u];
-                    let _e914 = voxelPos_16[1u];
-                    voxelPos_16[1u] = (_e914 + _e912);
-                    let _e918 = tDelta_3[1u];
-                    let _e920 = tMax_4[1u];
-                    tMax_4[1u] = (_e920 + _e918);
-                    let _e924 = stepDir_3[1u];
-                    normal_4 = vec3<f32>(0f, f32(-(_e924)), 0f);
+                let _e913 = tMax_4[1u];
+                let _e915 = tMax_4[2u];
+                if (_e913 < _e915) {
+                    let _e918 = stepDir_3[1u];
+                    let _e920 = voxelPos_16[1u];
+                    voxelPos_16[1u] = (_e920 + _e918);
+                    let _e924 = tDelta_3[1u];
+                    let _e926 = tMax_4[1u];
+                    tMax_4[1u] = (_e926 + _e924);
+                    let _e930 = stepDir_3[1u];
+                    normal_4 = vec3<f32>(0f, f32(-(_e930)), 0f);
                 } else {
-                    let _e929 = stepDir_3[2u];
-                    let _e931 = voxelPos_16[2u];
-                    voxelPos_16[2u] = (_e931 + _e929);
-                    let _e935 = tDelta_3[2u];
-                    let _e937 = tMax_4[2u];
-                    tMax_4[2u] = (_e937 + _e935);
-                    let _e941 = stepDir_3[2u];
-                    normal_4 = vec3<f32>(0f, 0f, f32(-(_e941)));
+                    let _e935 = stepDir_3[2u];
+                    let _e937 = voxelPos_16[2u];
+                    voxelPos_16[2u] = (_e937 + _e935);
+                    let _e941 = tDelta_3[2u];
+                    let _e943 = tMax_4[2u];
+                    tMax_4[2u] = (_e943 + _e941);
+                    let _e947 = stepDir_3[2u];
+                    normal_4 = vec3<f32>(0f, 0f, f32(-(_e947)));
                 }
             }
             continue;
@@ -2863,755 +2869,766 @@ fn main_1() {
             break;
         }
         continuing {
-            let _e945 = i_6;
-            i_6 = (_e945 + 1i);
+            let _e951 = i_6;
+            i_6 = (_e951 + 1i);
         }
     }
-    let _e947 = hit;
-    if _e947 {
-        let _e948 = normal_4;
-        if (length(_e948) < 0.1f) {
-            let _e951 = rayDir_3;
-            normal_4 = -(_e951);
+    let _e953 = hit;
+    if _e953 {
+        let _e954 = normal_4;
+        if (length(_e954) < 0.1f) {
+            let _e957 = rayDir_3;
+            normal_4 = -(_e957);
         }
-        let _e953 = normal_4;
-        ddaNormal_1 = _e953;
-        let _e954 = hitType;
-        if (_e954 == 2u) {
-            let _e956 = voxelPos_16;
-            param_97 = _e956;
-            let _e957 = getWaterNormal_u0028_vi3_u003b((&param_97));
-            param_98 = _e957;
-            let _e958 = voxelPos_16;
-            param_99 = _e958;
-            let _e959 = applyWaterWaves_u0028_vf3_u003b_vi3_u003b((&param_98), (&param_99));
-            normal_4 = _e959;
+        let _e959 = normal_4;
+        ddaNormal_1 = _e959;
+        let _e960 = hitType;
+        if (_e960 == 2u) {
+            let _e962 = voxelPos_16;
+            param_97 = _e962;
+            let _e963 = getWaterNormal_u0028_vi3_u003b((&param_97));
+            param_98 = _e963;
+            let _e964 = voxelPos_16;
+            param_99 = _e964;
+            let _e965 = applyWaterWaves_u0028_vf3_u003b_vi3_u003b((&param_98), (&param_99));
+            normal_4 = _e965;
         } else {
-            let _e960 = hitType;
-            param_100 = _e960;
-            let _e961 = isLocustType_u0028_u1_u003b((&param_100));
-            let _e962 = hitType;
-            if (_e961 || (_e962 == 18u)) {
-                let _e965 = subNormal_1;
-                normal_4 = _e965;
+            let _e966 = hitType;
+            param_100 = _e966;
+            let _e967 = isLocustType_u0028_u1_u003b((&param_100));
+            let _e968 = hitType;
+            if (_e967 || (_e968 == 18u)) {
+                let _e971 = subNormal_1;
+                normal_4 = _e971;
             } else {
-                let _e966 = voxelPos_16;
-                param_101 = _e966;
-                let _e967 = getSmoothNormal_u0028_vi3_u003b((&param_101));
-                normal_4 = _e967;
+                let _e972 = voxelPos_16;
+                param_101 = _e972;
+                let _e973 = getSmoothNormal_u0028_vi3_u003b((&param_101));
+                normal_4 = _e973;
             }
         }
         sunDir_2 = vec3<f32>(0.58191437f, 0.727393f, 0.3636965f);
         sunColor_1 = vec3<f32>(1f, 0.95f, 0.85f);
         ambientColor = vec3<f32>(0.15f, 0.2f, 0.3f);
-        let _e968 = normal_4;
-        let _e969 = sunDir_2;
-        diffuse_1 = max(dot(_e968, _e969), 0f);
-        let _e972 = voxelPos_16;
-        param_102 = _e972;
-        let _e973 = ddaNormal_1;
-        param_103 = _e973;
-        let _e974 = sunDir_2;
-        param_104 = _e974;
-        let _e975 = ceilingY_1;
-        param_105 = _e975;
-        let _e976 = calculateShadow_u0028_vi3_u003b_vf3_u003b_vf3_u003b_i1_u003b((&param_102), (&param_103), (&param_104), (&param_105));
-        shadow_1 = _e976;
-        let _e977 = ambientColor;
-        let _e978 = sunColor_1;
-        let _e979 = diffuse_1;
-        let _e981 = shadow_1;
-        baseLighting_9 = (_e977 + ((_e978 * _e979) * _e981));
-        let _e984 = baseLighting_9;
-        finalVoxelColor = (vec3<f32>(1f, 0f, 1f) * _e984);
-        let _e986 = hitType;
-        if (_e986 == 200u) {
+        let _e974 = normal_4;
+        let _e975 = sunDir_2;
+        diffuse_1 = max(dot(_e974, _e975), 0f);
+        let _e978 = voxelPos_16;
+        param_102 = _e978;
+        let _e979 = ddaNormal_1;
+        param_103 = _e979;
+        let _e980 = sunDir_2;
+        param_104 = _e980;
+        let _e981 = ceilingY_1;
+        param_105 = _e981;
+        let _e982 = calculateShadow_u0028_vi3_u003b_vf3_u003b_vf3_u003b_i1_u003b((&param_102), (&param_103), (&param_104), (&param_105));
+        shadow_1 = _e982;
+        let _e983 = ambientColor;
+        let _e984 = sunColor_1;
+        let _e985 = diffuse_1;
+        let _e987 = shadow_1;
+        baseLighting_9 = (_e983 + ((_e984 * _e985) * _e987));
+        let _e990 = baseLighting_9;
+        finalVoxelColor = (vec3<f32>(1f, 0f, 1f) * _e990);
+        let _e992 = hitType;
+        if (_e992 == 200u) {
             calm = vec3<f32>(0.35f, 0.65f, 1f);
             rain = vec3<f32>(1f, 0.55f, 0.25f);
-            let _e988 = calm;
-            let _e989 = rain;
-            let _e990 = hitRawVoxel;
-            let _e996 = baseLighting_9;
-            finalVoxelColor = (mix(_e988, _e989, vec3(select(0f, 1f, ((_e990 & 3u) == 2u)))) * _e996);
+            let _e994 = calm;
+            let _e995 = rain;
+            let _e996 = hitRawVoxel;
+            let _e1002 = baseLighting_9;
+            finalVoxelColor = (mix(_e994, _e995, vec3(select(0f, 1f, ((_e996 & 3u) == 2u)))) * _e1002);
         }
-        let _e998 = hitType;
-        switch bitcast<i32>(_e998) {
+        let _e1004 = hitType;
+        switch bitcast<i32>(_e1004) {
             case 1: {
-                let _e1000 = hitRawVoxel;
-                param_106 = _e1000;
-                let _e1001 = baseLighting_9;
-                param_107 = _e1001;
-                let _e1002 = renderSand_u0028_u1_u003b_vf3_u003b((&param_106), (&param_107));
-                finalVoxelColor = _e1002;
+                let _e1006 = hitRawVoxel;
+                param_106 = _e1006;
+                let _e1007 = baseLighting_9;
+                param_107 = _e1007;
+                let _e1008 = renderSand_u0028_u1_u003b_vf3_u003b((&param_106), (&param_107));
+                finalVoxelColor = _e1008;
                 break;
             }
             case 2: {
-                let _e1003 = voxelPos_16;
-                param_108 = _e1003;
-                let _e1004 = normal_4;
-                param_109 = _e1004;
-                let _e1005 = rayOrigin_3;
-                param_110 = _e1005;
-                let _e1006 = sunDir_2;
-                param_111 = _e1006;
-                let _e1007 = sunColor_1;
-                param_112 = _e1007;
-                let _e1008 = shadow_1;
-                param_113 = _e1008;
-                let _e1009 = baseLighting_9;
-                param_114 = _e1009;
-                let _e1010 = renderWater_u0028_vi3_u003b_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b_f1_u003b_vf3_u003b((&param_108), (&param_109), (&param_110), (&param_111), (&param_112), (&param_113), (&param_114));
-                finalVoxelColor = _e1010;
+                let _e1009 = voxelPos_16;
+                param_108 = _e1009;
+                let _e1010 = normal_4;
+                param_109 = _e1010;
+                let _e1011 = rayOrigin_3;
+                param_110 = _e1011;
+                let _e1012 = sunDir_2;
+                param_111 = _e1012;
+                let _e1013 = sunColor_1;
+                param_112 = _e1013;
+                let _e1014 = shadow_1;
+                param_113 = _e1014;
+                let _e1015 = baseLighting_9;
+                param_114 = _e1015;
+                let _e1016 = renderWater_u0028_vi3_u003b_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b_f1_u003b_vf3_u003b((&param_108), (&param_109), (&param_110), (&param_111), (&param_112), (&param_113), (&param_114));
+                finalVoxelColor = _e1016;
                 break;
             }
             case 3: {
-                let _e1011 = voxelPos_16;
-                param_115 = _e1011;
-                let _e1012 = baseLighting_9;
-                param_116 = _e1012;
-                let _e1013 = renderStone_u0028_vi3_u003b_vf3_u003b((&param_115), (&param_116));
-                finalVoxelColor = _e1013;
+                let _e1017 = voxelPos_16;
+                param_115 = _e1017;
+                let _e1018 = baseLighting_9;
+                param_116 = _e1018;
+                let _e1019 = renderStone_u0028_vi3_u003b_vf3_u003b((&param_115), (&param_116));
+                finalVoxelColor = _e1019;
                 break;
             }
             case 4: {
-                let _e1014 = hitRawVoxel;
-                param_117 = _e1014;
-                let _e1015 = voxelPos_16;
-                param_118 = _e1015;
-                let _e1016 = ddaNormal_1;
-                param_119 = _e1016;
-                let _e1017 = baseLighting_9;
-                param_120 = _e1017;
-                let _e1018 = renderDirt_u0028_u1_u003b_vi3_u003b_vf3_u003b_vf3_u003b((&param_117), (&param_118), (&param_119), (&param_120));
-                finalVoxelColor = _e1018;
-                break;
-            }
-            case 5: {
-                let _e1019 = hitRawVoxel;
-                param_121 = _e1019;
-                let _e1020 = voxelPos_16;
-                param_122 = _e1020;
-                let _e1021 = renderFire_u0028_u1_u003b_vi3_u003b((&param_121), (&param_122));
-                finalVoxelColor = _e1021;
-                break;
-            }
-            case 6: {
-                let _e1022 = voxelPos_16;
-                param_123 = _e1022;
+                let _e1020 = hitRawVoxel;
+                param_117 = _e1020;
+                let _e1021 = voxelPos_16;
+                param_118 = _e1021;
+                let _e1022 = ddaNormal_1;
+                param_119 = _e1022;
                 let _e1023 = baseLighting_9;
-                param_124 = _e1023;
-                let _e1024 = renderSteam_u0028_vi3_u003b_vf3_u003b((&param_123), (&param_124));
+                param_120 = _e1023;
+                let _e1024 = renderDirt_u0028_u1_u003b_vi3_u003b_vf3_u003b_vf3_u003b((&param_117), (&param_118), (&param_119), (&param_120));
                 finalVoxelColor = _e1024;
                 break;
             }
-            case 9, 10, 11, 8: {
+            case 5: {
                 let _e1025 = hitRawVoxel;
-                param_125 = _e1025;
+                param_121 = _e1025;
                 let _e1026 = voxelPos_16;
-                param_126 = _e1026;
-                let _e1027 = renderLava_u0028_u1_u003b_vi3_u003b((&param_125), (&param_126));
+                param_122 = _e1026;
+                let _e1027 = renderFire_u0028_u1_u003b_vi3_u003b((&param_121), (&param_122));
                 finalVoxelColor = _e1027;
                 break;
             }
-            case 12: {
+            case 6: {
                 let _e1028 = voxelPos_16;
-                param_127 = _e1028;
+                param_123 = _e1028;
                 let _e1029 = baseLighting_9;
-                param_128 = _e1029;
-                let _e1030 = renderDarkStone_u0028_vi3_u003b_vf3_u003b((&param_127), (&param_128));
+                param_124 = _e1029;
+                let _e1030 = renderSteam_u0028_vi3_u003b_vf3_u003b((&param_123), (&param_124));
                 finalVoxelColor = _e1030;
                 break;
             }
+            case 9, 10, 11, 8: {
+                let _e1031 = hitRawVoxel;
+                param_125 = _e1031;
+                let _e1032 = voxelPos_16;
+                param_126 = _e1032;
+                let _e1033 = renderLava_u0028_u1_u003b_vi3_u003b((&param_125), (&param_126));
+                finalVoxelColor = _e1033;
+                break;
+            }
+            case 12: {
+                let _e1034 = voxelPos_16;
+                param_127 = _e1034;
+                let _e1035 = baseLighting_9;
+                param_128 = _e1035;
+                let _e1036 = renderDarkStone_u0028_vi3_u003b_vf3_u003b((&param_127), (&param_128));
+                finalVoxelColor = _e1036;
+                break;
+            }
             case 14, 15, 16, 17, 13: {
-                let _e1031 = voxelPos_16;
-                param_129 = _e1031;
-                let _e1032 = subCell_3;
-                param_130 = _e1032;
-                let _e1033 = baseLighting_9;
-                param_131 = _e1033;
-                let _e1034 = renderLocust_u0028_vi3_u003b_vf3_u003b_vf3_u003b((&param_129), (&param_130), (&param_131));
-                finalVoxelColor = _e1034;
+                let _e1037 = voxelPos_16;
+                param_129 = _e1037;
+                let _e1038 = subCell_3;
+                param_130 = _e1038;
+                let _e1039 = baseLighting_9;
+                param_131 = _e1039;
+                let _e1040 = renderLocust_u0028_vi3_u003b_vf3_u003b_vf3_u003b((&param_129), (&param_130), (&param_131));
+                finalVoxelColor = _e1040;
                 break;
             }
             case 18: {
-                let _e1035 = voxelPos_16;
-                param_132 = _e1035;
-                let _e1036 = subCell_3;
-                param_133 = _e1036;
-                let _e1037 = baseLighting_9;
-                param_134 = _e1037;
-                let _e1038 = renderTrunk_u0028_vi3_u003b_vf3_u003b_vf3_u003b((&param_132), (&param_133), (&param_134));
-                finalVoxelColor = _e1038;
+                let _e1041 = voxelPos_16;
+                param_132 = _e1041;
+                let _e1042 = subCell_3;
+                param_133 = _e1042;
+                let _e1043 = baseLighting_9;
+                param_134 = _e1043;
+                let _e1044 = renderTrunk_u0028_vi3_u003b_vf3_u003b_vf3_u003b((&param_132), (&param_133), (&param_134));
+                finalVoxelColor = _e1044;
                 break;
             }
             case 19: {
-                let _e1039 = hitRawVoxel;
-                param_135 = _e1039;
-                let _e1040 = voxelPos_16;
-                param_136 = _e1040;
-                let _e1041 = baseLighting_9;
-                param_137 = _e1041;
-                let _e1042 = renderLeaf_u0028_u1_u003b_vi3_u003b_vf3_u003b((&param_135), (&param_136), (&param_137));
-                finalVoxelColor = _e1042;
+                let _e1045 = hitRawVoxel;
+                param_135 = _e1045;
+                let _e1046 = voxelPos_16;
+                param_136 = _e1046;
+                let _e1047 = baseLighting_9;
+                param_137 = _e1047;
+                let _e1048 = renderLeaf_u0028_u1_u003b_vi3_u003b_vf3_u003b((&param_135), (&param_136), (&param_137));
+                finalVoxelColor = _e1048;
                 break;
             }
             default: {
                 break;
             }
         }
-        let _e1043 = finalVoxelColor;
-        param_138 = _e1043;
-        let _e1044 = voxelPos_16;
-        param_139 = _e1044;
-        let _e1045 = accretionGlow_u0028_vf3_u003b_vi3_u003b((&param_138), (&param_139));
-        finalVoxelColor = _e1045;
-        let _e1046 = hitType;
-        param_140 = _e1046;
-        let _e1047 = isLocustType_u0028_u1_u003b((&param_140));
-        let _e1048 = hitType;
-        if (_e1047 || (_e1048 == 18u)) {
-            let _e1051 = subT;
-            local_24 = _e1051;
+        let _e1049 = finalVoxelColor;
+        param_138 = _e1049;
+        let _e1050 = voxelPos_16;
+        param_139 = _e1050;
+        let _e1051 = accretionGlow_u0028_vf3_u003b_vi3_u003b((&param_138), (&param_139));
+        finalVoxelColor = _e1051;
+        let _e1052 = hitType;
+        param_140 = _e1052;
+        let _e1053 = isLocustType_u0028_u1_u003b((&param_140));
+        let _e1054 = hitType;
+        if (_e1053 || (_e1054 == 18u)) {
+            let _e1057 = subT;
+            local_24 = _e1057;
         } else {
-            let _e1052 = voxelPos_16;
-            let _e1055 = rayOrigin_3;
-            local_24 = length(((vec3<f32>(_e1052) + vec3<f32>(0.5f, 0.5f, 0.5f)) - _e1055));
+            let _e1058 = voxelPos_16;
+            let _e1061 = rayOrigin_3;
+            local_24 = length(((vec3<f32>(_e1058) + vec3<f32>(0.5f, 0.5f, 0.5f)) - _e1061));
         }
-        let _e1058 = local_24;
-        distanceTraveled = _e1058;
-        let _e1059 = distanceTraveled;
-        let _e1060 = MAX_VISIBILITY;
-        let _e1064 = finalVoxelColor;
-        finalVoxelColor = (_e1064 * mix(1f, 0f, clamp((_e1059 / _e1060), 0f, 1f)));
-        let _e1066 = distanceTraveled;
-        finalDist = _e1066;
-        let _e1067 = finalVoxelColor;
-        finalColor = vec4<f32>(_e1067.x, _e1067.y, _e1067.z, 1f);
+        let _e1064 = local_24;
+        distanceTraveled = _e1064;
+        let _e1065 = distanceTraveled;
+        let _e1066 = MAX_VISIBILITY;
+        let _e1070 = finalVoxelColor;
+        finalVoxelColor = (_e1070 * mix(1f, 0f, clamp((_e1065 / _e1066), 0f, 1f)));
+        let _e1072 = distanceTraveled;
+        finalDist = _e1072;
+        let _e1073 = finalVoxelColor;
+        finalColor = vec4<f32>(_e1073.x, _e1073.y, _e1073.z, 1f);
     } else {
-        let _e1072 = hitBackBox;
-        if _e1072 {
-            let _e1074 = aabbHit[1u];
-            finalDist = _e1074;
+        let _e1078 = hitBackBox;
+        if _e1078 {
+            let _e1080 = aabbHit[1u];
+            finalDist = _e1080;
             finalColor = vec4<f32>(1f, 0.2f, 0.2f, 1f);
         }
     }
-    let _e1076 = unnamed.blackHoleCount;
-    if (_e1076 > 0u) {
+    let _e1082 = unnamed.blackHoleCount;
+    if (_e1082 > 0u) {
         seenHoles = 0u;
         i_7 = 0i;
         loop {
-            let _e1078 = i_7;
-            let _e1079 = (_e1078 < 8i);
-            phi_3839_ = _e1079;
-            if _e1079 {
-                let _e1080 = seenHoles;
-                let _e1082 = unnamed.blackHoleCount;
-                phi_3839_ = (_e1080 < _e1082);
-            }
-            let _e1085 = phi_3839_;
+            let _e1084 = i_7;
+            let _e1085 = (_e1084 < 8i);
+            phi_3840_ = _e1085;
             if _e1085 {
-                let _e1086 = i_7;
-                let _e1089 = unnamed.blackHoles[_e1086];
-                code_2 = _e1089;
-                let _e1090 = code_2;
-                if (_e1090 == 0u) {
+                let _e1086 = seenHoles;
+                let _e1088 = unnamed.blackHoleCount;
+                phi_3840_ = (_e1086 < _e1088);
+            }
+            let _e1091 = phi_3840_;
+            if _e1091 {
+                let _e1092 = i_7;
+                let _e1095 = unnamed.blackHoles[_e1092];
+                code_2 = _e1095;
+                let _e1096 = code_2;
+                if (_e1096 == 0u) {
                     continue;
                 }
-                let _e1092 = seenHoles;
-                seenHoles = (_e1092 + bitcast<u32>(1i));
-                let _e1095 = code_2;
-                if ((_e1095 & 1073741824u) != 0u) {
-                    let _e1099 = tuning.purgeLevel;
-                    let _e1101 = i_7;
-                    let _e1104 = unnamed.blackHoleMass[_e1101];
-                    let _e1107 = tuning.purgeMass;
-                    local_25 = u32((f32(_e1099) * clamp((f32(_e1104) / f32(max(_e1107, 1u))), 0f, 1f)));
+                let _e1098 = seenHoles;
+                seenHoles = (_e1098 + bitcast<u32>(1i));
+                let _e1101 = code_2;
+                if ((_e1101 & 1073741824u) != 0u) {
+                    let _e1105 = tuning.purgeLevel;
+                    let _e1107 = i_7;
+                    let _e1110 = unnamed.blackHoleMass[_e1107];
+                    let _e1113 = tuning.purgeMass;
+                    local_25 = u32((f32(_e1105) * clamp((f32(_e1110) / f32(max(_e1113, 1u))), 0f, 1f)));
                 } else {
-                    let _e1114 = i_7;
-                    let _e1117 = unnamed.blackHoleMass[_e1114];
-                    param_141 = _e1117;
-                    let _e1118 = bhLevel_u0028_u1_u003b((&param_141));
-                    local_25 = _e1118;
+                    let _e1120 = i_7;
+                    let _e1123 = unnamed.blackHoleMass[_e1120];
+                    param_141 = _e1123;
+                    let _e1124 = bhLevel_u0028_u1_u003b((&param_141));
+                    local_25 = _e1124;
                 }
-                let _e1119 = local_25;
-                bodyLevel = _e1119;
-                let _e1120 = bodyLevel;
-                param_142 = _e1120;
-                let _e1121 = bhBodyRadius_u0028_u1_u003b((&param_142));
-                bodyRadius = _e1121;
-                let _e1122 = code_2;
-                param_143 = _e1122;
-                let _e1123 = bhDecode_u0028_u1_u003b((&param_143));
-                center = (vec3<f32>(_e1123) + vec3<f32>(0.5f, 0.5f, 0.5f));
-                let _e1126 = rayOrigin_3;
-                let _e1127 = center;
-                oc = (_e1126 - _e1127);
-                let _e1129 = oc;
-                let _e1130 = rayDir_3;
-                b_3 = dot(_e1129, _e1130);
-                let _e1132 = oc;
-                let _e1133 = oc;
-                let _e1135 = bodyRadius;
-                let _e1136 = bodyRadius;
-                c_3 = (dot(_e1132, _e1133) - (_e1135 * _e1136));
-                let _e1139 = b_3;
-                let _e1140 = b_3;
-                let _e1142 = c_3;
-                disc = ((_e1139 * _e1140) - _e1142);
-                let _e1144 = disc;
-                if (_e1144 <= 0f) {
+                let _e1125 = local_25;
+                bodyLevel = _e1125;
+                let _e1126 = bodyLevel;
+                param_142 = _e1126;
+                let _e1127 = bhBodyRadius_u0028_u1_u003b((&param_142));
+                bodyRadius = _e1127;
+                let _e1128 = code_2;
+                param_143 = _e1128;
+                let _e1129 = bhDecode_u0028_u1_u003b((&param_143));
+                center = (vec3<f32>(_e1129) + vec3<f32>(0.5f, 0.5f, 0.5f));
+                let _e1132 = rayOrigin_3;
+                let _e1133 = center;
+                oc = (_e1132 - _e1133);
+                let _e1135 = oc;
+                let _e1136 = rayDir_3;
+                b_3 = dot(_e1135, _e1136);
+                let _e1138 = oc;
+                let _e1139 = oc;
+                let _e1141 = bodyRadius;
+                let _e1142 = bodyRadius;
+                c_3 = (dot(_e1138, _e1139) - (_e1141 * _e1142));
+                let _e1145 = b_3;
+                let _e1146 = b_3;
+                let _e1148 = c_3;
+                disc = ((_e1145 * _e1146) - _e1148);
+                let _e1150 = disc;
+                if (_e1150 <= 0f) {
                     continue;
                 }
-                let _e1146 = disc;
-                sq = sqrt(_e1146);
-                let _e1148 = b_3;
-                let _e1150 = sq;
-                tNear_1 = (-(_e1148) - _e1150);
-                let _e1152 = b_3;
-                let _e1154 = sq;
-                tFar_1 = (-(_e1152) + _e1154);
-                let _e1156 = tFar_1;
-                if (_e1156 <= 0f) {
+                let _e1152 = disc;
+                sq = sqrt(_e1152);
+                let _e1154 = b_3;
+                let _e1156 = sq;
+                tNear_1 = (-(_e1154) - _e1156);
+                let _e1158 = b_3;
+                let _e1160 = sq;
+                tFar_1 = (-(_e1158) + _e1160);
+                let _e1162 = tFar_1;
+                if (_e1162 <= 0f) {
                     continue;
                 }
-                let _e1158 = tNear_1;
-                bodyDist = max(0f, _e1158);
-                let _e1160 = bodyDist;
-                let _e1161 = finalDist;
-                if (_e1160 < _e1161) {
-                    let _e1163 = rayOrigin_3;
-                    let _e1164 = rayDir_3;
-                    let _e1165 = bodyDist;
-                    let _e1168 = center;
-                    surfaceNormal = normalize(((_e1163 + (_e1164 * _e1165)) - _e1168));
-                    let _e1171 = surfaceNormal;
-                    param_144 = _e1171;
-                    let _e1172 = rayDir_3;
-                    param_145 = _e1172;
-                    let _e1173 = renderBlackHole_u0028_vf3_u003b_vf3_u003b((&param_144), (&param_145));
-                    bodyColor = _e1173;
-                    let _e1174 = bodyDist;
-                    let _e1175 = MAX_VISIBILITY;
-                    let _e1179 = bodyColor;
-                    bodyColor = (_e1179 * mix(1f, 0f, clamp((_e1174 / _e1175), 0f, 1f)));
-                    let _e1181 = bodyColor;
-                    finalColor = vec4<f32>(_e1181.x, _e1181.y, _e1181.z, 1f);
-                    let _e1186 = bodyDist;
-                    finalDist = _e1186;
+                let _e1164 = tNear_1;
+                bodyDist = max(0f, _e1164);
+                let _e1166 = bodyDist;
+                let _e1167 = finalDist;
+                if (_e1166 < _e1167) {
+                    let _e1169 = rayOrigin_3;
+                    let _e1170 = rayDir_3;
+                    let _e1171 = bodyDist;
+                    let _e1174 = center;
+                    surfaceNormal = normalize(((_e1169 + (_e1170 * _e1171)) - _e1174));
+                    let _e1177 = surfaceNormal;
+                    param_144 = _e1177;
+                    let _e1178 = rayDir_3;
+                    param_145 = _e1178;
+                    let _e1179 = renderBlackHole_u0028_vf3_u003b_vf3_u003b((&param_144), (&param_145));
+                    bodyColor = _e1179;
+                    let _e1180 = bodyDist;
+                    let _e1181 = MAX_VISIBILITY;
+                    let _e1185 = bodyColor;
+                    bodyColor = (_e1185 * mix(1f, 0f, clamp((_e1180 / _e1181), 0f, 1f)));
+                    let _e1187 = bodyColor;
+                    finalColor = vec4<f32>(_e1187.x, _e1187.y, _e1187.z, 1f);
+                    let _e1192 = bodyDist;
+                    finalDist = _e1192;
                 }
                 continue;
             } else {
                 break;
             }
             continuing {
-                let _e1187 = i_7;
-                i_7 = (_e1187 + 1i);
+                let _e1193 = i_7;
+                i_7 = (_e1193 + 1i);
             }
         }
     }
-    let _e1190 = unnamed.cloudChargeBits;
-    charge = clamp(bitcast<f32>(_e1190), 0f, 1f);
-    let _e1193 = charge;
-    cloudGreyness = _e1193;
-    let _e1195 = unnamed.rainPhase;
-    if (_e1195 == 1u) {
-        let _e1198 = unnamed.rainPhaseTimeBits;
-        crossedTime = bitcast<f32>(_e1198);
-        let _e1200 = charge;
-        let _e1202 = pc.time;
-        let _e1203 = crossedTime;
-        let _e1206 = tuning.rainDarkenDelay;
-        cloudGreyness = max(_e1200, clamp(((_e1202 - _e1203) / _e1206), 0f, 1f));
+    let _e1196 = unnamed.cloudChargeBits;
+    charge = clamp(bitcast<f32>(_e1196), 0f, 1f);
+    let _e1199 = charge;
+    cloudGreyness = _e1199;
+    let _e1201 = unnamed.rainPhase;
+    if (_e1201 == 1u) {
+        let _e1204 = unnamed.rainPhaseTimeBits;
+        crossedTime = bitcast<f32>(_e1204);
+        let _e1206 = charge;
+        let _e1208 = pc.time;
+        let _e1209 = crossedTime;
+        let _e1212 = tuning.rainDarkenDelay;
+        cloudGreyness = max(_e1206, clamp(((_e1208 - _e1209) / _e1212), 0f, 1f));
     } else {
-        let _e1211 = unnamed.rainPhase;
-        if (_e1211 == 2u) {
+        let _e1217 = unnamed.rainPhase;
+        if (_e1217 == 2u) {
             cloudGreyness = 1f;
         }
     }
-    let _e1214 = tuning.cloudMaxAlpha;
-    if (_e1214 > 0.002f) {
-        let _e1217 = tuning.gridHeight;
-        let _e1221 = tuning.cloudColumnFullCount;
-        let _e1224 = tuning.cloudThicknessPerBlock;
-        cloudCeiling = (f32(bitcast<i32>(_e1217)) + (max(_e1221, 1f) * max(_e1224, 0.01f)));
-        let _e1228 = worldExtent_u0028_();
-        let _e1230 = cloudCeiling;
-        let _e1231 = worldExtent_u0028_();
-        let _e1234 = rayOrigin_3;
-        param_146 = _e1234;
-        let _e1235 = rayDir_3;
-        param_147 = _e1235;
-        param_148 = vec3<f32>(0f, 0f, 0f);
-        param_149 = vec3<f32>(_e1228.x, _e1230, _e1231.z);
-        let _e1236 = intersectAABB_u0028_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b((&param_146), (&param_147), (&param_148), (&param_149));
-        cloudClip = _e1236;
+    let _e1220 = tuning.cloudMaxAlpha;
+    if (_e1220 > 0.002f) {
+        let _e1223 = unnamed.cloudMinY;
+        bandLo = f32(_e1223);
+        let _e1226 = unnamed.cloudMaxY;
+        let _e1229 = tuning.cloudColumnFullCount;
+        let _e1232 = tuning.cloudThicknessPerBlock;
+        bandHi = (f32(_e1226) + (max(_e1229, 1f) * max(_e1232, 0.01f)));
+        let _e1237 = unnamed.cloudMinY;
+        let _e1239 = unnamed.cloudMaxY;
+        if (_e1237 > _e1239) {
+            local_26 = vec2<f32>(1f, -1f);
+        } else {
+            let _e1241 = bandLo;
+            let _e1243 = worldExtent_u0028_();
+            let _e1245 = bandHi;
+            let _e1246 = worldExtent_u0028_();
+            let _e1249 = rayOrigin_3;
+            param_146 = _e1249;
+            let _e1250 = rayDir_3;
+            param_147 = _e1250;
+            param_148 = vec3<f32>(0f, _e1241, 0f);
+            param_149 = vec3<f32>(_e1243.x, _e1245, _e1246.z);
+            let _e1251 = intersectAABB_u0028_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b((&param_146), (&param_147), (&param_148), (&param_149));
+            local_26 = _e1251;
+        }
+        let _e1252 = local_26;
+        cloudClip = _e1252;
         cloudSunDir = vec3<f32>(0.58191437f, 0.727393f, 0.3636965f);
         bestT = 1000000f;
         bestColor = vec3<f32>(0f, 0f, 0f);
         bestAlpha = 0f;
         foundCloud = false;
-        let _e1238 = cloudClip[0u];
-        nearT = max(_e1238, 0f);
-        let _e1241 = cloudClip[1u];
-        let _e1242 = finalDist;
-        farT = min(_e1241, _e1242);
-        let _e1244 = nearT;
-        let _e1245 = farT;
-        if (_e1244 < _e1245) {
-            let _e1247 = rayOrigin_3;
-            param_150 = _e1247;
-            let _e1248 = rayDir_3;
-            param_151 = _e1248;
-            let _e1249 = nearT;
-            param_152 = _e1249;
-            let _e1250 = farT;
-            param_153 = _e1250;
-            let _e1251 = cloudSunDir;
-            param_154 = _e1251;
-            let _e1252 = cloudGreyness;
-            param_155 = _e1252;
-            let _e1253 = marchBlockyCloud_u0028_vf3_u003b_vf3_u003b_f1_u003b_f1_u003b_vf3_u003b_f1_u003b_f1_u003b_vf3_u003b_f1_u003b((&param_150), (&param_151), (&param_152), (&param_153), (&param_154), (&param_155), (&param_156), (&param_157), (&param_158));
-            let _e1254 = param_156;
-            cloudTHit = _e1254;
-            let _e1255 = param_157;
-            cloudColor = _e1255;
-            let _e1256 = param_158;
-            cloudDensity = _e1256;
-            if _e1253 {
-                let _e1257 = cloudTHit;
-                if (_e1257 > 0f) {
-                    let _e1259 = cloudTHit;
-                    bestT = _e1259;
-                    let _e1260 = cloudColor;
-                    bestColor = _e1260;
-                    let _e1262 = tuning.cloudMinAlpha;
-                    let _e1264 = tuning.cloudMaxAlpha;
-                    let _e1265 = cloudDensity;
-                    bestAlpha = clamp(mix(_e1262, _e1264, _e1265), 0f, 0.95f);
+        let _e1254 = cloudClip[0u];
+        nearT = max(_e1254, 0f);
+        let _e1257 = cloudClip[1u];
+        let _e1258 = finalDist;
+        farT = min(_e1257, _e1258);
+        let _e1260 = nearT;
+        let _e1261 = farT;
+        if (_e1260 < _e1261) {
+            let _e1263 = rayOrigin_3;
+            param_150 = _e1263;
+            let _e1264 = rayDir_3;
+            param_151 = _e1264;
+            let _e1265 = nearT;
+            param_152 = _e1265;
+            let _e1266 = farT;
+            param_153 = _e1266;
+            let _e1267 = cloudSunDir;
+            param_154 = _e1267;
+            let _e1268 = cloudGreyness;
+            param_155 = _e1268;
+            let _e1269 = marchBlockyCloud_u0028_vf3_u003b_vf3_u003b_f1_u003b_f1_u003b_vf3_u003b_f1_u003b_f1_u003b_vf3_u003b_f1_u003b((&param_150), (&param_151), (&param_152), (&param_153), (&param_154), (&param_155), (&param_156), (&param_157), (&param_158));
+            let _e1270 = param_156;
+            cloudTHit = _e1270;
+            let _e1271 = param_157;
+            cloudColor = _e1271;
+            let _e1272 = param_158;
+            cloudDensity = _e1272;
+            if _e1269 {
+                let _e1273 = cloudTHit;
+                if (_e1273 > 0f) {
+                    let _e1275 = cloudTHit;
+                    bestT = _e1275;
+                    let _e1276 = cloudColor;
+                    bestColor = _e1276;
+                    let _e1278 = tuning.cloudMinAlpha;
+                    let _e1280 = tuning.cloudMaxAlpha;
+                    let _e1281 = cloudDensity;
+                    bestAlpha = clamp(mix(_e1278, _e1280, _e1281), 0f, 0.95f);
                     foundCloud = true;
                 }
             }
         }
-        let _e1268 = foundCloud;
-        let _e1269 = bestT;
-        let _e1270 = finalDist;
-        if (_e1268 && (_e1269 < _e1270)) {
-            let _e1273 = finalColor;
-            let _e1275 = bestColor;
-            let _e1276 = bestAlpha;
-            let _e1278 = mix(_e1273.xyz, _e1275, vec3(_e1276));
-            finalColor[0u] = _e1278.x;
-            finalColor[1u] = _e1278.y;
-            finalColor[2u] = _e1278.z;
+        let _e1284 = foundCloud;
+        let _e1285 = bestT;
+        let _e1286 = finalDist;
+        if (_e1284 && (_e1285 < _e1286)) {
+            let _e1289 = finalColor;
+            let _e1291 = bestColor;
+            let _e1292 = bestAlpha;
+            let _e1294 = mix(_e1289.xyz, _e1291, vec3(_e1292));
+            finalColor[0u] = _e1294.x;
+            finalColor[1u] = _e1294.y;
+            finalColor[2u] = _e1294.z;
         }
     }
-    let _e1286 = pc.spawnX;
-    let _e1287 = (_e1286 >= 0i);
-    phi_4127_ = _e1287;
-    if _e1287 {
-        let _e1289 = pc.spawnX;
-        let _e1291 = tuning.gridWidth;
-        phi_4127_ = (_e1289 < bitcast<i32>(_e1291));
+    let _e1302 = pc.spawnX;
+    let _e1303 = (_e1302 >= 0i);
+    phi_4147_ = _e1303;
+    if _e1303 {
+        let _e1305 = pc.spawnX;
+        let _e1307 = tuning.gridWidth;
+        phi_4147_ = (_e1305 < bitcast<i32>(_e1307));
     }
-    let _e1295 = phi_4127_;
-    phi_4134_ = _e1295;
-    if _e1295 {
-        let _e1297 = pc.spawnY;
-        phi_4134_ = (_e1297 >= 0i);
+    let _e1311 = phi_4147_;
+    phi_4154_ = _e1311;
+    if _e1311 {
+        let _e1313 = pc.spawnY;
+        phi_4154_ = (_e1313 >= 0i);
     }
-    let _e1300 = phi_4134_;
-    phi_4143_ = _e1300;
-    if _e1300 {
-        let _e1302 = pc.spawnY;
-        let _e1304 = tuning.gridHeight;
-        phi_4143_ = (_e1302 < bitcast<i32>(_e1304));
+    let _e1316 = phi_4154_;
+    phi_4163_ = _e1316;
+    if _e1316 {
+        let _e1318 = pc.spawnY;
+        let _e1320 = tuning.gridHeight;
+        phi_4163_ = (_e1318 < bitcast<i32>(_e1320));
     }
-    let _e1308 = phi_4143_;
-    phi_4149_ = _e1308;
-    if _e1308 {
-        let _e1310 = pc.spawnZ;
-        phi_4149_ = (_e1310 >= 0i);
+    let _e1324 = phi_4163_;
+    phi_4169_ = _e1324;
+    if _e1324 {
+        let _e1326 = pc.spawnZ;
+        phi_4169_ = (_e1326 >= 0i);
     }
-    let _e1313 = phi_4149_;
-    phi_4158_ = _e1313;
-    if _e1313 {
-        let _e1315 = pc.spawnZ;
-        let _e1317 = tuning.gridDepth;
-        phi_4158_ = (_e1315 < bitcast<i32>(_e1317));
+    let _e1329 = phi_4169_;
+    phi_4178_ = _e1329;
+    if _e1329 {
+        let _e1331 = pc.spawnZ;
+        let _e1333 = tuning.gridDepth;
+        phi_4178_ = (_e1331 < bitcast<i32>(_e1333));
     }
-    let _e1321 = phi_4158_;
-    if _e1321 {
-        let _e1323 = pc.spawnSize;
-        halfDistMin = (_e1323 / 2i);
-        let _e1326 = pc.spawnSize;
-        halfDistMax = ((_e1326 - 1i) / 2i);
-        let _e1330 = pc.spawnX;
-        let _e1331 = halfDistMin;
-        let _e1335 = pc.spawnY;
-        let _e1336 = halfDistMin;
-        let _e1340 = pc.spawnZ;
-        let _e1341 = halfDistMin;
-        boxMin_2 = vec3<f32>(f32((_e1330 - _e1331)), f32((_e1335 - _e1336)), f32((_e1340 - _e1341)));
+    let _e1337 = phi_4178_;
+    if _e1337 {
+        let _e1339 = pc.spawnSize;
+        halfDistMin = (_e1339 / 2i);
+        let _e1342 = pc.spawnSize;
+        halfDistMax = ((_e1342 - 1i) / 2i);
         let _e1346 = pc.spawnX;
-        let _e1347 = halfDistMax;
-        let _e1352 = pc.spawnY;
-        let _e1353 = halfDistMax;
-        let _e1358 = pc.spawnZ;
-        let _e1359 = halfDistMax;
-        boxMax_1 = vec3<f32>(f32(((_e1346 + _e1347) + 1i)), f32(((_e1352 + _e1353) + 1i)), f32(((_e1358 + _e1359) + 1i)));
-        let _e1365 = pc.spawnType;
+        let _e1347 = halfDistMin;
+        let _e1351 = pc.spawnY;
+        let _e1352 = halfDistMin;
+        let _e1356 = pc.spawnZ;
+        let _e1357 = halfDistMin;
+        boxMin_2 = vec3<f32>(f32((_e1346 - _e1347)), f32((_e1351 - _e1352)), f32((_e1356 - _e1357)));
+        let _e1362 = pc.spawnX;
+        let _e1363 = halfDistMax;
+        let _e1368 = pc.spawnY;
+        let _e1369 = halfDistMax;
+        let _e1374 = pc.spawnZ;
+        let _e1375 = halfDistMax;
+        boxMax_1 = vec3<f32>(f32(((_e1362 + _e1363) + 1i)), f32(((_e1368 + _e1369) + 1i)), f32(((_e1374 + _e1375) + 1i)));
+        let _e1381 = pc.spawnType;
         indexable_6 = array<vec3<f32>, 20>(vec3<f32>(0.1f, 0.1f, 0.1f), vec3<f32>(1f, 0.9f, 0.2f), vec3<f32>(0.2f, 0.6f, 1f), vec3<f32>(0.6f, 0.6f, 0.6f), vec3<f32>(0.5f, 0.35f, 0.15f), vec3<f32>(1f, 0.5f, 0f), vec3<f32>(0.9f, 0.9f, 0.9f), vec3<f32>(0.8f, 0.4f, 1f), vec3<f32>(1f, 0.45f, 0.1f), vec3<f32>(0.85f, 0.3f, 0.07f), vec3<f32>(0.65f, 0.2f, 0.06f), vec3<f32>(0.45f, 0.14f, 0.06f), vec3<f32>(0.22f, 0.19f, 0.18f), vec3<f32>(0.38f, 0.3f, 0.12f), vec3<f32>(0.46f, 0.35f, 0.13f), vec3<f32>(0.54f, 0.4f, 0.14f), vec3<f32>(0.62f, 0.45f, 0.15f), vec3<f32>(0.7f, 0.51f, 0.16f), vec3<f32>(0.36f, 0.24f, 0.12f), vec3<f32>(0.22f, 0.46f, 0.15f));
-        let _e1368 = indexable_6[clamp(_e1365, 0i, 19i)];
-        cursorColor = _e1368;
-        let _e1370 = pc.spawnShape;
-        if (_e1370 == 1i) {
-            let _e1372 = boxMin_2;
-            let _e1373 = boxMax_1;
-            sphereCenter = ((_e1372 + _e1373) * 0.5f);
-            let _e1377 = pc.spawnSize;
-            sphereRadius = (f32(_e1377) * 0.5f);
-            let _e1380 = rayOrigin_3;
-            let _e1381 = sphereCenter;
-            oc_1 = (_e1380 - _e1381);
-            let _e1383 = oc_1;
-            let _e1384 = rayDir_3;
-            b_4 = dot(_e1383, _e1384);
-            let _e1386 = oc_1;
-            let _e1387 = oc_1;
-            let _e1389 = sphereRadius;
-            let _e1390 = sphereRadius;
-            c_4 = (dot(_e1386, _e1387) - (_e1389 * _e1390));
-            let _e1393 = b_4;
-            let _e1394 = b_4;
-            let _e1396 = c_4;
-            disc_1 = ((_e1393 * _e1394) - _e1396);
-            let _e1398 = disc_1;
-            if (_e1398 > 0f) {
-                let _e1400 = disc_1;
-                sq_1 = sqrt(_e1400);
-                let _e1402 = b_4;
-                let _e1404 = sq_1;
-                tNear_2 = (-(_e1402) - _e1404);
-                let _e1406 = b_4;
-                let _e1408 = sq_1;
-                tFar_2 = (-(_e1406) + _e1408);
-                let _e1410 = tFar_2;
-                if (_e1410 > 0f) {
-                    let _e1412 = tNear_2;
-                    inside = (_e1412 <= 0f);
-                    let _e1414 = inside;
-                    let _e1415 = tFar_2;
-                    let _e1416 = tNear_2;
-                    cursorDist = select(_e1416, _e1415, _e1414);
-                    let _e1418 = rayOrigin_3;
-                    let _e1419 = rayDir_3;
-                    let _e1420 = cursorDist;
-                    let _e1423 = sphereCenter;
-                    shellNormal = normalize(((_e1418 + (_e1419 * _e1420)) - _e1423));
-                    let _e1426 = shellNormal;
-                    let _e1427 = rayDir_3;
-                    rim_1 = (1f - abs(dot(_e1426, _e1427)));
-                    let _e1431 = rim_1;
-                    let _e1434 = inside;
-                    alpha = (mix(0.12f, 0.9f, smoothstep(0.55f, 0.97f, _e1431)) * select(1f, 0.35f, _e1434));
-                    let _e1437 = cursorDist;
-                    let _e1438 = finalDist;
-                    if (_e1437 < _e1438) {
-                        let _e1440 = finalColor;
-                        let _e1442 = cursorColor;
-                        let _e1443 = alpha;
-                        let _e1445 = mix(_e1440.xyz, _e1442, vec3(_e1443));
-                        finalColor[0u] = _e1445.x;
-                        finalColor[1u] = _e1445.y;
-                        finalColor[2u] = _e1445.z;
+        let _e1384 = indexable_6[clamp(_e1381, 0i, 19i)];
+        cursorColor = _e1384;
+        let _e1386 = pc.spawnShape;
+        if (_e1386 == 1i) {
+            let _e1388 = boxMin_2;
+            let _e1389 = boxMax_1;
+            sphereCenter = ((_e1388 + _e1389) * 0.5f);
+            let _e1393 = pc.spawnSize;
+            sphereRadius = (f32(_e1393) * 0.5f);
+            let _e1396 = rayOrigin_3;
+            let _e1397 = sphereCenter;
+            oc_1 = (_e1396 - _e1397);
+            let _e1399 = oc_1;
+            let _e1400 = rayDir_3;
+            b_4 = dot(_e1399, _e1400);
+            let _e1402 = oc_1;
+            let _e1403 = oc_1;
+            let _e1405 = sphereRadius;
+            let _e1406 = sphereRadius;
+            c_4 = (dot(_e1402, _e1403) - (_e1405 * _e1406));
+            let _e1409 = b_4;
+            let _e1410 = b_4;
+            let _e1412 = c_4;
+            disc_1 = ((_e1409 * _e1410) - _e1412);
+            let _e1414 = disc_1;
+            if (_e1414 > 0f) {
+                let _e1416 = disc_1;
+                sq_1 = sqrt(_e1416);
+                let _e1418 = b_4;
+                let _e1420 = sq_1;
+                tNear_2 = (-(_e1418) - _e1420);
+                let _e1422 = b_4;
+                let _e1424 = sq_1;
+                tFar_2 = (-(_e1422) + _e1424);
+                let _e1426 = tFar_2;
+                if (_e1426 > 0f) {
+                    let _e1428 = tNear_2;
+                    inside = (_e1428 <= 0f);
+                    let _e1430 = inside;
+                    let _e1431 = tFar_2;
+                    let _e1432 = tNear_2;
+                    cursorDist = select(_e1432, _e1431, _e1430);
+                    let _e1434 = rayOrigin_3;
+                    let _e1435 = rayDir_3;
+                    let _e1436 = cursorDist;
+                    let _e1439 = sphereCenter;
+                    shellNormal = normalize(((_e1434 + (_e1435 * _e1436)) - _e1439));
+                    let _e1442 = shellNormal;
+                    let _e1443 = rayDir_3;
+                    rim_1 = (1f - abs(dot(_e1442, _e1443)));
+                    let _e1447 = rim_1;
+                    let _e1450 = inside;
+                    alpha = (mix(0.12f, 0.9f, smoothstep(0.55f, 0.97f, _e1447)) * select(1f, 0.35f, _e1450));
+                    let _e1453 = cursorDist;
+                    let _e1454 = finalDist;
+                    if (_e1453 < _e1454) {
+                        let _e1456 = finalColor;
+                        let _e1458 = cursorColor;
+                        let _e1459 = alpha;
+                        let _e1461 = mix(_e1456.xyz, _e1458, vec3(_e1459));
+                        finalColor[0u] = _e1461.x;
+                        finalColor[1u] = _e1461.y;
+                        finalColor[2u] = _e1461.z;
                     }
                 }
             }
         } else {
-            let _e1452 = rayOrigin_3;
-            param_159 = _e1452;
-            let _e1453 = rayDir_3;
-            param_160 = _e1453;
-            let _e1454 = boxMin_2;
-            param_161 = _e1454;
-            let _e1455 = boxMax_1;
-            param_162 = _e1455;
-            let _e1456 = intersectAABB_u0028_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b((&param_159), (&param_160), (&param_161), (&param_162));
-            cursorHit = _e1456;
-            let _e1458 = cursorHit[0u];
-            let _e1460 = cursorHit[1u];
-            let _e1461 = (_e1458 < _e1460);
-            phi_4369_ = _e1461;
-            if _e1461 {
-                let _e1463 = cursorHit[1u];
-                phi_4369_ = (_e1463 > 0f);
+            let _e1468 = rayOrigin_3;
+            param_159 = _e1468;
+            let _e1469 = rayDir_3;
+            param_160 = _e1469;
+            let _e1470 = boxMin_2;
+            param_161 = _e1470;
+            let _e1471 = boxMax_1;
+            param_162 = _e1471;
+            let _e1472 = intersectAABB_u0028_vf3_u003b_vf3_u003b_vf3_u003b_vf3_u003b((&param_159), (&param_160), (&param_161), (&param_162));
+            cursorHit = _e1472;
+            let _e1474 = cursorHit[0u];
+            let _e1476 = cursorHit[1u];
+            let _e1477 = (_e1474 < _e1476);
+            phi_4389_ = _e1477;
+            if _e1477 {
+                let _e1479 = cursorHit[1u];
+                phi_4389_ = (_e1479 > 0f);
             }
-            let _e1466 = phi_4369_;
-            if _e1466 {
-                let _e1468 = cursorHit[0u];
-                distFront = max(0f, _e1468);
-                let _e1471 = cursorHit[1u];
-                distBack = _e1471;
-                let _e1472 = rayOrigin_3;
-                let _e1473 = rayDir_3;
-                let _e1474 = distFront;
-                hitPosFront = (_e1472 + (_e1473 * _e1474));
-                let _e1477 = rayOrigin_3;
-                let _e1478 = rayDir_3;
-                let _e1479 = distBack;
-                hitPosBack = (_e1477 + (_e1478 * _e1479));
+            let _e1482 = phi_4389_;
+            if _e1482 {
+                let _e1484 = cursorHit[0u];
+                distFront = max(0f, _e1484);
+                let _e1487 = cursorHit[1u];
+                distBack = _e1487;
+                let _e1488 = rayOrigin_3;
+                let _e1489 = rayDir_3;
+                let _e1490 = distFront;
+                hitPosFront = (_e1488 + (_e1489 * _e1490));
+                let _e1493 = rayOrigin_3;
+                let _e1494 = rayDir_3;
+                let _e1495 = distBack;
+                hitPosBack = (_e1493 + (_e1494 * _e1495));
                 e = 0.15f;
                 onFrontEdge = false;
                 edgesFront = 0i;
-                let _e1483 = hitPosFront[0u];
-                let _e1485 = boxMin_2[0u];
-                let _e1486 = e;
-                let _e1488 = (_e1483 < (_e1485 + _e1486));
-                phi_4411_ = _e1488;
-                if !(_e1488) {
-                    let _e1491 = hitPosFront[0u];
-                    let _e1493 = boxMax_1[0u];
-                    let _e1494 = e;
-                    phi_4411_ = (_e1491 > (_e1493 - _e1494));
+                let _e1499 = hitPosFront[0u];
+                let _e1501 = boxMin_2[0u];
+                let _e1502 = e;
+                let _e1504 = (_e1499 < (_e1501 + _e1502));
+                phi_4431_ = _e1504;
+                if !(_e1504) {
+                    let _e1507 = hitPosFront[0u];
+                    let _e1509 = boxMax_1[0u];
+                    let _e1510 = e;
+                    phi_4431_ = (_e1507 > (_e1509 - _e1510));
                 }
-                let _e1498 = phi_4411_;
-                if _e1498 {
-                    let _e1499 = edgesFront;
-                    edgesFront = (_e1499 + 1i);
+                let _e1514 = phi_4431_;
+                if _e1514 {
+                    let _e1515 = edgesFront;
+                    edgesFront = (_e1515 + 1i);
                 }
-                let _e1502 = hitPosFront[1u];
-                let _e1504 = boxMin_2[1u];
-                let _e1505 = e;
-                let _e1507 = (_e1502 < (_e1504 + _e1505));
-                phi_4433_ = _e1507;
-                if !(_e1507) {
-                    let _e1510 = hitPosFront[1u];
-                    let _e1512 = boxMax_1[1u];
-                    let _e1513 = e;
-                    phi_4433_ = (_e1510 > (_e1512 - _e1513));
+                let _e1518 = hitPosFront[1u];
+                let _e1520 = boxMin_2[1u];
+                let _e1521 = e;
+                let _e1523 = (_e1518 < (_e1520 + _e1521));
+                phi_4453_ = _e1523;
+                if !(_e1523) {
+                    let _e1526 = hitPosFront[1u];
+                    let _e1528 = boxMax_1[1u];
+                    let _e1529 = e;
+                    phi_4453_ = (_e1526 > (_e1528 - _e1529));
                 }
-                let _e1517 = phi_4433_;
-                if _e1517 {
-                    let _e1518 = edgesFront;
-                    edgesFront = (_e1518 + 1i);
+                let _e1533 = phi_4453_;
+                if _e1533 {
+                    let _e1534 = edgesFront;
+                    edgesFront = (_e1534 + 1i);
                 }
-                let _e1521 = hitPosFront[2u];
-                let _e1523 = boxMin_2[2u];
-                let _e1524 = e;
-                let _e1526 = (_e1521 < (_e1523 + _e1524));
-                phi_4455_ = _e1526;
-                if !(_e1526) {
-                    let _e1529 = hitPosFront[2u];
-                    let _e1531 = boxMax_1[2u];
-                    let _e1532 = e;
-                    phi_4455_ = (_e1529 > (_e1531 - _e1532));
+                let _e1537 = hitPosFront[2u];
+                let _e1539 = boxMin_2[2u];
+                let _e1540 = e;
+                let _e1542 = (_e1537 < (_e1539 + _e1540));
+                phi_4475_ = _e1542;
+                if !(_e1542) {
+                    let _e1545 = hitPosFront[2u];
+                    let _e1547 = boxMax_1[2u];
+                    let _e1548 = e;
+                    phi_4475_ = (_e1545 > (_e1547 - _e1548));
                 }
-                let _e1536 = phi_4455_;
-                if _e1536 {
-                    let _e1537 = edgesFront;
-                    edgesFront = (_e1537 + 1i);
+                let _e1552 = phi_4475_;
+                if _e1552 {
+                    let _e1553 = edgesFront;
+                    edgesFront = (_e1553 + 1i);
                 }
-                let _e1539 = edgesFront;
-                if (_e1539 >= 2i) {
+                let _e1555 = edgesFront;
+                if (_e1555 >= 2i) {
                     onFrontEdge = true;
                 }
                 onBackEdge = false;
                 edgesBack = 0i;
-                let _e1542 = hitPosBack[0u];
-                let _e1544 = boxMin_2[0u];
-                let _e1545 = e;
-                let _e1547 = (_e1542 < (_e1544 + _e1545));
-                phi_4483_ = _e1547;
-                if !(_e1547) {
-                    let _e1550 = hitPosBack[0u];
-                    let _e1552 = boxMax_1[0u];
-                    let _e1553 = e;
-                    phi_4483_ = (_e1550 > (_e1552 - _e1553));
+                let _e1558 = hitPosBack[0u];
+                let _e1560 = boxMin_2[0u];
+                let _e1561 = e;
+                let _e1563 = (_e1558 < (_e1560 + _e1561));
+                phi_4503_ = _e1563;
+                if !(_e1563) {
+                    let _e1566 = hitPosBack[0u];
+                    let _e1568 = boxMax_1[0u];
+                    let _e1569 = e;
+                    phi_4503_ = (_e1566 > (_e1568 - _e1569));
                 }
-                let _e1557 = phi_4483_;
-                if _e1557 {
-                    let _e1558 = edgesBack;
-                    edgesBack = (_e1558 + 1i);
+                let _e1573 = phi_4503_;
+                if _e1573 {
+                    let _e1574 = edgesBack;
+                    edgesBack = (_e1574 + 1i);
                 }
-                let _e1561 = hitPosBack[1u];
-                let _e1563 = boxMin_2[1u];
-                let _e1564 = e;
-                let _e1566 = (_e1561 < (_e1563 + _e1564));
-                phi_4505_ = _e1566;
-                if !(_e1566) {
-                    let _e1569 = hitPosBack[1u];
-                    let _e1571 = boxMax_1[1u];
-                    let _e1572 = e;
-                    phi_4505_ = (_e1569 > (_e1571 - _e1572));
+                let _e1577 = hitPosBack[1u];
+                let _e1579 = boxMin_2[1u];
+                let _e1580 = e;
+                let _e1582 = (_e1577 < (_e1579 + _e1580));
+                phi_4525_ = _e1582;
+                if !(_e1582) {
+                    let _e1585 = hitPosBack[1u];
+                    let _e1587 = boxMax_1[1u];
+                    let _e1588 = e;
+                    phi_4525_ = (_e1585 > (_e1587 - _e1588));
                 }
-                let _e1576 = phi_4505_;
-                if _e1576 {
-                    let _e1577 = edgesBack;
-                    edgesBack = (_e1577 + 1i);
+                let _e1592 = phi_4525_;
+                if _e1592 {
+                    let _e1593 = edgesBack;
+                    edgesBack = (_e1593 + 1i);
                 }
-                let _e1580 = hitPosBack[2u];
-                let _e1582 = boxMin_2[2u];
-                let _e1583 = e;
-                let _e1585 = (_e1580 < (_e1582 + _e1583));
-                phi_4527_ = _e1585;
-                if !(_e1585) {
-                    let _e1588 = hitPosBack[2u];
-                    let _e1590 = boxMax_1[2u];
-                    let _e1591 = e;
-                    phi_4527_ = (_e1588 > (_e1590 - _e1591));
+                let _e1596 = hitPosBack[2u];
+                let _e1598 = boxMin_2[2u];
+                let _e1599 = e;
+                let _e1601 = (_e1596 < (_e1598 + _e1599));
+                phi_4547_ = _e1601;
+                if !(_e1601) {
+                    let _e1604 = hitPosBack[2u];
+                    let _e1606 = boxMax_1[2u];
+                    let _e1607 = e;
+                    phi_4547_ = (_e1604 > (_e1606 - _e1607));
                 }
-                let _e1595 = phi_4527_;
-                if _e1595 {
-                    let _e1596 = edgesBack;
-                    edgesBack = (_e1596 + 1i);
+                let _e1611 = phi_4547_;
+                if _e1611 {
+                    let _e1612 = edgesBack;
+                    edgesBack = (_e1612 + 1i);
                 }
-                let _e1598 = edgesBack;
-                if (_e1598 >= 2i) {
+                let _e1614 = edgesBack;
+                if (_e1614 >= 2i) {
                     onBackEdge = true;
                 }
-                let _e1600 = onFrontEdge;
-                let _e1601 = distFront;
-                let _e1602 = finalDist;
-                if (_e1600 && (_e1601 < _e1602)) {
-                    let _e1605 = finalColor;
-                    let _e1607 = cursorColor;
-                    let _e1609 = mix(_e1605.xyz, _e1607, vec3(0.9f));
-                    finalColor[0u] = _e1609.x;
-                    finalColor[1u] = _e1609.y;
-                    finalColor[2u] = _e1609.z;
+                let _e1616 = onFrontEdge;
+                let _e1617 = distFront;
+                let _e1618 = finalDist;
+                if (_e1616 && (_e1617 < _e1618)) {
+                    let _e1621 = finalColor;
+                    let _e1623 = cursorColor;
+                    let _e1625 = mix(_e1621.xyz, _e1623, vec3(0.9f));
+                    finalColor[0u] = _e1625.x;
+                    finalColor[1u] = _e1625.y;
+                    finalColor[2u] = _e1625.z;
                 } else {
-                    let _e1616 = onBackEdge;
-                    let _e1617 = distBack;
-                    let _e1618 = finalDist;
-                    if (_e1616 && (_e1617 < _e1618)) {
-                        let _e1621 = finalColor;
-                        let _e1623 = cursorColor;
-                        let _e1625 = mix(_e1621.xyz, _e1623, vec3(0.2f));
-                        finalColor[0u] = _e1625.x;
-                        finalColor[1u] = _e1625.y;
-                        finalColor[2u] = _e1625.z;
+                    let _e1632 = onBackEdge;
+                    let _e1633 = distBack;
+                    let _e1634 = finalDist;
+                    if (_e1632 && (_e1633 < _e1634)) {
+                        let _e1637 = finalColor;
+                        let _e1639 = cursorColor;
+                        let _e1641 = mix(_e1637.xyz, _e1639, vec3(0.2f));
+                        finalColor[0u] = _e1641.x;
+                        finalColor[1u] = _e1641.y;
+                        finalColor[2u] = _e1641.z;
                     } else {
-                        let _e1632 = distFront;
-                        let _e1633 = finalDist;
-                        if (_e1632 < _e1633) {
-                            let _e1635 = finalColor;
-                            let _e1637 = cursorColor;
-                            let _e1639 = mix(_e1635.xyz, _e1637, vec3(0.15f));
-                            finalColor[0u] = _e1639.x;
-                            finalColor[1u] = _e1639.y;
-                            finalColor[2u] = _e1639.z;
+                        let _e1648 = distFront;
+                        let _e1649 = finalDist;
+                        if (_e1648 < _e1649) {
+                            let _e1651 = finalColor;
+                            let _e1653 = cursorColor;
+                            let _e1655 = mix(_e1651.xyz, _e1653, vec3(0.15f));
+                            finalColor[0u] = _e1655.x;
+                            finalColor[1u] = _e1655.y;
+                            finalColor[2u] = _e1655.z;
                         }
                     }
                 }
             }
         }
     }
-    let _e1646 = hitFrontBox;
-    if _e1646 {
+    let _e1662 = hitFrontBox;
+    if _e1662 {
         finalColor = vec4<f32>(1f, 0.2f, 0.2f, 1f);
     }
-    let _e1647 = finalColor;
-    outColor = _e1647;
+    let _e1663 = finalColor;
+    outColor = _e1663;
     return;
 }
 

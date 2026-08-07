@@ -30,6 +30,13 @@ layout(std430, binding = 1) readonly buffer SimStats {
     uint cloudStillTicks;        // UNUSED: the storm check samples rather than accumulating
     uint simTick;                // dispatches since startup; the clock the checks run on
     uint lastRainTick;           // simTick at the last rain event, for the profiler
+    // The global Y range of the cloud field, so the renderer can start its march at the band
+    // instead of at the edge of the world. Accumulator pair and published pair, rotated once
+    // per dispatch like every other census here. Published min > max means no cloud at all.
+    uint cloudMinYAcc;
+    uint cloudMaxYAcc;
+    uint cloudMinY;
+    uint cloudMaxY;
     uint blackHoleCount;
     uint maxOccupiedY;
     uint blackHoles[BLACK_HOLE_MAX];
@@ -1478,16 +1485,26 @@ void main() {
             // footprint with Y left open, because the cloud blocks are inside the world but the
             // cloud drawn from them stands above it -- clipping to the cube would cut off every
             // slab at the roof.
-            // Bounded in Y, not the effectively infinite slab this used to be. The DDA has a fixed
-            // step budget, so an interval a thousand times longer than the cloud band meant rays at
-            // some angles ran out of steps before reaching it and the sky flickered as the camera
-            // turned. The band cannot reach higher than the tallest possible slab over the roof.
-            float cloudCeiling = float(HEIGHT)
-                               + max(tuning.cloudColumnFullCount, 1.0f)
-                               * max(tuning.cloudThicknessPerBlock, 0.01f);
-            vec2 cloudClip = intersectAABB(rayOrigin, rayDir,
-                                           vec3(0.0f, 0.0f, 0.0f),
-                                           vec3(worldExtent().x, cloudCeiling, worldExtent().z));
+            // Clipped to the band the cloud field actually occupies, which the compute stage
+            // publishes each dispatch. This is what makes a fixed step budget sufficient.
+            //
+            // Bounding the box to the world was not enough: a ray entering low still had to cross
+            // the whole cube before reaching cloud that sits against the roof, so at some angles it
+            // ran out of steps and the sky flickered -- worse the further away the camera was,
+            // because distance is what makes a ray enter low and travel far. Starting at the band
+            // makes the march a few cells regardless of where the camera is.
+            //
+            // Published min above max is the shader's way of saying there is no cloud at all, in
+            // which case there is nothing to march.
+            float bandLo = float(cloudMinY);
+            float bandHi = float(cloudMaxY)
+                         + max(tuning.cloudColumnFullCount, 1.0f)
+                           * max(tuning.cloudThicknessPerBlock, 0.01f);
+            vec2 cloudClip = (cloudMinY > cloudMaxY)
+                ? vec2(1.0f, -1.0f)   // empty interval: the tests below reject it
+                : intersectAABB(rayOrigin, rayDir,
+                                vec3(0.0f, bandLo, 0.0f),
+                                vec3(worldExtent().x, bandHi, worldExtent().z));
             vec3 cloudSunDir = normalize(vec3(0.8f, 1.0f, 0.5f));
 
             float bestT = 1000000.0f;
