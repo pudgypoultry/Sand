@@ -144,6 +144,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint stormWaitMaxTicks;       // storm block's random wait at the ceiling, 0..255
     float cloudColumnFullCount;   // cloud blocks in a column that read as fully dense
     float cloudThicknessPerBlock; // world units of cloud drawn per block in the column
+    uint cloudClumpThreshold;     // cloud neighbours at which a block stops trying to move
 } tuning;
 
 // Per-frame state the CPU writes: camera pose, cursor position, brush.
@@ -959,12 +960,13 @@ uint cloudColumnBase(int x, int z) { return uint(x + z * WIDTH) * 4u; }
 // integer coordinates -- clouds no longer drift, so a world-anchored pattern is stationary and will
 // not boil.
 //
-// The slab hangs DOWN from the top of the pile: its top is the highest cloud block in the column and
-// it is cloudThicknessPerBlock world units deep per block underneath. So a deep pile is a thick
-// cloud reaching further down, which is the reading of "proportional to the clump" that puts more
-// cloud where more cloud mass is. Its density -- how much of the slab is filled rather than holes --
-// scales with the count against cloudColumnFullCount, so a thin column is wispy and a deep one is
-// solid.
+// The slab sits ABOVE the pile: its underside rests on the highest cloud block in the column and it
+// rises cloudThicknessPerBlock world units for every block beneath it. Cloud blocks are invisible
+// and pile against the ceiling, so this puts the visible cloud just over the roof of the world --
+// which is where clouds were drawn before any of this, and what makes a deep pile read as a tall
+// bank of cloud rather than a thicker lid. Its density -- how much of the slab is filled rather than
+// holes -- scales with the count against cloudColumnFullCount, so a thin column is wispy and a deep
+// one is solid.
 //
 // One march for the whole sky, where this used to be one march per cloud inside a loop over up to
 // 64 of them. Colour blends from white/light-grey toward storm-grey as `greyness` rises.
@@ -1005,18 +1007,19 @@ bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, float tEnter, float tExit, ve
             uint count = cloudColumn[base + 2u];
 
             if (count > 0u) {
-                float topY = float(cloudColumn[base + 3u]);
+                // Bottom on the pile's top block, growing upward with the pile's depth.
+                float baseY = float(cloudColumn[base + 3u]);
                 float thickness = float(count) * max(tuning.cloudThicknessPerBlock, 0.01f);
-                float bottomY = topY - thickness;
+                float capY = baseY + thickness;
 
-                if (cellCenter.y <= topY && cellCenter.y >= bottomY) {
+                if (cellCenter.y >= baseY && cellCenter.y <= capY) {
                     float density = clamp(float(count) / max(tuning.cloudColumnFullCount, 1.0f),
                                           0.0f, 1.0f);
 
                     // Distance from the slab's mid-height, 0 in the middle and 1 at either face --
                     // the same role the ellipsoid's localLen played, so the existing edge threshold
                     // tuning keeps its meaning: sparser at the boundary, denser through the core.
-                    float mid = (topY + bottomY) * 0.5f;
+                    float mid = (baseY + capY) * 0.5f;
                     float edgeFactor = clamp(abs(cellCenter.y - mid) / max(thickness * 0.5f, 0.001f),
                                              0.0f, 1.0f);
                     float threshold = mix(tuning.cloudEdgeThresholdMin,
@@ -1389,10 +1392,13 @@ void main() {
         }
 
         if (groupAlpha > 0.002f) {
-            // One march over the cube's own volume, not a loop over a cloud population. Clouds are
-            // inside the world now -- they are voxels that piled up against the ceiling -- so the
-            // marching interval is the cube itself rather than a slab floating above it.
-            vec2 cloudClip = intersectAABB(rayOrigin, rayDir, vec3(0.0f), worldExtent());
+            // One march, not a loop over a cloud population. The interval is the cube's XZ
+            // footprint with Y left open, because the cloud blocks are inside the world but the
+            // cloud drawn from them stands above it -- clipping to the cube would cut off every
+            // slab at the roof.
+            vec2 cloudClip = intersectAABB(rayOrigin, rayDir,
+                                           vec3(0.0f, -1000000.0f, 0.0f),
+                                           vec3(worldExtent().x, 1000000.0f, worldExtent().z));
             vec3 cloudSunDir = normalize(vec3(0.8f, 1.0f, 0.5f));
 
             float bestT = 1000000.0f;

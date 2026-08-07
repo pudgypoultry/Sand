@@ -199,6 +199,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint stormWaitMaxTicks;       // storm block's random wait at the ceiling, 0..255
     float cloudColumnFullCount;   // cloud blocks in a column that read as fully dense
     float cloudThicknessPerBlock; // world units of cloud drawn per block in the column
+    uint cloudClumpThreshold;     // cloud neighbours at which a block stops trying to move
 } tuning;
 
 #define LAYER_SIZE (uint(WIDTH) * uint(HEIGHT)) // one layer of the world
@@ -2564,16 +2565,18 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
 }
 
 // FUNCTION: tryMoveCloud
-// Moves a cloud block one cell, in the cloud field only.
+// Moves a cloud block one cell, in the cloud field only. The value written at the destination is
+// passed separately from the one expected at the source, because a moving block resets its sleep
+// counter on arrival.
 //
 // Destination claimed before the source is released, which is the opposite order from tryMove on
 // the main grid and deliberate: the failure it guards against is different. On the grid a voxel
 // briefly existing twice would be visible matter appearing from nowhere; here a cloud block briefly
 // existing twice is one dispatch of a slightly denser column, which nothing can see, while losing
 // one permanently removes moisture from a closed system.
-bool tryMoveCloud(uint fromIndex, uint fromValue, uint toIndex) {
-    if (atomicCompSwap(cloudCells[toIndex], 0u, fromValue) != 0u) return false;
-    if (atomicCompSwap(cloudCells[fromIndex], fromValue, 0u) != fromValue) {
+bool tryMoveCloud(uint fromIndex, uint newValue, uint toIndex, uint expectedFromValue) {
+    if (atomicCompSwap(cloudCells[toIndex], 0u, newValue) != 0u) return false;
+    if (atomicCompSwap(cloudCells[fromIndex], expectedFromValue, 0u) != expectedFromValue) {
         // The source changed under us, so this block is not ours to move after all. Hand the
         // destination back rather than leaving a copy behind.
         atomicExchange(cloudCells[toIndex], 0u);
@@ -2646,13 +2649,68 @@ void updateCloudBlock(ivec3 pos) {
         return;
     }
 
-    // Rise. Straight up first, then one of the two diagonals, chosen the way a grain chooses which
-    // way to slide so a pile spreads evenly instead of leaning.
+    // --- Rise, with the same shape as a grain falling ---------------------------------------
+    //
+    // Sand's rules, mirrored in Y: a cheap "is there anywhere to go" precondition, then a cohesion
+    // test that lets a settled pile hold its shape, then straight up and two diagonals. Skipping the
+    // cohesion test would still give a working simulation -- just a boring one, because a field with
+    // no cohesion slumps until it is one flat sheet against the ceiling and every cloud looks the
+    // same.
     float randVal = hash(vec3(pos) + vec3(pc.time * 2.3f, 7.0f, 13.0f));
+    uint sleep = getCloudSleep(cell);
+
+    // Precondition, five reads: straight up and the four diagonals above. A block walled in by its
+    // own pile answers no here and skips the 26-cell cohesion scan below, which is most of the cost
+    // of a settled field.
+    bool canRise = false;
+    for (int i = 0; i < 5 && !canRise; i++) {
+        ivec3 t = pos + ((i == 0) ? ivec3(0, 1, 0)
+                       : (i == 1) ? ivec3( 1, 1, 0)
+                       : (i == 2) ? ivec3(-1, 1, 0)
+                       : (i == 3) ? ivec3(0, 1,  1)
+                                  : ivec3(0, 1, -1));
+        if (t.x < 0 || t.x >= WIDTH || t.z < 0 || t.z >= DEPTH) continue;
+        if (getCloudKind(cloudCells[getIndex(t)]) == CLOUD_NONE) canRise = true;
+    }
+
+    if (!canRise) {
+        // Nowhere to go. Age the sleep counter and stop -- and note this does NOT touch
+        // cloudMovedCount, which is exactly how a settled field becomes a still one and eventually
+        // a storm.
+        atomicCompSwap(cloudCells[idx], cell, packCloud(kind, getCloudWait(cell), min(sleep + 1u, 255u)));
+        return;
+    }
+
+    bool isClumped = false;
+    if (sleep > tuning.wakeSleepThreshold && tuning.cloudClumpThreshold > 0u) {
+        uint clump = 0u;
+        for (int x = -1; x <= 1; x++) {
+            for (int y = -1; y <= 1; y++) {
+                for (int z = -1; z <= 1; z++) {
+                    if (x == 0 && y == 0 && z == 0) continue;
+                    ivec3 n = pos + ivec3(x, y, z);
+                    if (n.x < 0 || n.x >= WIDTH || n.y < 0 || n.y >= HEIGHT ||
+                        n.z < 0 || n.z >= DEPTH) continue;
+                    if (getCloudKind(cloudCells[getIndex(n)]) != CLOUD_NONE) clump++;
+                }
+            }
+        }
+        if (clump >= tuning.cloudClumpThreshold) isClumped = true;
+    }
+
+    if (isClumped) {
+        atomicCompSwap(cloudCells[idx], cell, packCloud(kind, getCloudWait(cell), min(sleep + 1u, 255u)));
+        return;
+    }
 
     uint upIndex = getIndex(pos + ivec3(0, 1, 0));
     if (getCloudKind(cloudCells[upIndex]) == CLOUD_NONE) {
-        if (tryMoveCloud(idx, cell, upIndex)) { atomicAdd(cloudMovedCount, 1u); return; }
+        // Sleep resets on a move, so a block that is going somewhere keeps being asked every
+        // dispatch and only a block that has stopped pays the cohesion scan.
+        if (tryMoveCloud(idx, packCloud(kind, getCloudWait(cell), 0u), upIndex, cell)) {
+            atomicAdd(cloudMovedCount, 1u);
+            return;
+        }
     }
 
     int dir = (fract(randVal * 10.0f) > 0.5f) ? 1 : -1;
@@ -2668,8 +2726,14 @@ void updateCloudBlock(ivec3 pos) {
         if (t.x < 0 || t.x >= WIDTH || t.z < 0 || t.z >= DEPTH) continue;
         uint tIndex = getIndex(t);
         if (getCloudKind(cloudCells[tIndex]) != CLOUD_NONE) continue;
-        if (tryMoveCloud(idx, cell, tIndex)) { atomicAdd(cloudMovedCount, 1u); return; }
+        if (tryMoveCloud(idx, packCloud(kind, getCloudWait(cell), 0u), tIndex, cell)) {
+            atomicAdd(cloudMovedCount, 1u);
+            return;
+        }
     }
+
+    // Tried and failed: it is hemmed in by blocks that moved first. Age towards sleep anyway.
+    atomicCompSwap(cloudCells[idx], cell, packCloud(kind, getCloudWait(cell), min(sleep + 1u, 255u)));
 }
 
 // FUNCTION: main

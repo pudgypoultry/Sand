@@ -285,8 +285,12 @@ struct TuningParams {
     // How many cloud blocks in a column count as a fully opaque cloud. The divisor that makes cloud
     // density independent of world size.
     float cloudColumnFullCount = 24.0f;
-    // World units of cloud drawn per cloud block in the column, downward from the top of the pile.
+    // World units of cloud drawn per cloud block in the column, rising from the top of the pile.
     float cloudThicknessPerBlock = 1.5f;
+    // Cloud neighbours (of 26) at which a block counts as clumped and stops trying to move. The
+    // counterpart of sandClumpThreshold, and it does the same job: without it a pile slumps into a
+    // flat even sheet, and with it the field holds lumpy, cloud-shaped mounds.
+    uint32_t cloudClumpThreshold = 9;
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

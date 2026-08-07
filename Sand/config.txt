@@ -78,6 +78,8 @@ cloud.storm_wait_max_ticks=120
 # Column depth that reads as fully dense, and how far a cloud hangs per block under it.
 cloud.column_full_count=24.0
 cloud.thickness_per_block=1.5
+# Cloud neighbours at which a block settles, exactly as sand clumps. 0 disables it.
+cloud.clump_threshold=9
 
 # --- Physics ---
 physics.sand_moisture_capacity=10

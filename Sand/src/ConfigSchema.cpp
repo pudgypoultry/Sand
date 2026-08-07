@@ -85,8 +85,13 @@ const ConfigField kConfigFields[] = {
       "cloud look solid sooner. This is what keeps cloud density from depending on world size." },
     { "Clouds", "cloud.thickness_per_block", "Thickness per block", FieldKind::Float,
       offsetof(TuningParams, cloudThicknessPerBlock), 0.1, 16.0,
-      "World units of cloud drawn per cloud block in the column, measured downward from the top of "
-      "the pile. Larger makes the same amount of cloud hang lower." },
+      "World units of cloud drawn per cloud block in the column, measured upward from the top of "
+      "the pile. Larger makes the same amount of cloud stand taller over the world." },
+    { "Clouds", "cloud.clump_threshold", "Clump threshold", FieldKind::UInt,
+      offsetof(TuningParams, cloudClumpThreshold), 0.0, 26.0,
+      "How many of a cloud block's 26 neighbours must also be cloud before it stops trying to move. "
+      "The same idea as the sand clump threshold: low values let a pile slump into a flat sheet, "
+      "high values hold it in lumpy mounds. 0 disables clumping entirely." },
 
     // ---- Physics ----
     { "Physics", "physics.sand_moisture_capacity", "Sand moisture capacity", FieldKind::UInt,
