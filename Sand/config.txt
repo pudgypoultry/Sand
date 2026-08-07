@@ -69,7 +69,7 @@ cloud.max_alpha=0.9
 cloud.voxel_size=3.0
 cloud.edge_threshold_min=0.15
 cloud.edge_threshold_max=0.7
-cloud.max_steps=96
+cloud.max_steps=128
 # Every check_interval_ticks dispatches the sky is asked whether any cloud block moved on the
 # previous one. If none did it has settled, and every cloud block becomes a raincloud; each then
 # waits between rain_wait_min_ticks and rain_wait_max_ticks at the ceiling before falling as water.

@@ -2648,10 +2648,19 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
         bool touchingRain = cloudTouchesRain(pos);
 
         if (underSettled || touchingRain) {
+            // The compare-and-swap is allowed to fail, and the grid write happens either way.
+            //
+            // Failing means a cloud block already holds this cell -- steam suspended INSIDE the
+            // layer rather than under it, which is what a cloud block rising into a steam voxel
+            // produces. That steam has merged and is gone.
+            //
+            // Returning without writing, as this did, was an outright hang: the tail of this
+            // function is what advances the condense timer, so a voxel that took this branch every
+            // dispatch never aged, never tripped the failsafe, and hung between cloud blocks for
+            // the rest of the session. The timer cannot rescue a path that returns before it.
             uint newKind = (touchingRain || rainPhase == 2u) ? CLOUD_RAIN : CLOUD_CALM;
-            if (atomicCompSwap(cloudCells[currentIndex], 0u, packCloud(newKind, false, 0u, 0u)) == 0u) {
-                atomicExchange(grid[currentIndex], 0u);
-            }
+            atomicCompSwap(cloudCells[currentIndex], 0u, packCloud(newKind, false, 0u, 0u));
+            atomicExchange(grid[currentIndex], 0u);
             return;
         }
     }

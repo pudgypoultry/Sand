@@ -61,11 +61,13 @@ struct TuningParams {
     float cloudVoxelSize = 3.0f;
     float cloudEdgeThresholdMin = 0.15f;
     float cloudEdgeThresholdMax = 0.7f;
-    // Raised from 32 when the cloud march stopped being one short interval per ellipsoid and became
-    // one walk up the whole column. A ray crossing a 128-cube diagonally visits about 74 cloud cells
-    // at the default cloudVoxelSize, and a budget that ran out partway made the sky flicker as the
-    // camera turned. Only pixels whose ray actually traverses the band pay for it.
-    uint32_t maxCloudSteps = 96;
+    // Must exceed the cells a ray crosses within the cloud band, or cloud goes missing at a
+    // distance -- distance is what makes a ray shallow, and a shallow ray skims the band for the
+    // whole width of the world. Measured worst case, with the band depth capped as the renderer
+    // caps it, is 98 cells at a 128-cube and 184 at a 256-cube: so 128 covers the default world
+    // with room, and a larger world wants this raised to match. Only pixels whose ray actually
+    // traverses the band pay for it.
+    uint32_t maxCloudSteps = 128;
     // --- Physics ---
     uint32_t sandMoistureCapacity = 10;
     uint32_t dirtMoistureCapacity = 30;

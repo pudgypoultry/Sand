@@ -1066,9 +1066,19 @@ bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, float tEnter, float tExit, ve
             smoothedCloudColumn(cx, cz, spread, count, baseY);
 
             if (count > 0.0f) {
-                // Bottom on the pile's top block, growing upward with the pile's depth.
+                // Bottom on the pile's top block, growing upward with the pile's depth -- and both
+                // faces snapped to the cloud-cell lattice.
+                //
+                // Snapping is what stops the edges shimmering. The slab's extent still follows the
+                // block count, which changes every dispatch, and an unsnapped face lands part way
+                // through a cell: that cell's edgeFactor then wobbles either side of its threshold
+                // and it blinks. Aligned to the lattice, a cell is wholly inside the slab or wholly
+                // outside, so the boundary only changes when the count moves a whole cell's worth
+                // -- rarely, and by a whole cell when it does.
+                float cell = max(tuning.cloudVoxelSize, 0.5f);
                 float thickness = count * max(tuning.cloudThicknessPerBlock, 0.01f);
-                float capY = baseY + thickness;
+                baseY = floor(baseY / cell) * cell;
+                float capY = baseY + max(floor(thickness / cell), 1.0f) * cell;
 
                 if (cellCenter.y >= baseY && cellCenter.y <= capY) {
                     float density = clamp(count / max(tuning.cloudColumnFullCount, 1.0f),
@@ -1514,10 +1524,22 @@ void main() {
             // it moves as blocks come and go -- and starting the march exactly on it risks beginning
             // inside the first fillable cell rather than before it, which would change the first hit
             // as the floor drifted. Starting a cell early is always safe; starting late is not.
-            float bandLo = float(cloudMinY) - max(tuning.cloudVoxelSize, 1.0f);
-            float bandHi = float(cloudMaxY)
-                         + max(tuning.cloudColumnFullCount, 1.0f)
-                           * max(tuning.cloudThicknessPerBlock, 0.01f);
+            float slabMax = max(tuning.cloudColumnFullCount, 1.0f)
+                          * max(tuning.cloudThicknessPerBlock, 0.01f);
+            float bandHi = float(cloudMaxY) + slabMax;
+
+            // Floored, not just taken from the lowest block in the world. cloudMinY is a true
+            // minimum, so ONE stray block far below the deck -- a steam voxel that condensed in
+            // mid-air and has not finished rising -- stretched the band across the whole world. A
+            // shallow ray then crossed a tall band for its entire width, which is many cells, and
+            // ran out of budget: cloud went missing at a distance, because distance is what makes a
+            // ray shallow. Capping the depth bounds that traversal.
+            //
+            // The cost is that cloud more than slabMax below the top of the field is not drawn. That
+            // is the transient risers, which is the better answer anyway -- they were showing up as
+            // isolated grey cubes down at water level.
+            float bandLo = max(float(cloudMinY), float(cloudMaxY) - slabMax)
+                         - max(tuning.cloudVoxelSize, 1.0f);
             vec2 cloudClip = (cloudMinY > cloudMaxY)
                 ? vec2(1.0f, -1.0f)   // empty interval: the tests below reject it
                 : intersectAABB(rayOrigin, rayDir,

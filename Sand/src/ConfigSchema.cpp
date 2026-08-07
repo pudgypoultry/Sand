@@ -67,8 +67,11 @@ const ConfigField kConfigFields[] = {
       offsetof(TuningParams, cloudEdgeThresholdMax), 0.0, 1.0,
       nullptr },
     { "Clouds", "cloud.max_steps", "Max steps", FieldKind::UInt,
-      offsetof(TuningParams, maxCloudSteps), 1.0, 128.0,
-      nullptr },
+      offsetof(TuningParams, maxCloudSteps), 1.0, 256.0,
+      "Step budget for the cloud march. It has to exceed the cells a ray crosses inside the cloud "
+      "band or cloud vanishes at a distance -- a distant ray is a shallow one, and a shallow ray "
+      "skims the band for the whole width of the world. Measured worst case is 98 cells at a "
+      "128-cube and 184 at a 256-cube, so raise this alongside sim.grid_size." },
     { "Clouds", "cloud.check_interval_ticks", "Storm check interval", FieldKind::UInt,
       offsetof(TuningParams, cloudCheckIntervalTicks), 1.0, 100000.0,
       "Dispatches between storm checks. On each multiple of this the simulation asks whether any "
