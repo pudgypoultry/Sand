@@ -82,6 +82,12 @@ public:
     int getWidth() const { return width; }
     int getHeight() const { return height; }
 
+    // The raw cursor position as GLFW reports it, before any normalisation. Only the cursor
+    // diagnostic uses these -- everything else should go through getMouseNdcX/Y, which is the
+    // number that actually matters.
+    double getMouseX() const { return currentMouseX; }
+    double getMouseY() const { return currentMouseY; }
+
     //// FUNCTION: getCurrentMaterial
     //// Accessor for selected material
     //int getCurrentMaterial() const { return currentMaterial; }

@@ -12,6 +12,7 @@
 #include "SimStats.hpp"
 
 #include <GLFW/glfw3.h>
+#include <emscripten.h>
 #include <emscripten/html5.h>
 
 #include <chrono>
@@ -691,6 +692,61 @@ void WebGpuRenderer::syncCanvasSize() {
     configureSurface(want_w, want_h);
 }
 
+// reportCursorDiagnostic: prints, once per click, every quantity the cursor raycast depends on.
+//
+// TEMPORARY. Here because the cursor lands away from the pointer on the web and reading the code
+// does not explain it: the raycast matches raymarch.frag line for line, and the position it starts
+// from is the same one ImGui hit-tests panels with successfully. So one of the numbers below is not
+// what it is assumed to be, and guessing which costs a rebuild per guess.
+//
+// The DOM is asked directly rather than through any of the layers that might be lying. If GLFW's
+// cursor position disagrees with the browser's, or the canvas's real rectangle disagrees with what
+// syncCanvasSize believes, that shows up as two numbers side by side instead of a theory.
+void WebGpuRenderer::reportCursorDiagnostic() {
+    const bool down = window->isLeftClicking();
+    if (!down || cursorDiagLatch) { cursorDiagLatch = down; return; }
+    cursorDiagLatch = true;
+
+    double rectX = 0, rectY = 0, rectW = 0, rectH = 0, dpr = 0, backW = 0, backH = 0;
+    double domX = -1, domY = -1;
+    // The browser's own answer for the same things, including where it last saw the pointer.
+    // A listener is installed on first use; until one event has arrived domX/domY stay -1.
+    EM_ASM({
+        var c = document.getElementById('canvas');
+        var r = c.getBoundingClientRect();
+        if (!window.__sandPtr) {
+            window.__sandPtr = { x: -1, y: -1 };
+            window.addEventListener('mousemove', function (e) {
+                var b = c.getBoundingClientRect();
+                window.__sandPtr.x = e.clientX - b.left;
+                window.__sandPtr.y = e.clientY - b.top;
+            }, true);
+        }
+        // HEAPF64 rather than setValue: setValue is a runtime method that has to be exported to be
+        // reachable from EM_ASM, and the failure if it is not is a runtime "setValue is not
+        // defined" -- from diagnostic code, which would be its own small joke. HEAPF64 always
+        // exists.
+        HEAPF64[$0 >> 3] = r.left;   HEAPF64[$1 >> 3] = r.top;
+        HEAPF64[$2 >> 3] = r.width;  HEAPF64[$3 >> 3] = r.height;
+        HEAPF64[$4 >> 3] = window.devicePixelRatio;
+        HEAPF64[$5 >> 3] = c.width;  HEAPF64[$6 >> 3] = c.height;
+        HEAPF64[$7 >> 3] = window.__sandPtr.x;
+        HEAPF64[$8 >> 3] = window.__sandPtr.y;
+    }, &rectX, &rectY, &rectW, &rectH, &dpr, &backW, &backH, &domX, &domY);
+
+    std::printf("[cursor] glfw=(%.1f, %.1f)  dom=(%.1f, %.1f)  divisor=%dx%d\n",
+                window->getMouseX(), window->getMouseY(), domX, domY,
+                window->getWidth(), window->getHeight());
+    std::printf("[cursor] canvas rect=(%.1f, %.1f) %.1fx%.1f  backing=%.0fx%.0f  dpr=%.3f  "
+                "configured=%ux%u\n",
+                rectX, rectY, rectW, rectH, backW, backH, dpr,
+                configuredWidth, configuredHeight);
+    std::printf("[cursor] ndc=(%.4f, %.4f)  aspectScale=(%.4f, %.4f)  spawn=(%d, %d, %d)\n",
+                window->getMouseNdcX(), window->getMouseNdcY(),
+                frameConstants.aspectScaleX, frameConstants.aspectScaleY,
+                frameConstants.spawnX, frameConstants.spawnY, frameConstants.spawnZ);
+}
+
 void WebGpuRenderer::configureSurface(uint32_t width, uint32_t height) {
     // A zero-sized configuration is invalid and a hidden or not-yet-laid-out canvas reports zero,
     // so this is a real case rather than defensive noise.
@@ -732,6 +788,8 @@ void WebGpuRenderer::frame() {
     // The same raycast the desktop runs, from the same file. Placing blocks works now: spawnActive
     // is set by a click and the compute shader does the rest.
     buildFrameConstants(*window, uiManager, config.tuning, (float)glfwGetTime(), frameConstants);
+
+    reportCursorDiagnostic();
 
     // The three UI actions. Safe to do here between frames: everything below touches buffers only
     // through the queue, which orders them against work already submitted.
