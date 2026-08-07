@@ -703,9 +703,13 @@ void WebGpuRenderer::syncCanvasSize() {
 // cursor position disagrees with the browser's, or the canvas's real rectangle disagrees with what
 // syncCanvasSize believes, that shows up as two numbers side by side instead of a theory.
 void WebGpuRenderer::reportCursorDiagnostic() {
-    const bool down = window->isLeftClicking();
-    if (!down || cursorDiagLatch) { cursorDiagLatch = down; return; }
-    cursorDiagLatch = true;
+    // Time-based rather than click-based. The first version fired on isLeftClicking(), which
+    // Window suppresses whenever ImGui has the mouse -- so a click that landed on a panel, or any
+    // frame where the UI wanted the pointer, printed nothing at all. A diagnostic that can silently
+    // decline to run is worse than none, because its silence reads as evidence.
+    const double now = glfwGetTime();
+    if (now - cursorDiagLast < 1.0) return;
+    cursorDiagLast = now;
 
     double rectX = 0, rectY = 0, rectW = 0, rectH = 0, dpr = 0, backW = 0, backH = 0;
     double domX = -1, domY = -1;
@@ -743,9 +747,19 @@ void WebGpuRenderer::reportCursorDiagnostic() {
         HEAPF64[$8 >> 3] = window.__sandPtr.y;
     }, &rectX, &rectY, &rectW, &rectH, &dpr, &backW, &backH, &domX, &domY);
 
-    std::printf("[cursor] glfw=(%.1f, %.1f)  dom=(%.1f, %.1f)  divisor=%dx%d\n",
-                window->getMouseX(), window->getMouseY(), domX, domY,
-                window->getWidth(), window->getHeight());
+    // The ratio is the whole question. The error scales with the window rather than sitting at a
+    // constant offset, so what is wanted is not "are these equal" but "by how much do they differ,
+    // and does that factor look like dpr, like backing/css, or like something else".
+    const double gx = window->getMouseX(), gy = window->getMouseY();
+    std::printf("[cursor] glfw=(%.1f, %.1f)  dom=(%.1f, %.1f)  ratio glfw/dom=(%.4f, %.4f)\n",
+                gx, gy, domX, domY,
+                (domX > 0.0) ? gx / domX : 0.0, (domY > 0.0) ? gy / domY : 0.0);
+    std::printf("[cursor] divisor=%dx%d  ndc if divided by rect=(%.4f, %.4f)  by backing=(%.4f, %.4f)\n",
+                window->getWidth(), window->getHeight(),
+                (rectW > 0.0) ? (gx / rectW) * 2.0 - 1.0 : 0.0,
+                (rectH > 0.0) ? (gy / rectH) * 2.0 - 1.0 : 0.0,
+                (backW > 0.0) ? (gx / backW) * 2.0 - 1.0 : 0.0,
+                (backH > 0.0) ? (gy / backH) * 2.0 - 1.0 : 0.0);
     std::printf("[cursor] canvas rect=(%.1f, %.1f) %.1fx%.1f  backing=%.0fx%.0f  dpr=%.3f  "
                 "configured=%ux%u\n",
                 rectX, rectY, rectW, rectH, backW, backH, dpr,

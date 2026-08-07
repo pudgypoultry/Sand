@@ -87,9 +87,9 @@ private:
     uint32_t configuredWidth = 0;
     uint32_t configuredHeight = 0;
 
-    // Edge detector for the cursor diagnostic, so a held button prints one line rather than sixty
-    // a second. TEMPORARY, with the diagnostic.
-    bool cursorDiagLatch = false;
+    // Throttle for the cursor diagnostic, so it reports about once a second rather than sixty
+    // times. TEMPORARY, with the diagnostic.
+    double cursorDiagLast = 0.0;
 
     // The four bindings the shaders declare, in the order the WGSL numbers them.
     WGPUBuffer gridBuffer   = nullptr;  // binding 0, storage: one uint per voxel
