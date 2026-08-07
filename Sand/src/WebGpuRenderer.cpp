@@ -711,12 +711,21 @@ void WebGpuRenderer::reportCursorDiagnostic() {
     double domX = -1, domY = -1;
     // The browser's own answer for the same things, including where it last saw the pointer.
     // A listener is installed on first use; until one event has arrived domX/domY stay -1.
+    // No comma may appear at the top level of this block. EM_ASM takes the code as a macro
+    // argument, and the preprocessor splits arguments on commas that are not inside PARENTHESES --
+    // braces do not protect them, so an object literal written {x: -1, y: -1} is torn in half and
+    // the errors land on the C++ side, describing JavaScript as though it were C++. The commas
+    // inside addEventListener(...) are fine, being parenthesised. Double quotes rather than single
+    // for the same family of reason: the body is stringified, and 'mousemove' first has to survive
+    // being tokenised as a C++ multi-character character constant.
     EM_ASM({
-        var c = document.getElementById('canvas');
+        var c = document.getElementById("canvas");
         var r = c.getBoundingClientRect();
         if (!window.__sandPtr) {
-            window.__sandPtr = { x: -1, y: -1 };
-            window.addEventListener('mousemove', function (e) {
+            window.__sandPtr = {};
+            window.__sandPtr.x = -1;
+            window.__sandPtr.y = -1;
+            window.addEventListener("mousemove", function (e) {
                 var b = c.getBoundingClientRect();
                 window.__sandPtr.x = e.clientX - b.left;
                 window.__sandPtr.y = e.clientY - b.top;
