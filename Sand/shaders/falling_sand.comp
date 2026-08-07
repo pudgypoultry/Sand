@@ -196,6 +196,11 @@ layout(push_constant) uniform Constants {
     float fovDistance;
     float perspectiveBlend;
     int spawnShape; // 0 = cube, 1 = sphere
+    // Unused here -- this shader casts no rays. Declared because the block's layout is a binary
+    // contract shared with raymarch.frag and FrameConstants.hpp, and a short block here would read
+    // every field before it correctly and then diverge for anything added later.
+    float aspectScaleX;
+    float aspectScaleY;
 } pc;
 
 // World extents. Macros rather than constants because they come from the UBO now -- every use below

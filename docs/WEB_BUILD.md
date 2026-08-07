@@ -259,6 +259,23 @@ so `render.resolution_scale` at 0.5 quarters the most expensive thing the frame 
 most effective quality knob on a low-end machine. It is web-only for now: the desktop renders
 directly into the swapchain image and would need an offscreen target to honour it.
 
+**Matching the canvas to the window exposed a third problem: the projection had no aspect term.**
+`raymarch.frag` mapped its ±1 screen-space square across the target whatever shape it was, so a
+wide window squashed the world horizontally instead of revealing more of it. On the desktop this
+never showed — that window is a fixed 4:3 and `GLFW_RESIZABLE` is false — and while the canvas was
+stretched from a 4:3 backing store it was hidden behind the coarser stretching described above.
+
+`FrameConstants` now carries `aspectScaleX`/`aspectScaleY`, both 1.0 at 4:3 (so the desktop image is
+bit-for-bit what it was) and rising on whichever axis the window has spare room in. Expanding the
+roomy axis rather than shrinking the tight one means the 4:3 framing is always fully visible and the
+surplus buys more world — narrowing a window must not crop away what it used to show.
+
+They are computed once, on the CPU, in `buildFrameConstants`, because two things have to agree
+about the projection: the raymarcher and the CPU cursor raycast. Sending two ready-made scale
+factors instead of the aspect ratio keeps the branch that derives them in one place; a second copy
+in GLSL would be free to drift, and the symptom of drift is a cursor that no longer sits under the
+pointer.
+
 **ImGui has to be told the size too, and told it every frame.** Resizing the canvas through the
 HTML5 API goes behind GLFW's back — `glfwGetWindowSize` still reports what `glfwCreateWindow` was
 asked for. ImGui's GLFW backend rewrites `io.DisplaySize` and `io.DisplayFramebufferScale` from

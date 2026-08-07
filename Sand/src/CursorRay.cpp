@@ -56,8 +56,32 @@ void buildFrameConstants(const Window& window,
     // governs whether a click places anything.
     fc.spawnX = -1; fc.spawnY = -1; fc.spawnZ = -1;
 
-    const float ndcX = window.getMouseNdcX();
-    const float ndcY = -window.getMouseNdcY();
+    // The camera was framed on a 4:3 window and every FOV default was chosen against it, so 4:3 is
+    // the reference rather than "correct" being some absolute. At that shape both factors are 1 and
+    // nothing about the picture changes.
+    //
+    // Whichever axis the window has spare room in is the one that grows. Scaling only the wide axis
+    // would mean a tall window seeing LESS to the sides than the reference did -- content vanishing
+    // off the edges because the window was made narrower, which is the complaint this is meant to
+    // fix rather than a different form of it. Expanding instead guarantees the 4:3 view is always
+    // fully visible, with the surplus spent on more world.
+    constexpr float kReferenceAspect = 4.0f / 3.0f;
+    const int px = window.getWidth();
+    const int py = window.getHeight();
+    const float aspect = (px > 0 && py > 0) ? (float)px / (float)py : kReferenceAspect;
+    if (aspect >= kReferenceAspect) {
+        fc.aspectScaleX = aspect / kReferenceAspect;
+        fc.aspectScaleY = 1.0f;
+    } else {
+        fc.aspectScaleX = 1.0f;
+        fc.aspectScaleY = kReferenceAspect / aspect;
+    }
+
+    // The same scaling raymarch.frag applies to screenSpace. It has to happen here too, and with
+    // the identical numbers, or the cursor tracks a projection the picture is not using and blocks
+    // land off the pointer -- worse the further from the centre of the screen.
+    const float ndcX = window.getMouseNdcX() * fc.aspectScaleX;
+    const float ndcY = -window.getMouseNdcY() * fc.aspectScaleY;
 
     // Builds the same forward/right/up camera basis as raymarch.frag, then blends between
     // perspective (shared origin, per-pixel direction) and orthographic (shared direction,

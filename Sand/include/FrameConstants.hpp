@@ -29,9 +29,21 @@ struct FrameConstants {
     float fovDistance;
     float perspectiveBlend;
     int spawnShape; // 0 = cube, 1 = sphere
+
+    // How far the view reaches sideways and vertically, as a multiple of the 4:3 framing the
+    // camera was built around. Both are 1.0 at 4:3; a wider window raises the first and a taller
+    // one raises the second, so the extra room shows more world instead of stretching what was
+    // already there.
+    //
+    // Computed once in buildFrameConstants and consumed in two places that MUST agree -- the
+    // raymarcher and the CPU cursor raycast. Sending the two scale factors rather than the aspect
+    // ratio is deliberate: the branch that derives them runs once on the CPU, so there is no second
+    // copy of it in GLSL to drift out of step and put the cursor somewhere the picture is not.
+    float aspectScaleX;
+    float aspectScaleY;
 };
 
-static_assert(sizeof(FrameConstants) == 60,
-              "FrameConstants must stay 15 tightly-packed 4-byte scalars: the shaders' Constants "
+static_assert(sizeof(FrameConstants) == 68,
+              "FrameConstants must stay 17 tightly-packed 4-byte scalars: the shaders' Constants "
               "block assumes that layout, and padding here would silently shift every field the "
               "GPU reads after it.");

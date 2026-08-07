@@ -78,6 +78,10 @@ public:
     // from it.
     void setSize(int w, int h) { width = w; height = h; }
 
+    // The size setSize last agreed on, which is what the aspect correction is derived from.
+    int getWidth() const { return width; }
+    int getHeight() const { return height; }
+
     //// FUNCTION: getCurrentMaterial
     //// Accessor for selected material
     //int getCurrentMaterial() const { return currentMaterial; }

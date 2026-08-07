@@ -4,7 +4,7 @@
 // Edit falling_sand.comp and re-run that script instead; edits here are overwritten and, worse,
 // silently diverge from the shader the desktop build uses.
 //
-// source-sha256: 9b0abd8ebeb33e1ec0e04f1b27b0cc24f5252edc968639e55ad642ecc26bd710
+// source-sha256: cb7fa648e3cdbf0d2afae2393332520a778013275dffcbb906918d75be5dfbc3
 
 struct VoxelGrid {
     grid: array<u32>,
@@ -147,6 +147,8 @@ struct Constants {
     fovDistance: f32,
     perspectiveBlend: f32,
     spawnShape: i32,
+    aspectScaleX: f32,
+    aspectScaleY: f32,
 }
 
 struct VoxelGrid_1 {

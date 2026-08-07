@@ -166,6 +166,10 @@ layout(push_constant) uniform Constants {
     float fovDistance;
     float perspectiveBlend;
     int spawnShape; // 0 = cube, 1 = sphere
+    // The view's reach sideways and vertically, relative to the 4:3 framing the camera was built
+    // around. Applied to screenSpace in main. See FrameConstants.hpp.
+    float aspectScaleX;
+    float aspectScaleY;
 } pc;
 
 // World extents, from the UBO. Must agree with falling_sand.comp.
@@ -1020,8 +1024,14 @@ bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, vec3 center, vec3 radii, floa
 
 // FUNCTION: main
 void main() {
-    vec2 screenSpace = inUV * 2.0f - 1.0f; 
-    screenSpace.y = -screenSpace.y; 
+    vec2 screenSpace = inUV * 2.0f - 1.0f;
+    screenSpace.y = -screenSpace.y;
+
+    // Without this the +/-1 square is stretched onto whatever shape the window is, so a wide window
+    // squashes the world horizontally rather than revealing more of it. Both factors are 1.0 at the
+    // 4:3 the camera was framed for, which is why the desktop image is unchanged.
+    screenSpace.x *= pc.aspectScaleX;
+    screenSpace.y *= pc.aspectScaleY;
 
     vec3 baseOrigin = vec3(pc.camX, pc.camY, pc.camZ);
 
