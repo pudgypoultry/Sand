@@ -322,6 +322,21 @@ uint getCloudSleep(uint v) { return (v >> 10) & 0xFFu; }
 // can answer "how much cloud is over this spot" without marching the column.
 uint cloudColumnBase(int x, int z) { return uint(x + z * WIDTH) * 4u; }
 
+// FUNCTION: cloudCellInBounds
+// Whether a cloud block may occupy a cell -- the same strict interior every other material is
+// confined to, NOT merely "inside the array".
+//
+// This matters far more than it looks. main() walls off a one-voxel border and returns before any
+// material update, so a voxel that reaches the border is never simulated again: it is frozen there
+// for good. Cloud movement used to test only against WIDTH and DEPTH, so blocks slid into the border
+// columns, and a storm block there turned into a water voxel that could never fall -- water welded
+// to the walls of the world.
+bool cloudCellInBounds(ivec3 p) {
+    return p.x >= 1 && p.x < WIDTH - 1 &&
+           p.y >= 1 && p.y < HEIGHT - 1 &&
+           p.z >= 1 && p.z < DEPTH - 1;
+}
+
 // FUNCTION: cloudIsAtRest
 // A cloud block that has stopped moving. Steam condenses onto these, so it has to mean "settled"
 // rather than merely "present": condensing against a block that is still on its way up would turn
@@ -2505,13 +2520,17 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
         // becomes an actual cloud block occupying this cell in the cloud field.
         //
         // The cloud write has to succeed before the steam is cleared, or a steam voxel is destroyed
-        // and its moisture with it. If a cloud block is already here the steam simply waits: the
-        // cell is at the ceiling, so nothing is going to move out from under it, and trying again
-        // next dispatch costs one read.
+        // and its moisture with it.
         if (atomicCompSwap(cloudCells[currentIndex], 0u, packCloud(CLOUD_CALM, 0u, 0u)) == 0u) {
             atomicExchange(grid[currentIndex], 0u);
+            return;
         }
-        return;
+        // A cloud block is already in this cell, so there is no room to condense here. This used to
+        // return and wait -- on the reasoning that nothing would move out from under it, which was
+        // true and was exactly the problem: a cloud block at the ceiling never moves, so the wait
+        // was forever and the steam welded itself to the roof. Falling through instead lets it
+        // scatter along the underside until it finds a free cell, or meets a settled block and
+        // condenses beneath it via the check further down.
     }
 
     uint newAge = min(currentAge + 1u, 255u);
@@ -2578,10 +2597,16 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
         }
     }
 
-    // 3. Try moving upwards or diagonally upwards (Air = 0u, Fire = 5u)
+    // 4. Try moving upwards or diagonally upwards (Air = 0u, Fire = 5u)
+    //
+    // The Y bound is new and load-bearing. This function used to return before reaching here
+    // whenever pos.y was at HEIGHT-2, so a rise target could never be the border row; steam at the
+    // ceiling now falls through, and without this it would step into the border and freeze there
+    // permanently, since main() never simulates it again.
     for (int i = 0; i < 3; i++) {
         ivec3 sPos = checkPos[i];
-        if (sPos.x > 0 && sPos.x < WIDTH - 1 && sPos.z > 0 && sPos.z < DEPTH - 1) {
+        if (sPos.y < HEIGHT - 1 &&
+            sPos.x > 0 && sPos.x < WIDTH - 1 && sPos.z > 0 && sPos.z < DEPTH - 1) {
             uint sType = getType(readCell(getIndex(sPos)));
             if (sType == 0u || sType == 5u) {
                 if (tryMove(currentIndex, rawValue, getIndex(sPos), pack(6u, 0u, 0u, newAge))) return;
@@ -2675,13 +2700,24 @@ void updateCloudBlock(ivec3 pos) {
             return;
         }
 
+        // Never make water outside the simulated interior. Unreachable now that cloud movement is
+        // confined there too, but stated rather than assumed: a water voxel in the border row is
+        // one main() will never update again, so it would hang on the wall of the world forever.
+        if (!cloudCellInBounds(pos)) return;
+
         uint g = readCell(idx);
         if (getType(g) != 0u) return;   // occupied: hold the block and try again next dispatch
         if (atomicCompSwap(grid[idx], g, pack(2u, 0u, 0u, 0u)) != g) return;
 
         // Water exists now, so the cloud block must go -- and the counter must be told, because
         // nothing else in the simulation knows this voxel appeared.
-        atomicCompSwap(cloudCells[idx], cell, 0u);
+        //
+        // Unconditional, not a compare-and-swap against the value read at the top of this function.
+        // Nothing can move into an occupied cloud cell (tryMoveCloud requires the destination to be
+        // empty) and only this invocation owns this cell, so there is no race to guard -- and a
+        // compare-and-swap that failed for any reason would leave a cloud block standing over water
+        // it had already produced, which is exactly the "cloud never disappeared" symptom.
+        atomicExchange(cloudCells[idx], 0u);
         incWater();
         if (uint(pos.y) > maxOccupiedY) atomicMax(maxOccupiedY, uint(pos.y));
         return;
@@ -2707,7 +2743,7 @@ void updateCloudBlock(ivec3 pos) {
                        : (i == 2) ? ivec3(-1, 1, 0)
                        : (i == 3) ? ivec3(0, 1,  1)
                                   : ivec3(0, 1, -1));
-        if (t.x < 0 || t.x >= WIDTH || t.z < 0 || t.z >= DEPTH) continue;
+        if (!cloudCellInBounds(t)) continue;
         if (getCloudKind(cloudCells[getIndex(t)]) == CLOUD_NONE) canRise = true;
     }
 
@@ -2741,8 +2777,12 @@ void updateCloudBlock(ivec3 pos) {
         return;
     }
 
-    uint upIndex = getIndex(pos + ivec3(0, 1, 0));
-    if (getCloudKind(cloudCells[upIndex]) == CLOUD_NONE) {
+    // Bounded like the slides, though the ceiling branch above already guarantees pos.y <= HEIGHT-3
+    // here. Stated anyway: the guarantee is four screens away and one early-return away from being
+    // untrue, and the cost of it being untrue is a cloud block welded into the border row.
+    ivec3 upPos = pos + ivec3(0, 1, 0);
+    uint upIndex = getIndex(upPos);
+    if (cloudCellInBounds(upPos) && getCloudKind(cloudCells[upIndex]) == CLOUD_NONE) {
         // Sleep resets on a move, so a block that is going somewhere keeps being asked every
         // dispatch and only a block that has stopped pays the cohesion scan.
         if (tryMoveCloud(idx, packCloud(kind, getCloudWait(cell), 0u), upIndex, cell)) {
@@ -2761,7 +2801,7 @@ void updateCloudBlock(ivec3 pos) {
 
     for (int i = 0; i < 2; i++) {
         ivec3 t = (i == 0) ? slide1 : slide2;
-        if (t.x < 0 || t.x >= WIDTH || t.z < 0 || t.z >= DEPTH) continue;
+        if (!cloudCellInBounds(t)) continue;
         uint tIndex = getIndex(t);
         if (getCloudKind(cloudCells[tIndex]) != CLOUD_NONE) continue;
         if (tryMoveCloud(idx, packCloud(kind, getCloudWait(cell), 0u), tIndex, cell)) {
