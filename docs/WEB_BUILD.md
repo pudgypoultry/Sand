@@ -105,8 +105,8 @@ cmake --build build-web
 python3 -m http.server -d build-web      # then open Sand.html
 ```
 
-The backend follows the toolchain; `-DSAND_BACKEND=` overrides it. Both need `vendor/glfw` and
-`vendor/imgui`, which are tracked in the repository — GLFW's prebuilt `.lib` via Git LFS, so
+The backend follows the toolchain; `-DSAND_BACKEND=` overrides it. Both need `Sand/vendor/glfw` and
+`Sand/vendor/imgui`, which are tracked in the repository — GLFW's prebuilt `.lib` via Git LFS, so
 `git lfs install` has to happen before the clone. See BUILDING.md.
 
 The web target builds `Sand.html`, which needs serving over HTTP rather than opening off disk --

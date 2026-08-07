@@ -50,16 +50,32 @@ message(STATUS "Sand backend: ${SAND_BACKEND}")
 # -------------------------------------------------------------------------------------------------
 # Vendored dependencies
 # -------------------------------------------------------------------------------------------------
-# vendor/ is not in the repository -- see BUILDING.md -- so the failure has to name what is missing
-# rather than surfacing sixty lines later as an unfound header.
-set(SAND_VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor" CACHE PATH "Directory holding glfw/ and imgui/")
+# Sand/vendor/ IS in the repository -- glfw and imgui are both tracked, GLFW's prebuilt .lib through
+# Git LFS. See BUILDING.md. The default below has to name that location; it said plain vendor/ until
+# the vendoring landed, which was correct while the directory was something each clone made for
+# itself and silently wrong afterwards.
+set(SAND_VENDOR_IN_TREE "${CMAKE_CURRENT_SOURCE_DIR}/Sand/vendor")
+set(SAND_VENDOR_DIR "${SAND_VENDOR_IN_TREE}" CACHE PATH "Directory holding glfw/ and imgui/")
+
+# A build directory configured before that default was fixed still holds the old path in its cache,
+# and a cached value wins over a changed default -- so the fix alone would leave anyone with an
+# existing build-web/ staring at the same error and no reason for it. Repoint it, but only when the
+# cached path is genuinely unusable and the in-tree one is genuinely there, so that a deliberate
+# -DSAND_VENDOR_DIR pointing somewhere valid is never second-guessed.
+if(NOT EXISTS "${SAND_VENDOR_DIR}/imgui/imgui.cpp" AND EXISTS "${SAND_VENDOR_IN_TREE}/imgui/imgui.cpp")
+    message(STATUS "SAND_VENDOR_DIR was ${SAND_VENDOR_DIR}, which has no imgui -- "
+                   "using the vendored ${SAND_VENDOR_IN_TREE} instead.")
+    set(SAND_VENDOR_DIR "${SAND_VENDOR_IN_TREE}" CACHE PATH "Directory holding glfw/ and imgui/" FORCE)
+endif()
+
 set(IMGUI_DIR "${SAND_VENDOR_DIR}/imgui")
 
 if(NOT EXISTS "${IMGUI_DIR}/imgui.cpp")
     message(FATAL_ERROR
         "Dear ImGui not found at ${IMGUI_DIR}.\n"
-        "Clone it there (git clone https://github.com/ocornut/imgui) or point -DSAND_VENDOR_DIR at "
-        "the directory that holds glfw/ and imgui/.")
+        "It is tracked in this repository at Sand/vendor/imgui, so this points at an incomplete "
+        "checkout rather than a missing dependency. `git checkout -- Sand/vendor` restores it.\n"
+        "Or point -DSAND_VENDOR_DIR at a directory that holds glfw/ and imgui/.")
 endif()
 
 set(IMGUI_SOURCES
