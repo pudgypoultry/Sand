@@ -163,6 +163,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint cloudClumpThreshold;     // UNUSED: cloud spreads like sand, no cohesion
     uint rainWaitMinTicks;        // floor of a raincloud's wait at the ceiling
     uint steamCondenseTicks;      // dispatches of stillness before steam condenses in place
+    float cloudSmoothRate;        // how fast the drawn cloud surface follows the block field
 } tuning;
 
 // Per-frame state the CPU writes: camera pose, cursor position, brush.
@@ -977,8 +978,18 @@ uint cloudColumnBase(int x, int z) { return uint(x + z * WIDTH) * 4u; }
 void sampleCloudColumn(int x, int z, out float count, out float topY) {
     if (x < 0 || x >= WIDTH || z < 0 || z >= DEPTH) { count = 0.0f; topY = 0.0f; return; }
     uint b = cloudColumnBase(x, z);
-    count = float(cloudColumn[b + 2u]);
-    topY  = float(cloudColumn[b + 3u]);
+    // Sixteenths -- see the easing in falling_sand.comp's column rotation.
+    count = float(cloudColumn[b + 2u]) * (1.0f / 16.0f);
+    topY  = float(cloudColumn[b + 3u]) * (1.0f / 16.0f);
+
+    // Taper toward the world's edges. Without it the deck ends in a straight vertical wall exactly
+    // on the boundary, because a column off the edge reads as empty -- which is correct and looks
+    // like the sky was cut with a knife. cloudEdgeFadeDist was the old drifting-cloud field's border
+    // fade and was left dead when that went; this is the same idea doing the same job.
+    float d = max(tuning.cloudEdgeFadeDist, 0.001f);
+    float fx = smoothstep(0.0f, d, float(x)) * smoothstep(0.0f, d, float(WIDTH - 1 - x));
+    float fz = smoothstep(0.0f, d, float(z)) * smoothstep(0.0f, d, float(DEPTH - 1 - z));
+    count *= fx * fz;
 }
 
 // FUNCTION: smoothedCloudColumn

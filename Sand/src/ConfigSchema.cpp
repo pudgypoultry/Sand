@@ -44,7 +44,9 @@ const ConfigField kConfigFields[] = {
       "world units per second" },
     { "Clouds", "cloud.edge_fade_dist", "Edge fade dist", FieldKind::Float,
       offsetof(TuningParams, cloudEdgeFadeDist), 0.0, 100.0,
-      nullptr },
+      "How far in from the world's edges the cloud deck tapers off. Without it the deck ends in a "
+      "straight vertical wall exactly on the boundary, because a column past the edge reads as "
+      "empty -- correct, and it looks like the sky was cut with a knife." },
     { "Clouds", "cloud.charge_saturation", "Charge saturation", FieldKind::Float,
       offsetof(TuningParams, cloudChargeSaturation), 100.0, 200000.0,
       nullptr },
@@ -94,6 +96,12 @@ const ConfigField kConfigFields[] = {
       "failsafe: steam normally condenses on reaching the roof or on rising into settled cloud, but "
       "a cloud block can rise into a steam voxel's cell, and steam in that position is touching "
       "cloud without being under it. Rather than enumerate those cases, stalled steam condenses." },
+    { "Clouds", "cloud.smooth_rate", "Surface smooth rate", FieldKind::Float,
+      offsetof(TuningParams, cloudSmoothRate), 0.01, 1.0,
+      "How fast the drawn cloud surface follows the block field, per dispatch. The field is never "
+      "still -- blocks rise, rainclouds fall -- so a surface drawn straight from this dispatch's "
+      "counts changes every dispatch and the deck boils. Easing it lets the shape drift instead. "
+      "1.0 disables the smoothing." },
     { "Clouds", "cloud.column_full_count", "Column full count", FieldKind::Float,
       offsetof(TuningParams, cloudColumnFullCount), 1.0, 512.0,
       "How many cloud blocks stacked in one column read as a fully dense cloud. Lower makes thin "

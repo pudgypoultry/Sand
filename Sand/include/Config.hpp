@@ -47,13 +47,14 @@ struct TuningParams {
     // water deficit, driving opacity between cloudMinAlpha and cloudMaxAlpha and greying the sky as
     // it rises -- so the whole sky still reacts as one mass.
     //
-    // Four of the fields below are dead: clouds became simulated voxels, so there is no drifting
-    // population to count, no drift speed, no ellipsoid edge to fade, and no water deficit for the
-    // charge to track. They stay declared because every field after them has an offset both shaders
-    // depend on -- see the note on renderScale at the end of this struct.
+    // Three of the fields below are dead: clouds became simulated voxels, so there is no drifting
+    // population to count, no drift speed, and no water deficit for the charge to track. They stay
+    // declared because every field after them has an offset both shaders depend on -- see the note
+    // on renderScale at the end of this struct. cloudEdgeFadeDist came back into use: it fades the
+    // deck at the world's edges, which is the same job it did for the old ellipsoids.
     uint32_t cloudCount = 32;          // UNUSED: clouds are voxels now, not a fixed population
     float cloudDriftSpeed = 2.0f;      // UNUSED: clouds no longer drift
-    float cloudEdgeFadeDist = 20.0f;   // UNUSED: no ellipsoid footprint left to fade at a border
+    float cloudEdgeFadeDist = 20.0f;   // in use again: tapers the cloud deck at the world's edges
     float cloudChargeSaturation = 20000.0f; // UNUSED: charge tracks the storm phase, not a deficit
     float cloudChargeEaseRate = 0.02f; // per dispatch, so it is framerate-dependent by design
     float cloudMinAlpha = 0.00f;       // set to 0 for a completely clear sky until steam appears
@@ -310,6 +311,12 @@ struct TuningParams {
     // neither rule fires and it hangs there. Rather than enumerate the ways that can happen, steam
     // that has gone nowhere for this long simply becomes cloud.
     uint32_t steamCondenseTicks = 10;
+    // How fast the drawn cloud surface follows the block field, per dispatch, 0..1.
+    //
+    // The field is never still -- blocks rise, rainclouds fall -- so a surface drawn straight from
+    // this dispatch's counts changes every dispatch, and the deck boils. Easing it means the shape
+    // drifts smoothly instead. 1.0 disables the smoothing and restores the boiling.
+    float cloudSmoothRate = 0.08f;
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

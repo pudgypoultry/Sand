@@ -78,6 +78,8 @@ cloud.rain_wait_max_ticks=2048
 cloud.rain_wait_min_ticks=256
 # Failsafe: steam that has not moved for this many dispatches condenses where it stands.
 cloud.steam_condense_ticks=10
+# How fast the drawn cloud surface follows the block field. Lower is steadier.
+cloud.smooth_rate=0.08
 # Column depth that reads as fully dense, and how far a cloud hangs per block under it.
 cloud.column_full_count=10.0
 cloud.thickness_per_block=1.5

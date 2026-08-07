@@ -211,6 +211,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint cloudClumpThreshold;     // UNUSED: cloud spreads like sand, no cohesion
     uint rainWaitMinTicks;        // floor of a raincloud's wait at the ceiling
     uint steamCondenseTicks;      // dispatches of stillness before steam condenses in place
+    float cloudSmoothRate;        // how fast the drawn cloud surface follows the block field
 } tuning;
 
 #define LAYER_SIZE (uint(WIDTH) * uint(HEIGHT)) // one layer of the world
@@ -355,6 +356,22 @@ bool cloudCellInBounds(ivec3 p) {
     return p.x >= 1 && p.x < WIDTH - 1 &&
            p.y >= 1 && p.y < HEIGHT - 1 &&
            p.z >= 1 && p.z < DEPTH - 1;
+}
+
+// FUNCTION: easeTowards
+// One step of an exponential average held as an integer, guaranteed to arrive.
+//
+// The obvious form -- uint(old + (target - old) * rate) -- does not. Once the remaining difference
+// is small the step is under one unit and the truncation throws it away, so the value parks short of
+// the target and stays there: at a rate of 0.08 an average chasing one block settles a quarter of
+// the way and never moves again. Forcing a whole unit of movement whenever there is any difference
+// left fixes that, and clamping to the target stops the forced step overshooting.
+uint easeTowards(uint current, float target, float rate) {
+    float old = float(current);
+    float next = old + (target - old) * rate;
+    if (target > old)      next = clamp(max(next, old + 1.0f), old, target);
+    else if (target < old) next = clamp(min(next, old - 1.0f), target, old);
+    return uint(max(next, 0.0f));
 }
 
 // FUNCTION: cloudTouchesRain
@@ -2748,8 +2765,21 @@ void updateCloudBlock(ivec3 pos) {
     // Rotate this column's census. y == 0 is in every column and is visited exactly once per
     // dispatch, which makes it the natural single writer for the column.
     if (pos.y == 0) {
-        cloudColumn[base + 2u] = cloudColumn[base + 0u];
-        cloudColumn[base + 3u] = cloudColumn[base + 1u];
+        // Eased into the published pair rather than copied, and held in sixteenths.
+        //
+        // The block field is never still, so a surface drawn straight from this dispatch's tally
+        // changes every dispatch and the deck boils -- which is what the edge flicker is, once the
+        // fill pattern itself was made stable. An exponential average lets the drawn shape drift
+        // toward the truth over tens of dispatches instead of chasing it every one.
+        //
+        // Sixteenths because the average has to be able to move by less than a whole block: at
+        // integer resolution a rate of 0.08 against a difference of one truncates to zero and the
+        // value sticks forever, one short of where it should be.
+        float rate = clamp(tuning.cloudSmoothRate, 0.01f, 1.0f);
+        cloudColumn[base + 2u] = easeTowards(cloudColumn[base + 2u],
+                                             float(cloudColumn[base + 0u]) * 16.0f, rate);
+        cloudColumn[base + 3u] = easeTowards(cloudColumn[base + 3u],
+                                             float(cloudColumn[base + 1u]) * 16.0f, rate);
         cloudColumn[base + 0u] = 0u;
         cloudColumn[base + 1u] = 0u;
     }
