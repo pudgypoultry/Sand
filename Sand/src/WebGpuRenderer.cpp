@@ -246,7 +246,7 @@ void WebGpuRenderer::onDeviceReady(WGPUDevice newDevice) try {
     // blank -- indistinguishable, without these, from the device never arriving at all.
     std::printf("[sand] creating buffers\n");        createWorldBuffers();
     std::printf("[sand] uploading tuning\n");        uploadTuning();
-    std::printf("[sand] seeding world\n");           seedWorld();
+    std::printf("[sand] clearing world\n");          resetWorld();
     std::printf("[sand] raymarch pipeline\n");       createRaymarchPipeline();
     std::printf("[sand] simulate pipeline\n");       createSimulatePipeline();
     std::printf("[sand] bind groups\n");             createBindGroups();
@@ -327,61 +327,44 @@ void WebGpuRenderer::uploadFrameConstants() {
     wgpuQueueWriteBuffer(queue, frameBuffer, 0, &frameConstants, sizeof(FrameConstants));
 }
 
-// seedWorld: fills the grid on the CPU, because there is no simulation yet to fill it.
+// resetWorld: an empty world and a clean set of counters, exactly as the desktop starts.
 //
-// Milestone 3 replaces this with the compute shader and the world goes back to starting empty. Until
-// then an empty grid would render as empty sky, which proves nothing -- so this lays down something
-// deliberately diagnostic: a floor, and one pillar per material in id order. If the raymarcher, the
-// palette, the lighting and the uniform layout are all right, that reads as a neat row of correctly
-// coloured columns. If TuningParams is misaligned by even one field, the world extents are wrong and
-// it does not.
-void WebGpuRenderer::seedWorld() {
-    const uint32_t W = config.tuning.gridWidth;
-    const uint32_t H = config.tuning.gridHeight;
-    const uint32_t D = config.tuning.gridDepth;
+// This used to seed a diagnostic world -- a stone floor and one pillar per material in id order --
+// because milestone 2 had no simulation and an empty grid would have proved nothing. It outlived
+// its purpose and became a bug.
+//
+// The counters in SimStats are maintained BY THE SHADER as voxels are created and destroyed;
+// waterVoxelCount is incremented by incWater and decremented by decWater on every transition that
+// makes or unmakes a type-2 voxel. Writing water into the grid from the CPU puts voxels in the
+// world that the counter never saw. When that water later evaporated, decWater ran on a count of
+// zero -- and decWater is deliberately NOT saturating, because atomicAdd has no signed form and it
+// relies on wraparound to subtract. The count wrapped to about four billion, the high mark
+// followed it, and the sky spent the rest of the session chasing a deficit that was never real.
+// falling_sand.comp's decWaterHighMark carries a comment describing precisely this failure, which
+// is what the seed walked into.
+//
+// So: nothing but zeroes, which is what VulkanRenderer's memset leaves (VulkanRenderer.cpp:314).
+// The two builds now start from byte-identical state.
+void WebGpuRenderer::resetWorld() {
+    // Cleared on the GPU rather than uploaded. A grid at the practical ceiling is 125 MiB, and
+    // pushing that much zeroed memory through the queue on every Apply is worth avoiding when the
+    // API will do it in place.
+    WGPUCommandEncoderDescriptor encDesc = WGPU_COMMAND_ENCODER_DESCRIPTOR_INIT;
+    encDesc.label = sv("reset world");
+    WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+    wgpuCommandEncoderClearBuffer(enc, gridBuffer, 0, wgpuBufferGetSize(gridBuffer));
 
-    std::vector<uint32_t> voxels(voxelCount(), 0u);
-    auto at = [&](uint32_t x, uint32_t y, uint32_t z) -> uint32_t& {
-        return voxels[x + (size_t)y * W + (size_t)z * W * H];
-    };
-    // Matches pack() in falling_sand.comp: type in the low byte, age in the high one.
-    auto pack = [](uint32_t type, uint32_t age) { return type | (age << 24); };
+    WGPUCommandBufferDescriptor cbDesc = WGPU_COMMAND_BUFFER_DESCRIPTOR_INIT;
+    WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc, &cbDesc);
+    wgpuQueueSubmit(queue, 1, &cb);
+    wgpuCommandBufferRelease(cb);
+    wgpuCommandEncoderRelease(enc);
 
-    const uint32_t STONE = 3u, FLOOR_TOP = 4u;
-    for (uint32_t y = 0; y < FLOOR_TOP && y < H; y++)
-        for (uint32_t z = 0; z < D; z++)
-            for (uint32_t x = 0; x < W; x++)
-                at(x, y, z) = pack(STONE, 0u);
-
-    // One pillar per material, id 1 upward, spaced so they do not touch. The lava and locust stages
-    // and dark stone all read an age byte, so each is seeded with a plausible one -- otherwise a
-    // stage-3 lava would render as stage 0 and the test would quietly not be testing anything.
-    const uint32_t MATERIAL_COUNT = 20u;
-    const uint32_t spacing = 4u;
-    const uint32_t pillarHeight = 6u;
-    for (uint32_t m = 1; m < MATERIAL_COUNT; m++) {
-        const uint32_t x = spacing * m;
-        const uint32_t z = D / 2;
-        if (x + 1 >= W) break;
-
-        uint32_t age = 0u;
-        if (m >= 8u && m <= 11u) age = (m - 8u) * 60u;   // lava coolness, one per stage
-        else if (m == 12u)       age = 255u;             // dark stone
-        else if (m >= 13u && m <= 17u) age = 10u * (m - 12u); // locust head count, 10..50
-
-        for (uint32_t y = FLOOR_TOP; y < FLOOR_TOP + pillarHeight && y < H; y++)
-            for (uint32_t dz = 0; dz < 2; dz++)
-                for (uint32_t dx = 0; dx < 2; dx++)
-                    if (x + dx < W && z + dz < D) at(x + dx, y, z + dz) = pack(m, age);
-    }
-
-    wgpuQueueWriteBuffer(queue, gridBuffer, 0, voxels.data(), voxels.size() * sizeof(uint32_t));
-
+    // Every counter to zero, with the one exception the desktop also makes: maxOccupiedY starts at
+    // the roof. Over-reporting it only costs the renderer some empty sky to march, while
+    // under-reporting hides matter that is really there.
     std::vector<uint32_t> stats(SimStats::kFieldCount, 0u);
-    // maxOccupiedY starts at the roof, as it does on the desktop: over-reporting only costs the
-    // renderer some empty sky, while under-reporting hides matter. Nothing walks it down here --
-    // that is the compute shader's job and there isn't one yet -- so it simply stays open.
-    stats[SimStats::kMaxY] = H;
+    stats[SimStats::kMaxY] = config.tuning.gridHeight;
     wgpuQueueWriteBuffer(queue, statsBuffer, 0, stats.data(), stats.size() * sizeof(uint32_t));
 }
 
@@ -628,7 +611,7 @@ void WebGpuRenderer::applyOptions(const TuningParams& requested) {
     }
 
     uploadTuning();
-    seedWorld();
+    resetWorld();
     window->resetCamera();
 
     if (saveConfig(configPath, config)) {

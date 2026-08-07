@@ -50,7 +50,7 @@ private:
     void createRaymarchPipeline();
     void createSimulatePipeline();
     void createBindGroups();
-    void seedWorld();
+    void resetWorld();
     void beginPurge();
     void applyOptions(const TuningParams& requested);
     void releaseWorldBuffers();

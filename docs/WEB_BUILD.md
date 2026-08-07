@@ -363,6 +363,19 @@ Sequenced so the boring parts are proven before the hard part is started.
    the `std140` → WGSL uniform layout are right, that reads as a neat row of correctly coloured
    columns; if `TuningParams` is misaligned by one field the world extents are wrong and it does
    not.
+
+   That seed has since been **removed**, and is worth recording as a cautionary tale. It outlived
+   milestone 3 and turned into a simulation bug: the counters in `SimStats` are maintained by the
+   shader as voxels are created and destroyed, so writing voxels in from the CPU puts matter in the
+   world that those counters never saw. The pillar row included one of every material, so it seeded
+   water that `waterVoxelCount` did not know about and black holes with no entry in the table. When
+   the uncounted water later evaporated, `decWater` ran on a count of zero — and it is deliberately
+   not saturating, because `atomicAdd` has no signed form and it subtracts by wrapping. The count
+   became about four billion, `waterHighMark` followed, and the sky spent the rest of the session
+   raining against a deficit that never existed. `decWaterHighMark` in `falling_sand.comp` carries a
+   comment describing exactly this failure for the sibling counter; the seed walked into it from the
+   other side. The world now starts empty, which is byte-for-byte what `VulkanRenderer`'s `memset`
+   leaves.
 3. **~~`falling_sand.comp`.~~ DONE — it simulates.** Expected to be the bulk of the work and was
    not: naga handles the atomic split, the workgroup was already fixed, and the uniform layout was
    proved by milestone 2. The renderer runs a compute pass before the render pass, dispatching once
