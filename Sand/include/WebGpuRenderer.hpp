@@ -88,6 +88,7 @@ private:
 
     // The four bindings the shaders declare, in the order the WGSL numbers them.
     WGPUBuffer gridBuffer   = nullptr;  // binding 0, storage: one uint per voxel
+    WGPUBuffer cloudBuffer  = nullptr;  // binding 4, storage: the cloud field, parallel to the grid
     WGPUBuffer statsBuffer  = nullptr;  // binding 1, storage: the SimStats block
     WGPUBuffer tuningBuffer = nullptr;  // binding 2, uniform: TuningParams
     WGPUBuffer frameBuffer  = nullptr;  // binding 3, uniform: FrameConstants

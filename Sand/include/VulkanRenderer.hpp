@@ -46,6 +46,9 @@ private:
     std::unique_ptr<VulkanPipeline> pipeline;
 
     std::unique_ptr<VulkanBuffer> ssboBuffer;
+    // The cloud field, parallel to ssboBuffer and the same size. Separate so a cloud block can share
+    // a cell with ordinary matter without either being able to disturb the other.
+    std::unique_ptr<VulkanBuffer> cloudBuffer;
     std::unique_ptr<VulkanBuffer> steamCounterBuffer;
     std::unique_ptr<VulkanBuffer> tuningBuffer;
 

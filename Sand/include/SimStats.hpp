@@ -11,11 +11,15 @@
 namespace SimStats {
 
 inline constexpr uint32_t kBlackHoleMax = 8;
-inline constexpr uint32_t kCloudMax = 64;
 
-// The nine scalars at the top: waterVoxelCount, waterHighMark, cloudWaterCount, rainPhase,
-// rainPhaseTimeBits, rainTargetLevel, rainCandidateCount, rainCandidateEstimate, cloudChargeBits.
-inline constexpr uint32_t kCloudScalarCount = 9;
+// The twelve scalars at the top: waterVoxelCount, waterHighMark, cloudWaterCount, rainPhase,
+// rainPhaseTimeBits, rainTargetLevel, rainCandidateCount, rainCandidateEstimate, cloudChargeBits,
+// cloudBlockCount, cloudMovedCount, cloudStillTicks.
+//
+// waterHighMark, cloudWaterCount and rainTargetLevel are dead -- weather is driven by the cloud
+// field going still rather than by a water deficit -- but they are still declared, in the shaders
+// too, so that removing them cannot shift the offset of anything after them.
+inline constexpr uint32_t kCloudScalarCount = 12;
 
 inline constexpr uint32_t kCount  = kCloudScalarCount;   // blackHoleCount
 inline constexpr uint32_t kMaxY   = kCount + 1;          // maxOccupiedY
@@ -24,9 +28,26 @@ inline constexpr uint32_t kMass   = kHoles + kBlackHoleMax;    // blackHoleMass[
 inline constexpr uint32_t kStarve = kMass + kBlackHoleMax;     // blackHoleStarve[]
 inline constexpr uint32_t kStarveEnd = kStarve + kBlackHoleMax;
 
-// Cloud placement, cached once per dispatch rather than re-derived by every voxel and every pixel.
-// Seven floats per cloud: centre xyz, radius xyz, edge fade.
-inline constexpr uint32_t kFieldCount = kStarveEnd + kCloudMax * 7;
+// The end of the fixed part of the buffer. The cloud placement cache that used to sit here is gone
+// with the drifting-ellipsoid cloud field it served.
+inline constexpr uint32_t kFieldCount = kStarveEnd;
+
+// Past kFieldCount the buffer carries a per-column cloud census, four words per column, laid out
+// at (x + z * gridWidth) * kColumnWords:
+//   +0 accumulator count, +1 accumulator top Y, +2 published count, +3 published top Y.
+//
+// This makes the stats buffer VARIABLE LENGTH -- it is kFieldCount + gridWidth * gridDepth *
+// kColumnWords words, and both renderers must size it that way and resize it when the world does.
+// In the shaders it is a runtime-sized array, which std430 permits only as the block's last member,
+// so nothing may be appended to SimStats after it.
+inline constexpr uint32_t kColumnWords = 4;
+inline constexpr uint32_t kColumnBase  = kFieldCount;
+
+// FUNCTION: statsWordCount
+// The whole buffer's length in uint32s for a given world shape.
+inline constexpr uint32_t statsWordCount(uint32_t gridWidth, uint32_t gridDepth) {
+    return kFieldCount + gridWidth * gridDepth * kColumnWords;
+}
 
 // Black hole table slot encoding. Must match the constants in falling_sand.comp.
 inline constexpr uint32_t kActive    = 0x80000000u;

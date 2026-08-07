@@ -69,6 +69,24 @@ const ConfigField kConfigFields[] = {
     { "Clouds", "cloud.max_steps", "Max steps", FieldKind::UInt,
       offsetof(TuningParams, maxCloudSteps), 1.0, 128.0,
       nullptr },
+    { "Clouds", "cloud.still_ticks_to_storm", "Still ticks to storm", FieldKind::UInt,
+      offsetof(TuningParams, cloudStillTicksToStorm), 1.0, 100000.0,
+      "Dispatches every cloud block must go without moving before the sky darkens and a storm "
+      "begins. Counted in dispatches rather than seconds, so the simulation speed slider scales it. "
+      "Low values make weather easy to observe; the sky will barely settle before it rains." },
+    { "Clouds", "cloud.storm_wait_max_ticks", "Storm wait max ticks", FieldKind::UInt,
+      offsetof(TuningParams, stormWaitMaxTicks), 1.0, 255.0,
+      "A storm block that reaches the ceiling waits a random number of dispatches up to this before "
+      "turning into water, so rain arrives scattered rather than as one sheet. Capped at 255 by the "
+      "8-bit wait field in the cloud word." },
+    { "Clouds", "cloud.column_full_count", "Column full count", FieldKind::Float,
+      offsetof(TuningParams, cloudColumnFullCount), 1.0, 512.0,
+      "How many cloud blocks stacked in one column read as a fully dense cloud. Lower makes thin "
+      "cloud look solid sooner. This is what keeps cloud density from depending on world size." },
+    { "Clouds", "cloud.thickness_per_block", "Thickness per block", FieldKind::Float,
+      offsetof(TuningParams, cloudThicknessPerBlock), 0.1, 16.0,
+      "World units of cloud drawn per cloud block in the column, measured downward from the top of "
+      "the pile. Larger makes the same amount of cloud hang lower." },
 
     // ---- Physics ----
     { "Physics", "physics.sand_moisture_capacity", "Sand moisture capacity", FieldKind::UInt,

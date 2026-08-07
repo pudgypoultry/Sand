@@ -290,6 +290,9 @@ void WebGpuRenderer::createWorldBuffers() {
     // advertises fails at creation with a validation message rather than anywhere useful. Said out
     // loud here because the sizes involved are ordinary for this program -- 320^3 is 125 MiB and
     // fits, 384^3 is 216 MiB and does not.
+    // Doubled since clouds became voxels: the cloud field is a second buffer of exactly this size.
+    // Each stays under the per-binding limit independently, which is what the check below tests, but
+    // the device is now asked for twice the memory it used to be for the same world.
     if (gridBytes > 134217728ull) {
         std::fprintf(stderr,
             "[sand] grid is %llu MiB, over WebGPU's default 128 MiB storage-binding limit. "
@@ -303,8 +306,17 @@ void WebGpuRenderer::createWorldBuffers() {
     desc.size = gridBytes;
     gridBuffer = wgpuDeviceCreateBuffer(device, &desc);
 
+    // The cloud field: one uint per voxel, parallel to the grid. Separate so a cloud block can
+    // share a cell with ordinary matter -- see the CLOUD BLOCKS comment in falling_sand.comp.
+    desc.label = sv("cloud");
+    desc.size = gridBytes;
+    cloudBuffer = wgpuDeviceCreateBuffer(device, &desc);
+
+    // Variable length: the fixed scalars and the black hole table, then four words per column of
+    // cloud census. Resized with the world, which is why createWorldBuffers owns it.
     desc.label = sv("stats");
-    desc.size = (uint64_t)SimStats::kFieldCount * sizeof(uint32_t);
+    desc.size = (uint64_t)SimStats::statsWordCount(config.tuning.gridWidth, config.tuning.gridDepth)
+              * sizeof(uint32_t);
     statsBuffer = wgpuDeviceCreateBuffer(device, &desc);
 
     // Uniform buffer sizes are rounded up to 16: WebGPU requires the binding size to be a multiple
@@ -353,6 +365,7 @@ void WebGpuRenderer::resetWorld() {
     encDesc.label = sv("reset world");
     WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device, &encDesc);
     wgpuCommandEncoderClearBuffer(enc, gridBuffer, 0, wgpuBufferGetSize(gridBuffer));
+    wgpuCommandEncoderClearBuffer(enc, cloudBuffer, 0, wgpuBufferGetSize(cloudBuffer));
 
     WGPUCommandBufferDescriptor cbDesc = WGPU_COMMAND_BUFFER_DESCRIPTOR_INIT;
     WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc, &cbDesc);
@@ -363,7 +376,8 @@ void WebGpuRenderer::resetWorld() {
     // Every counter to zero, with the one exception the desktop also makes: maxOccupiedY starts at
     // the roof. Over-reporting it only costs the renderer some empty sky to march, while
     // under-reporting hides matter that is really there.
-    std::vector<uint32_t> stats(SimStats::kFieldCount, 0u);
+    std::vector<uint32_t> stats(
+        SimStats::statsWordCount(config.tuning.gridWidth, config.tuning.gridDepth), 0u);
     stats[SimStats::kMaxY] = config.tuning.gridHeight;
     wgpuQueueWriteBuffer(queue, statsBuffer, 0, stats.data(), stats.size() * sizeof(uint32_t));
 }
@@ -470,10 +484,10 @@ void WebGpuRenderer::createSimulatePipeline() {
     std::printf("[sand]   module created\n");
     dumpCompilationInfo(module, "falling_sand.wgsl");
 
-    // The same four buffers as the render pass, but the grid and the stats are read_write here.
-    // That is the whole reason for a second layout: a fragment shader may not bind a read-write
-    // storage buffer at all, so the two stages cannot share one.
-    WGPUBindGroupLayoutEntry entries[4] = {};
+    // The render pass's four buffers with the grid and stats read_write, plus the cloud field,
+    // which only this stage touches. That is the whole reason for a second layout: a fragment
+    // shader may not bind a read-write storage buffer at all, so the two stages cannot share one.
+    WGPUBindGroupLayoutEntry entries[5] = {};
     for (auto& e : entries) e = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
 
     entries[0].binding = 0;
@@ -492,9 +506,15 @@ void WebGpuRenderer::createSimulatePipeline() {
     entries[3].visibility = WGPUShaderStage_Compute;
     entries[3].buffer.type = WGPUBufferBindingType_Uniform;
 
+    // 4, not the next free number: 3 is the ex-push-constant uniform, and the desktop leaves this
+    // number free so one set of binding numbers serves both backends.
+    entries[4].binding = 4;
+    entries[4].visibility = WGPUShaderStage_Compute;
+    entries[4].buffer.type = WGPUBufferBindingType_Storage;
+
     WGPUBindGroupLayoutDescriptor layoutDesc = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
     layoutDesc.label = sv("simulate bindings");
-    layoutDesc.entryCount = 4;
+    layoutDesc.entryCount = 5;
     layoutDesc.entries = entries;
     computeBindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &layoutDesc);
     std::printf("[sand]   compute bind group layout\n");
@@ -518,22 +538,28 @@ void WebGpuRenderer::createSimulatePipeline() {
     wgpuShaderModuleRelease(module);
 }
 
-// createBindGroups: names the four buffers to both layouts.
+// createBindGroups: names the buffers to both layouts.
 //
 // Separate from pipeline creation because a bind group is immutable -- WebGPU has no equivalent of
 // rewriting a descriptor set in place. Resizing the world makes new buffers, and new buffers mean
 // new bind groups even though the layouts and the pipelines are untouched.
 void WebGpuRenderer::createBindGroups() {
-    WGPUBindGroupEntry bound[4] = {};
+    WGPUBindGroupEntry bound[5] = {};
     for (auto& b : bound) b = WGPU_BIND_GROUP_ENTRY_INIT;
     bound[0].binding = 0; bound[0].buffer = gridBuffer;   bound[0].size = wgpuBufferGetSize(gridBuffer);
     bound[1].binding = 1; bound[1].buffer = statsBuffer;  bound[1].size = wgpuBufferGetSize(statsBuffer);
     bound[2].binding = 2; bound[2].buffer = tuningBuffer; bound[2].size = wgpuBufferGetSize(tuningBuffer);
     bound[3].binding = 3; bound[3].buffer = frameBuffer;  bound[3].size = wgpuBufferGetSize(frameBuffer);
+    bound[4].binding = 4; bound[4].buffer = cloudBuffer;  bound[4].size = wgpuBufferGetSize(cloudBuffer);
 
     WGPUBindGroupDescriptor bgDesc = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
-    bgDesc.entryCount = 4;
     bgDesc.entries = bound;
+
+    // The render group gets four entries and the compute group five. A bind group must match its
+    // layout exactly -- listing the cloud field in the render group would be rejected, because
+    // raymarch.frag does not declare it. It draws clouds from the per-column census in SimStats
+    // instead, which is one number per column rather than one per voxel.
+    bgDesc.entryCount = 4;
 
     if (renderBindGroup)  { wgpuBindGroupRelease(renderBindGroup);  renderBindGroup = nullptr; }
     if (computeBindGroup) { wgpuBindGroupRelease(computeBindGroup); computeBindGroup = nullptr; }
@@ -542,6 +568,7 @@ void WebGpuRenderer::createBindGroups() {
     bgDesc.layout = renderBindGroupLayout;
     renderBindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
 
+    bgDesc.entryCount = 5;
     bgDesc.label = sv("simulate bind group");
     bgDesc.layout = computeBindGroupLayout;
     computeBindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
@@ -549,6 +576,7 @@ void WebGpuRenderer::createBindGroups() {
 
 void WebGpuRenderer::releaseWorldBuffers() {
     if (gridBuffer)  { wgpuBufferDestroy(gridBuffer);  wgpuBufferRelease(gridBuffer);  gridBuffer = nullptr; }
+    if (cloudBuffer) { wgpuBufferDestroy(cloudBuffer); wgpuBufferRelease(cloudBuffer); cloudBuffer = nullptr; }
     if (statsBuffer) { wgpuBufferDestroy(statsBuffer); wgpuBufferRelease(statsBuffer); statsBuffer = nullptr; }
 }
 
@@ -567,7 +595,10 @@ void WebGpuRenderer::beginPurge() {
     const uint32_t w = config.tuning.gridWidth, h = config.tuning.gridHeight, d = config.tuning.gridDepth;
     const uint32_t centre = (w / 2) + (h / 2) * w + (d / 2) * w * h;
 
-    std::vector<uint32_t> stats(SimStats::kFieldCount, 0u);
+    // Full length, so the per-column cloud census is zeroed along with everything else. A short
+    // write would leave the renderer drawing clouds over columns whose blocks are about to go.
+    std::vector<uint32_t> stats(
+        SimStats::statsWordCount(config.tuning.gridWidth, config.tuning.gridDepth), 0u);
     stats[SimStats::kHoles]  = SimStats::kActive | SimStats::kPurge | centre;
     stats[SimStats::kMass]   = config.tuning.purgeMass;
     stats[SimStats::kStarve] = 0u;
@@ -580,6 +611,19 @@ void WebGpuRenderer::beginPurge() {
 
     const uint32_t hole = 7u; // pack(BlackHole, 0, 0, 0)
     wgpuQueueWriteBuffer(queue, gridBuffer, (uint64_t)centre * sizeof(uint32_t), &hole, sizeof(hole));
+
+    // The cloud field too. The purge hole eats the main grid, but it has no reach into the cloud
+    // buffer -- nothing in there is matter it can capture -- so those blocks would outlive a Clear
+    // Grid and rain onto the emptied world afterwards.
+    WGPUCommandEncoderDescriptor encDesc = WGPU_COMMAND_ENCODER_DESCRIPTOR_INIT;
+    encDesc.label = sv("purge clouds");
+    WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+    wgpuCommandEncoderClearBuffer(enc, cloudBuffer, 0, wgpuBufferGetSize(cloudBuffer));
+    WGPUCommandBufferDescriptor cbDesc = WGPU_COMMAND_BUFFER_DESCRIPTOR_INIT;
+    WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc, &cbDesc);
+    wgpuQueueSubmit(queue, 1, &cb);
+    wgpuCommandBufferRelease(cb);
+    wgpuCommandEncoderRelease(enc);
 
     std::printf("[sand] purge started: one black hole at the centre, eating the world.\n");
 }

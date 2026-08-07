@@ -219,15 +219,30 @@ void VulkanRenderer::createWorldBuffers() {
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
 
-    // Shared simulation stats: 9 cloud/water scalars (waterVoxelCount, waterHighMark,
+    // The cloud field: one uint per voxel, exactly parallel to the grid above and indexed the same
+    // way. Cloud blocks live here so that they can share a cell with ordinary matter -- see the
+    // CLOUD BLOCKS comment in falling_sand.comp for why a flag inside the voxel word could not work.
+    // Bound at binding 4, compute only.
+    cloudBuffer = std::make_unique<VulkanBuffer>(
+        context.get(),
+        bufferSize,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+
+    // Shared simulation stats: 12 cloud/water scalars (waterVoxelCount, waterHighMark,
     // cloudWaterCount, rainPhase, rainPhaseTimeBits, rainTargetLevel, rainCandidateCount,
-    // rainCandidateEstimate, cloudChargeBits), then maxOccupiedY and the black hole table
-    // (blackHoleCount plus SimStats::kBlackHoleMax slots), then the per-cloud placement cache. Must stay in
-    // sync with the SimStats block in falling_sand.comp and raymarch.frag.
+    // rainCandidateEstimate, cloudChargeBits, cloudBlockCount, cloudMovedCount, cloudStillTicks),
+    // then maxOccupiedY and the black hole table (blackHoleCount plus SimStats::kBlackHoleMax
+    // slots), then the per-column cloud census. Must stay in sync with the SimStats block in
+    // falling_sand.comp and raymarch.frag.
+    //
+    // Variable length now: the census is four words per column, so the buffer grows with the world
+    // and has to be rebuilt when the world is resized.
     // Bound at binding 1, shared by compute and fragment.
     steamCounterBuffer = std::make_unique<VulkanBuffer>(
         context.get(),
-        sizeof(uint32_t) * SimStats::kFieldCount,
+        sizeof(uint32_t) * SimStats::statsWordCount(config.tuning.gridWidth, config.tuning.gridDepth),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
@@ -302,6 +317,7 @@ void VulkanRenderer::cleanup() {
 
     // Frees VRAM automatically via the VulkanBuffer destructor
     ssboBuffer.reset();
+    cloudBuffer.reset();
     steamCounterBuffer.reset();
     tuningBuffer.reset();
 }
@@ -314,11 +330,17 @@ void VulkanRenderer::seedParticles() {
     memset(data, 0, sizeof(uint32_t) * totalVoxels);
     ssboBuffer->unmapMemory();
 
+    // The cloud field starts empty too. Sharing the grid's dimensions, it shares its clear.
+    void* cloudData = cloudBuffer->mapMemory();
+    memset(cloudData, 0, sizeof(uint32_t) * totalVoxels);
+    cloudBuffer->unmapMemory();
+
     // Every SimStats field starts at 0, including cloudChargeBits -- a zero bit pattern is
     // +0.0f as a float, so the sky correctly starts completely uncharged with no sentinel needed.
     // Zero is also the "free slot" marker for the black hole table, so clearing the grid correctly
     // forgets every hole that was in it.
-    std::vector<uint32_t> statsInit(SimStats::kFieldCount, 0u);
+    std::vector<uint32_t> statsInit(
+        SimStats::statsWordCount(config.tuning.gridWidth, config.tuning.gridDepth), 0u);
 
     // maxOccupiedY is the exception: it starts at the roof rather than at zero. Over-reporting it is
     // always safe (the renderer just marches sky that turns out to be empty) while under-reporting
@@ -364,10 +386,23 @@ void VulkanRenderer::beginPurge() {
         stats[SimStats::kStarve + i] = 0u;
     }
 
-    // Sky back to base. Zeroing waterHighMark here matters beyond tidiness: the purge is about to
-    // destroy every water voxel in the world, and a high mark left standing would read as an
-    // enormous permanent deficit afterwards and open a storm over an empty grid.
+    // Sky back to base. Clearing the scalars matters beyond tidiness: waterVoxelCount is about to
+    // stop describing a world that is being destroyed, and cloudStillTicks left standing would have
+    // the sky open a storm over an empty grid the moment the purge finishes.
     for (uint32_t i = 0; i < SimStats::kCloudScalarCount; i++) stats[i] = 0u;
+
+    // The per-column cloud census as well, or the renderer keeps drawing clouds over columns whose
+    // cloud blocks are about to be erased below.
+    const uint32_t columnWords =
+        config.tuning.gridWidth * config.tuning.gridDepth * SimStats::kColumnWords;
+    for (uint32_t i = 0; i < columnWords; i++) stats[SimStats::kColumnBase + i] = 0u;
+
+    // And the cloud field itself. The purge hole eats the main grid, but it has no reach into the
+    // cloud buffer -- nothing there is matter it can capture -- so those blocks would survive a
+    // Clear Grid and rain down onto the empty world afterwards.
+    uint32_t* cloud = static_cast<uint32_t*>(cloudBuffer->mapMemory());
+    memset(cloud, 0, sizeof(uint32_t) * voxelCount());
+    cloudBuffer->unmapMemory();
 
     const uint32_t w = config.tuning.gridWidth, h = config.tuning.gridHeight, d = config.tuning.gridDepth;
     const uint32_t centre = (w / 2) + (h / 2) * w + (d / 2) * w * h;
@@ -417,7 +452,7 @@ void VulkanRenderer::createFramebuffers() {
 void VulkanRenderer::createDescriptorSet() {
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[0].descriptorCount = 2; // grid + cloud/water stats
+    poolSizes[0].descriptorCount = 3; // grid + cloud/water stats + cloud voxels
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 1; // tuning params
 
@@ -467,7 +502,12 @@ void VulkanRenderer::writeDescriptorSet() {
     tuningBufferInfo.offset = 0;
     tuningBufferInfo.range = VK_WHOLE_SIZE;
 
-    VkWriteDescriptorSet writes[3]{};
+    VkDescriptorBufferInfo cloudBufferInfo{};
+    cloudBufferInfo.buffer = cloudBuffer->getBuffer();
+    cloudBufferInfo.offset = 0;
+    cloudBufferInfo.range = VK_WHOLE_SIZE;
+
+    VkWriteDescriptorSet writes[4]{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = descriptorSet;
     writes[0].dstBinding = 0;
@@ -489,7 +529,14 @@ void VulkanRenderer::writeDescriptorSet() {
     writes[2].descriptorCount = 1;
     writes[2].pBufferInfo = &tuningBufferInfo;
 
-    vkUpdateDescriptorSets(context->getDevice(), 3, writes, 0, nullptr);
+    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[3].dstSet = descriptorSet;
+    writes[3].dstBinding = 4;
+    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[3].descriptorCount = 1;
+    writes[3].pBufferInfo = &cloudBufferInfo;
+
+    vkUpdateDescriptorSets(context->getDevice(), 4, writes, 0, nullptr);
 }
 
 // createCommandPoolAndBuffer: Prepares the command buffer for recording rendering and compute commands

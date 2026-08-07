@@ -70,6 +70,14 @@ cloud.voxel_size=3.0
 cloud.edge_threshold_min=0.15
 cloud.edge_threshold_max=0.7
 cloud.max_steps=32
+# Weather is driven by the cloud field going still, not by a water deficit. Once no cloud block
+# has moved for still_ticks_to_storm dispatches the sky darkens, then every cloud becomes a storm
+# cloud; each waits up to storm_wait_max_ticks at the ceiling before falling as water.
+cloud.still_ticks_to_storm=1000
+cloud.storm_wait_max_ticks=120
+# Column depth that reads as fully dense, and how far a cloud hangs per block under it.
+cloud.column_full_count=24.0
+cloud.thickness_per_block=1.5
 
 # --- Physics ---
 physics.sand_moisture_capacity=10

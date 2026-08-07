@@ -10,7 +10,6 @@ layout(std430, binding = 0) readonly buffer VoxelGrid {
 // Must stay byte-identical to the SimStats block in falling_sand.comp, and BH_INDEX_MASK must match
 // the slot encoding used there.
 const int BLACK_HOLE_MAX = 8;
-const int CLOUD_MAX = 64;
 const uint BH_INDEX_MASK = 0x3FFFFFFFu;
 const uint BH_PURGE = 0x40000000u;
 
@@ -26,12 +25,18 @@ layout(std430, binding = 1) readonly buffer SimStats {
     uint rainCandidateCount;
     uint rainCandidateEstimate;
     uint cloudChargeBits;
+    uint cloudBlockCount;
+    uint cloudMovedCount;
+    uint cloudStillTicks;
     uint blackHoleCount;
     uint maxOccupiedY;
     uint blackHoles[BLACK_HOLE_MAX];
     uint blackHoleMass[BLACK_HOLE_MAX];
     uint blackHoleStarve[BLACK_HOLE_MAX];
-    float cloudCache[CLOUD_MAX * 7];
+    // Four words per column at (x + z * WIDTH) * 4; slots 2 and 3 are the published count and top Y
+    // this shader reads. Must match falling_sand.comp exactly -- see the comment there. Runtime-sized
+    // and therefore necessarily last.
+    uint cloudColumn[];
 };
 
 layout(std140, binding = 2) uniform TuningParams {
@@ -135,6 +140,10 @@ layout(std140, binding = 2) uniform TuningParams {
     uint treeTrunkColumns;
     float treeTrunkRadius;
     float renderScale;
+    uint cloudStillTicksToStorm;  // dispatches of stillness before the sky darkens
+    uint stormWaitMaxTicks;       // storm block's random wait at the ceiling, 0..255
+    float cloudColumnFullCount;   // cloud blocks in a column that read as fully dense
+    float cloudThicknessPerBlock; // world units of cloud drawn per block in the column
 } tuning;
 
 // Per-frame state the CPU writes: camera pose, cursor position, brush.
@@ -922,32 +931,45 @@ vec3 accretionGlow(vec3 color, ivec3 voxelPos) {
 }
 
 // =================================================================================================
-// CLOUD FIELD -- read only. The placement maths lives in falling_sand.comp, which evaluates it once
-// per dispatch into cloudCache; this stage just reads the answer.
+// CLOUD FIELD -- read only.
 //
-// It used to be duplicated here verbatim, with a warning that editing one copy without the other
-// would make rain fall from a clear sky. Sharing the cache removes that hazard outright, and removes
-// the cost that made it worth duplicating in the first place: six sin() calls per cloud, re-derived
-// by every pixel, is ~369 M transcendentals a frame at 32 clouds and 1600x1200.
+// Clouds are no longer a drifting population of ellipsoids derived from (index, time). They are the
+// shadow of an actual voxel field: falling_sand.comp simulates cloud blocks that rise and pile
+// against the ceiling, and publishes, per column, how many are stacked there and how high they
+// reach. This stage draws a slab over each column sized from those two numbers.
 //
-// The vertical centre and the edge fade are cached too. Both were still being re-derived here per
-// pixel after the first pass -- the centre carried a hash() of its own and the fade is four
-// smoothsteps -- and both are constant for the whole frame, so a pixel has nothing to contribute to
-// either answer.
+// That retires the duplication hazard for good. The old placement maths existed in both stages and
+// had to stay byte-identical or rain fell from a clear sky; there is nothing left to keep in step,
+// because the compute stage no longer decides where clouds *look* like they are -- it decides where
+// they *are*, and this stage reads it.
 // =================================================================================================
-vec3  cloudCenter(int i) { return vec3(cloudCache[i * 7 + 0], cloudCache[i * 7 + 1], cloudCache[i * 7 + 2]); }
-vec3  cloudRadii(int i)  { return vec3(cloudCache[i * 7 + 3], cloudCache[i * 7 + 4], cloudCache[i * 7 + 5]); }
-float cloudFade(int i)   { return cloudCache[i * 7 + 6]; }
+
+// FUNCTION: cloudColumnBase
+// Four words per column; slots 2 and 3 are the published count and top Y. Must match the identical
+// function in falling_sand.comp.
+uint cloudColumnBase(int x, int z) { return uint(x + z * WIDTH) * 4u; }
 
 // FUNCTION: marchBlockyCloud
-// Walks a per-cloud voxel grid (same DDA stepping pattern as the primary raymarch loop) bounded
-// to the ray's intersection interval with the cloud's ellipsoid. A cell counts as solid only if
-// it's inside the ellipsoid AND passes a per-cell hash test biased toward emptiness near the
-// edge — giving a blocky, cube-faceted surface whose overall silhouette still reads as an
-// ellipsoid, with a ragged/fluffy boundary rather than a hard edge. Color blends from white/
-// light-grey (fresh) toward storm-grey as `greyness` (driven by the rain state machine) rises.
-bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, vec3 center, vec3 radii, float cloudSeed,
-                       float tEnter, float tExit, vec3 sunDir, float greyness, out float tHit, out vec3 hitColor) {
+// Walks a coarse voxel grid (the same DDA stepping pattern as the primary raymarch loop) and draws
+// the cloud slab standing over each column.
+//
+// A cell is solid when three things hold: its column has cloud blocks in it, the cell falls inside
+// that column's slab, and a per-cell hash beats a density threshold. The hash is what makes the
+// silhouette blocky and ragged rather than a flat-topped box, and it is keyed on the cell's own
+// integer coordinates -- clouds no longer drift, so a world-anchored pattern is stationary and will
+// not boil.
+//
+// The slab hangs DOWN from the top of the pile: its top is the highest cloud block in the column and
+// it is cloudThicknessPerBlock world units deep per block underneath. So a deep pile is a thick
+// cloud reaching further down, which is the reading of "proportional to the clump" that puts more
+// cloud where more cloud mass is. Its density -- how much of the slab is filled rather than holes --
+// scales with the count against cloudColumnFullCount, so a thin column is wispy and a deep one is
+// solid.
+//
+// One march for the whole sky, where this used to be one march per cloud inside a loop over up to
+// 64 of them. Colour blends from white/light-grey toward storm-grey as `greyness` rises.
+bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, float tEnter, float tExit, vec3 sunDir,
+                      float greyness, out float tHit, out vec3 hitColor, out float hitDensity) {
 
     tEnter = max(tEnter, 0.0f);
     if (tEnter >= tExit) return false;
@@ -971,36 +993,51 @@ bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, vec3 center, vec3 radii, floa
     vec3 normal = vec3(0.0f);
     float t = tEnter;
 
-    // Hash the blocky fill in the cloud's OWN cell space, not world space. Now that clouds drift,
-    // a world-anchored pattern would boil and shimmer as cells slid through a stationary noise
-    // field. Subtracting the cloud's (rounded) cell origin pins the pattern to the cloud, so it
-    // holds its shape and simply translates -- the motion quantises to whole voxel steps, which
-    // reads correctly for a deliberately cube-faceted look.
-    ivec3 cloudOrigin = ivec3(round(center / tuning.cloudVoxelSize));
-
     for (int i = 0; i < int(tuning.maxCloudSteps); i++) {
         if (t > tExit) break;
 
         vec3 cellCenter = (vec3(cellPos) + 0.5f) * tuning.cloudVoxelSize;
-        vec3 local = (cellCenter - center) / radii;
-        float localLen = length(local);
+        int cx = int(floor(cellCenter.x));
+        int cz = int(floor(cellCenter.z));
 
-        if (localLen <= 1.0f) {
-            vec3 localCell = vec3(cellPos - cloudOrigin);
-            float fillHash = hash(localCell + vec3(cloudSeed * 13.0f, cloudSeed * 7.0f, cloudSeed * 29.0f));
-            float edgeFactor = clamp(localLen, 0.0f, 1.0f);
-            float threshold = mix(tuning.cloudEdgeThresholdMin, tuning.cloudEdgeThresholdMax, edgeFactor); // sparser near the edge, denser near the center
+        if (cx >= 0 && cx < WIDTH && cz >= 0 && cz < DEPTH) {
+            uint base = cloudColumnBase(cx, cz);
+            uint count = cloudColumn[base + 2u];
 
-            if (fillHash > threshold) {
-                tHit = t;
-                float shadeHash = hash(localCell * 3.71f + vec3(91.0f, cloudSeed, 7.0f));
-                vec3 baseColor = mix(vec3(0.76f, 0.76f, 0.78f), vec3(1.0f), shadeHash); // white -> light grey
-                vec3 stormColor = vec3(0.32f, 0.33f, 0.36f);
-                baseColor = mix(baseColor, stormColor, greyness);
+            if (count > 0u) {
+                float topY = float(cloudColumn[base + 3u]);
+                float thickness = float(count) * max(tuning.cloudThicknessPerBlock, 0.01f);
+                float bottomY = topY - thickness;
 
-                float diffuse = 0.6f + 0.4f * max(dot(normal, sunDir), 0.0f);
-                hitColor = baseColor * diffuse;
-                return true;
+                if (cellCenter.y <= topY && cellCenter.y >= bottomY) {
+                    float density = clamp(float(count) / max(tuning.cloudColumnFullCount, 1.0f),
+                                          0.0f, 1.0f);
+
+                    // Distance from the slab's mid-height, 0 in the middle and 1 at either face --
+                    // the same role the ellipsoid's localLen played, so the existing edge threshold
+                    // tuning keeps its meaning: sparser at the boundary, denser through the core.
+                    float mid = (topY + bottomY) * 0.5f;
+                    float edgeFactor = clamp(abs(cellCenter.y - mid) / max(thickness * 0.5f, 0.001f),
+                                             0.0f, 1.0f);
+                    float threshold = mix(tuning.cloudEdgeThresholdMin,
+                                          tuning.cloudEdgeThresholdMax, edgeFactor);
+                    // A shallow column fills almost nothing; a full one fills as the tuning says.
+                    threshold = mix(1.0f, threshold, density);
+
+                    float fillHash = hash(vec3(cellPos));
+                    if (fillHash > threshold) {
+                        tHit = t;
+                        hitDensity = density;
+                        float shadeHash = hash(vec3(cellPos) * 3.71f + vec3(91.0f, 5.0f, 7.0f));
+                        vec3 baseColor = mix(vec3(0.76f, 0.76f, 0.78f), vec3(1.0f), shadeHash);
+                        vec3 stormColor = vec3(0.32f, 0.33f, 0.36f);
+                        baseColor = mix(baseColor, stormColor, greyness);
+
+                        float diffuse = 0.6f + 0.4f * max(dot(normal, sunDir), 0.0f);
+                        hitColor = baseColor * diffuse;
+                        return true;
+                    }
+                }
             }
         }
 
@@ -1352,7 +1389,10 @@ void main() {
         }
 
         if (groupAlpha > 0.002f) {
-            vec2 footprintClip = intersectAABB(rayOrigin, rayDir, vec3(0.0f, -1000000.0f, 0.0f), vec3(float(WIDTH), 1000000.0f, float(DEPTH)));
+            // One march over the cube's own volume, not a loop over a cloud population. Clouds are
+            // inside the world now -- they are voxels that piled up against the ceiling -- so the
+            // marching interval is the cube itself rather than a slab floating above it.
+            vec2 cloudClip = intersectAABB(rayOrigin, rayDir, vec3(0.0f), worldExtent());
             vec3 cloudSunDir = normalize(vec3(0.8f, 1.0f, 0.5f));
 
             float bestT = 1000000.0f;
@@ -1360,47 +1400,21 @@ void main() {
             float bestAlpha = 0.0f;
             bool foundCloud = false;
 
-            int cloudN = int(min(tuning.cloudCount, uint(CLOUD_MAX)));
-            for (int i = 0; i < cloudN; i++) {
-                float edgeFade = cloudFade(i);
-                if (edgeFade <= 0.01f) continue;
-
-                vec3 center = cloudCenter(i);
-                vec3 radii = cloudRadii(i);
-
-                vec3 oc = (rayOrigin - center) / radii;
-                vec3 rdn = rayDir / radii;
-                float a = dot(rdn, rdn);
-                float b = dot(oc, rdn);
-                float c = dot(oc, oc) - 1.0f;
-                float disc = b * b - a * c;
-
-                if (disc > 0.0f) {
-                    float sq = sqrt(disc);
-                    float t0 = (-b - sq) / a;
-                    float t1 = (-b + sq) / a;
-
-                    float clippedNear = max(t0, footprintClip.x);
-                    float clippedFar = min(t1, footprintClip.y);
-
-                    // Only the nearest cloud is ever drawn, and only if it is in front of the
-                    // geometry, so a cloud whose whole interval starts behind either cannot change
-                    // the result -- and marching it is up to maxCloudSteps of DDA for an answer
-                    // already known. Exact rather than approximate: clippedNear is a lower bound on
-                    // anything this cloud could produce, and both tests below it are strict.
-                    if (clippedNear >= min(bestT, finalDist)) continue;
-
-                    if (clippedNear < clippedFar && clippedFar > 0.0f) {
-                        float cloudTHit;
-                        vec3 cloudColor;
-                        if (marchBlockyCloud(rayOrigin, rayDir, center, radii, float(i), clippedNear, clippedFar, cloudSunDir, cloudGreyness, cloudTHit, cloudColor)) {
-                            if (cloudTHit > 0.0f && cloudTHit < bestT) {
-                                bestT = cloudTHit;
-                                bestColor = cloudColor;
-                                bestAlpha = clamp(groupAlpha * edgeFade, 0.0f, 0.95f);
-                                foundCloud = true;
-                            }
-                        }
+            float nearT = max(cloudClip.x, 0.0f);
+            float farT  = min(cloudClip.y, finalDist);
+            if (nearT < farT) {
+                float cloudTHit;
+                vec3 cloudColor;
+                float cloudDensity;
+                if (marchBlockyCloud(rayOrigin, rayDir, nearT, farT, cloudSunDir, cloudGreyness,
+                                     cloudTHit, cloudColor, cloudDensity)) {
+                    if (cloudTHit > 0.0f) {
+                        bestT = cloudTHit;
+                        bestColor = cloudColor;
+                        // Thin cloud is see-through as well as sparse. Without this a single stray
+                        // cloud block would draw at the same opacity as a full storm bank.
+                        bestAlpha = clamp(groupAlpha * mix(0.35f, 1.0f, cloudDensity), 0.0f, 0.95f);
+                        foundCloud = true;
                     }
                 }
             }
