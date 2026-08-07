@@ -52,7 +52,7 @@ layout(std430, binding = 1) buffer SimStats {
     uint rainCandidateEstimate;  // last dispatch's census -- the divisor that sets drop odds
     uint cloudChargeBits;        // float bits: eased 0..1 group-wide cloud opacity/greyness
     uint cloudBlockCount;        // live cloud + storm blocks; census, rotated every dispatch
-    uint cloudMovedCount;        // cloud blocks that moved this dispatch; census, rotated with it
+    uint cloudChangedCount;      // cloud blocks that moved OR were created this dispatch; census
     uint cloudStillTicks;        // consecutive dispatches in which nothing moved -- the storm clock
     uint blackHoleCount;         // live table entries; 0 lets every voxel skip the scan entirely
     uint maxOccupiedY;           // ceiling on where matter can be; lets the renderer skip empty sky
@@ -2461,17 +2461,24 @@ void updateSimState() {
     rainCandidateCount = 0u;
 
     // --- The storm clock ------------------------------------------------------------------------
-    // A dispatch in which no cloud block moved is a still one. Enough of those in a row and the
-    // field has settled, which is the cue for weather. Read before the census is cleared, because
-    // cloudMovedCount is this dispatch's tally and clearing it here is what starts the next.
-    if (cloudMovedCount == 0u) {
+    // A dispatch in which the cloud field did not change is a still one. Enough of those in a row
+    // and it has settled, which is the cue for weather. Read before the census is cleared, because
+    // this is the tally accumulated since the last clear -- exactly one dispatch's worth, wherever
+    // in the dispatch the single writer happens to run.
+    //
+    // CHANGED, not moved. A cloud block that condenses at the ceiling is born where it belongs and
+    // never moves, so counting only movement meant a sky actively filling with new cloud read as
+    // perfectly still: the clock ran throughout formation and was already past the threshold by the
+    // time the steam stopped arriving, and the sky rained the moment it finished filling. "All
+    // clouds stagnant" has to mean the field stopped changing, not merely that nothing slid.
+    if (cloudChangedCount == 0u) {
         cloudStillTicks = min(cloudStillTicks + 1u, 0xFFFFFFFFu - 1u);
     } else {
         cloudStillTicks = 0u;
     }
     uint liveClouds = cloudBlockCount;
     cloudBlockCount = 0u;
-    cloudMovedCount = 0u;
+    cloudChangedCount = 0u;
 
     // --- Group cloud charge -------------------------------------------------------------------
     // One value the whole sky renders from, so it thickens and greys together rather than cloud by
@@ -2523,6 +2530,7 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
         // and its moisture with it.
         if (atomicCompSwap(cloudCells[currentIndex], 0u, packCloud(CLOUD_CALM, 0u, 0u)) == 0u) {
             atomicExchange(grid[currentIndex], 0u);
+            atomicAdd(cloudChangedCount, 1u);   // a new block is a change; the sky is not settled
             return;
         }
         // A cloud block is already in this cell, so there is no room to condense here. This used to
@@ -2571,6 +2579,7 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
         if (upPos.y < HEIGHT && cloudIsAtRest(cloudCells[getIndex(upPos)])) {
             if (atomicCompSwap(cloudCells[currentIndex], 0u, packCloud(CLOUD_CALM, 0u, 0u)) == 0u) {
                 atomicExchange(grid[currentIndex], 0u);
+                atomicAdd(cloudChangedCount, 1u);
             }
             return;
         }
@@ -2749,7 +2758,7 @@ void updateCloudBlock(ivec3 pos) {
 
     if (!canRise) {
         // Nowhere to go. Age the sleep counter and stop -- and note this does NOT touch
-        // cloudMovedCount, which is exactly how a settled field becomes a still one and eventually
+        // cloudChangedCount, which is exactly how a settled field becomes a still one and eventually
         // a storm.
         atomicCompSwap(cloudCells[idx], cell, packCloud(kind, getCloudWait(cell), min(sleep + 1u, 255u)));
         return;
@@ -2786,7 +2795,7 @@ void updateCloudBlock(ivec3 pos) {
         // Sleep resets on a move, so a block that is going somewhere keeps being asked every
         // dispatch and only a block that has stopped pays the cohesion scan.
         if (tryMoveCloud(idx, packCloud(kind, getCloudWait(cell), 0u), upIndex, cell)) {
-            atomicAdd(cloudMovedCount, 1u);
+            atomicAdd(cloudChangedCount, 1u);
             return;
         }
     }
@@ -2805,7 +2814,7 @@ void updateCloudBlock(ivec3 pos) {
         uint tIndex = getIndex(t);
         if (getCloudKind(cloudCells[tIndex]) != CLOUD_NONE) continue;
         if (tryMoveCloud(idx, packCloud(kind, getCloudWait(cell), 0u), tIndex, cell)) {
-            atomicAdd(cloudMovedCount, 1u);
+            atomicAdd(cloudChangedCount, 1u);
             return;
         }
     }

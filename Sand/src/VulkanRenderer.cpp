@@ -701,6 +701,7 @@ void VulkanRenderer::drawFrame() {
 
     // --- MULTI-STEP PHYSICS DISPATCH ---
     int simSteps = uiManager.getSimulationSpeed();
+    uiManager.advanceTicks(simSteps);
     for (int step = 0; step < simSteps; step++) {
         // We dispatch the compute shader multiple times, allowing it to run physics multiple times per visual frame
         vkCmdPushConstants(commandBuffer, pipeline->getComputePipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &pc);

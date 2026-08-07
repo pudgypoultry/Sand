@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <cfloat>
+#include <cstdint>
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -195,6 +196,17 @@ public:
             buildFrameBreakdown();
 
             ImGui::Separator();
+            ImGui::Text("Tick %u / %u", m_tickCount, kTickWrap);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Simulation dispatches, not frames. The speed slider issues several per frame,\n"
+                    "so this runs ahead of the frame counter by exactly that multiple.\n\n"
+                    "It is the unit the cloud field's timers are counted in -- notably\n"
+                    "cloud.still_ticks_to_storm -- so it is the clock to watch weather against.\n"
+                    "Wraps at %u.", kTickWrap);
+            }
+
+            ImGui::Separator();
             ImGui::Checkbox("Show cloud blocks", &m_showCloudBlocks);
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(
@@ -217,6 +229,17 @@ public:
 
     // Debug view toggle, off by default -- cloud blocks are meant to be invisible.
     bool showCloudBlocks() const { return m_showCloudBlocks; }
+
+    // FUNCTION: advanceTicks
+    // Counts simulation dispatches, which is what the shader's own timers count in.
+    //
+    // Kept on the CPU rather than read back from SimStats deliberately: the renderer already knows
+    // exactly how many dispatches it issued, and the alternative is a GPU-to-CPU readback -- which
+    // on the web means an asynchronous buffer map, for a number that is already sitting in a local.
+    void advanceTicks(int steps) {
+        if (steps > 0) m_tickCount = (m_tickCount + uint32_t(steps)) % kTickWrap;
+    }
+    uint32_t tickCount() const { return m_tickCount; }
     float getPerspectiveBlend() const { return m_perspectiveBlend; }
     MaterialType getCurrentMaterial() const { return m_currentMaterial; }
     int getSimulationSpeed() const { return m_simulationSpeed; }
@@ -286,6 +309,11 @@ private:
     float m_perspectiveBlend = 1.0f; // 1.0 = perspective (original behavior), 0.0 = orthographic
     bool m_showProfiler = true;
     bool m_showCloudBlocks = false;
+
+    // Wraps rather than saturating, so the display stays a fixed width and a long session cannot
+    // run it into a number nobody can read at a glance.
+    static constexpr uint32_t kTickWrap = 100000u;
+    uint32_t m_tickCount = 0;
     bool m_showOptions = false;
     bool m_firstFrame = true; // drives the one-shot startup window placement in buildUI
 

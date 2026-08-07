@@ -868,6 +868,7 @@ void WebGpuRenderer::drawFrame() {
         for (int i = 0; i < steps; i++) {
             wgpuComputePassEncoderDispatchWorkgroups(sim, gx, gy, gz);
         }
+        uiManager.advanceTicks(steps);
 
         wgpuComputePassEncoderEnd(sim);
         wgpuComputePassEncoderRelease(sim);

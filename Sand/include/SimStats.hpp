@@ -14,7 +14,7 @@ inline constexpr uint32_t kBlackHoleMax = 8;
 
 // The twelve scalars at the top: waterVoxelCount, waterHighMark, cloudWaterCount, rainPhase,
 // rainPhaseTimeBits, rainTargetLevel, rainCandidateCount, rainCandidateEstimate, cloudChargeBits,
-// cloudBlockCount, cloudMovedCount, cloudStillTicks.
+// cloudBlockCount, cloudChangedCount, cloudStillTicks.
 //
 // waterHighMark, cloudWaterCount and rainTargetLevel are dead -- weather is driven by the cloud
 // field going still rather than by a water deficit -- but they are still declared, in the shaders

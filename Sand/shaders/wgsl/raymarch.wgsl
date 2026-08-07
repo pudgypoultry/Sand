@@ -4,7 +4,7 @@
 // Edit raymarch.frag and re-run that script instead; edits here are overwritten and, worse,
 // silently diverge from the shader the desktop build uses.
 //
-// source-sha256: 00a642ba083f327c925e3662a38aa70a792653f6a4a76942a6a3e042f781fb37
+// source-sha256: a5f212b7866d2075b347ec3b9039b3867586768af576633eb02d3f2e2f3ee556
 
 struct TuningParams {
     gridWidth: u32,
@@ -125,7 +125,7 @@ struct SimStats {
     rainCandidateEstimate: u32,
     cloudChargeBits: u32,
     cloudBlockCount: u32,
-    cloudMovedCount: u32,
+    cloudChangedCount: u32,
     cloudStillTicks: u32,
     blackHoleCount: u32,
     maxOccupiedY: u32,

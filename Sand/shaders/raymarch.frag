@@ -26,7 +26,7 @@ layout(std430, binding = 1) readonly buffer SimStats {
     uint rainCandidateEstimate;
     uint cloudChargeBits;
     uint cloudBlockCount;
-    uint cloudMovedCount;
+    uint cloudChangedCount;
     uint cloudStillTicks;
     uint blackHoleCount;
     uint maxOccupiedY;
