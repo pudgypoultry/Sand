@@ -43,7 +43,6 @@ private:
     void onDeviceReady(WGPUDevice device);  // the far end of that chain; finishes setup
     void configureSurface(uint32_t width, uint32_t height);
     void syncCanvasSize();
-    void reportCursorDiagnostic();  // TEMPORARY -- see the definition
     void frame();
     void drawFrame();
 
@@ -86,10 +85,6 @@ private:
     // image that reads as a rendering bug rather than a configuration one.
     uint32_t configuredWidth = 0;
     uint32_t configuredHeight = 0;
-
-    // Throttle for the cursor diagnostic, so it reports about once a second rather than sixty
-    // times. TEMPORARY, with the diagnostic.
-    double cursorDiagLast = 0.0;
 
     // The four bindings the shaders declare, in the order the WGSL numbers them.
     WGPUBuffer gridBuffer   = nullptr;  // binding 0, storage: one uint per voxel

@@ -298,15 +298,41 @@ everything else, so it softens along with the scene. Keeping it sharp means rend
 to an offscreen texture and compositing the UI at native size — a second render target and a blit,
 which is more than this knob is worth today.
 
-**The same size confusion had already broken clicking, silently.** `Window::getMouseNdcX/Y` divide
-the cursor position by the window's dimensions, which were set once in the constructor and never
-updated. On the desktop that is correct by construction — `GLFW_RESIZABLE` is `GLFW_FALSE`, so the
-window really does stay 1600×1200. A canvas does not honour that hint; the stylesheet sizes it. So
-unless the browser window happened to be 4:3, every raycast was scaled wrong and blocks were placed
-somewhere the user had not clicked, drifting further from the pointer towards the edges of the
-screen. `syncCanvasSize` now calls `Window::setSize` with the **CSS** size — not the backing store,
-because mouse positions arrive in the element's coordinate system and `render.resolution_scale`
-deliberately detaches the two.
+### 4.6 The cursor: GLFW's window is not the canvas
+
+The one that took three attempts, because the obvious correction is the wrong one.
+
+`Window::getMouseNdcX/Y` divide the cursor position by the window's dimensions. The tempting fix,
+once the canvas and the window were known to differ, is to point that divisor at the canvas. **That
+is backwards.** Emscripten's GLFW scales pointer coordinates into the size that was passed to
+`glfwCreateWindow` — 1600×1200 — and keeps doing so no matter how large the canvas gets, because
+nothing ever tells it otherwise. Dividing GLFW's number by the canvas mixes two coordinate systems
+and the error grows with the difference between them.
+
+Measured rather than reasoned, on a 2048×983 canvas:
+
+| | x | y |
+|---|---|---|
+| GLFW's cursor | 807.8 | 529.7 |
+| The DOM's, relative to the canvas | 1034.0 | 434.0 |
+| `glfw / 1600`, `glfw / 1200` | 0.5049 | 0.4414 |
+| `dom / 2048`, `dom / 983.2` | 0.5049 | 0.4414 |
+
+The same fraction to four decimals on both axes, and again after resizing the window to 554×944.
+GLFW's coordinates are perfectly good — they are simply expressed in GLFW's window, so that is what
+they must be divided by. Which is also why the desktop was never affected: there the two are the
+same number, and `GLFW_RESIZABLE` is `GLFW_FALSE` so they stay that way.
+
+The symptom was a cursor down and to the left of the pointer, worsening with window size: 2048 > 1600
+pushes it left, 983 < 1200 pushes it down. `Window` now keeps both sizes and is explicit about which
+is which — `width/height` is GLFW's space and normalises the cursor, `viewportWidth/Height` is the
+canvas and supplies the projection's aspect ratio.
+
+ImGui needs the same correction for the opposite reason. It takes its mouse position from GLFW, in
+GLFW's space, but hit-tests against `io.DisplaySize`, which is the canvas so that panels are laid out
+at the right size and undistorted. `UiBackendWebGpu` therefore rescales `io.MousePos` between the
+two — guarded on ImGui's `-FLT_MAX` "no mouse" sentinel, which must be left alone rather than
+multiplied into a real position.
 
 ---
 

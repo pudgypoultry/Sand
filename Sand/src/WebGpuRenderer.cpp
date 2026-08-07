@@ -12,7 +12,6 @@
 #include "SimStats.hpp"
 
 #include <GLFW/glfw3.h>
-#include <emscripten.h>
 #include <emscripten/html5.h>
 
 #include <chrono>
@@ -664,11 +663,12 @@ void WebGpuRenderer::syncCanvasSize() {
         cssHeight = 1200.0;
     }
 
-    // The cursor raycast divides mouse positions by this, and mouse positions are in CSS pixels.
-    // Set before the early-out below, because the CSS size can change without the backing store
-    // changing at all -- resize by a fraction of a pixel, or move a window between monitors with
-    // different device pixel ratios, and the two stop agreeing.
-    window->setSize((int)cssWidth, (int)cssHeight);
+    // The projection's aspect ratio comes from this. Deliberately NOT the cursor's divisor -- that
+    // is GLFW's window size, which is a different number here and stays where it is. Set before the
+    // early-out below, because the CSS size can change without the backing store changing at all:
+    // resize by a fraction of a pixel, or move a window between monitors with different device
+    // pixel ratios, and the two stop agreeing.
+    window->setViewportSize((int)cssWidth, (int)cssHeight);
 
     const float scale = std::clamp(config.tuning.renderScale, 0.25f, 2.0f);
     uint32_t want_w = (uint32_t)std::max(1.0, std::floor(cssWidth * scale));
@@ -678,11 +678,14 @@ void WebGpuRenderer::syncCanvasSize() {
     want_w = std::min(want_w, 8192u);
     want_h = std::min(want_h, 8192u);
 
-    // ImGui needs both numbers, and needs them every frame rather than only when they change: its
-    // GLFW backend rewrites them from the stale window size at the top of each one. Reported before
-    // the early-out for the same reason -- "nothing to resize" is not "nothing to tell ImGui".
+    // ImGui needs these every frame rather than only when they change: its GLFW backend rewrites
+    // them from the stale window size at the top of each one. Reported before the early-out for the
+    // same reason -- "nothing to resize" is not "nothing to tell ImGui".
+    int glfwWidth = 0, glfwHeight = 0;
+    glfwGetWindowSize(window->getGLFWwindow(), &glfwWidth, &glfwHeight);
     UiBackendWebGpu::setDisplayMetrics((float)cssWidth, (float)cssHeight,
-                                       (float)want_w, (float)want_h);
+                                       (float)want_w, (float)want_h,
+                                       (float)glfwWidth, (float)glfwHeight);
 
     if (want_w == configuredWidth && want_h == configuredHeight) return;
 
@@ -690,84 +693,6 @@ void WebGpuRenderer::syncCanvasSize() {
     // drawing buffer, so configuring one without resizing the other only stretches differently.
     emscripten_set_canvas_element_size("#canvas", (int)want_w, (int)want_h);
     configureSurface(want_w, want_h);
-}
-
-// reportCursorDiagnostic: prints, once per click, every quantity the cursor raycast depends on.
-//
-// TEMPORARY. Here because the cursor lands away from the pointer on the web and reading the code
-// does not explain it: the raycast matches raymarch.frag line for line, and the position it starts
-// from is the same one ImGui hit-tests panels with successfully. So one of the numbers below is not
-// what it is assumed to be, and guessing which costs a rebuild per guess.
-//
-// The DOM is asked directly rather than through any of the layers that might be lying. If GLFW's
-// cursor position disagrees with the browser's, or the canvas's real rectangle disagrees with what
-// syncCanvasSize believes, that shows up as two numbers side by side instead of a theory.
-void WebGpuRenderer::reportCursorDiagnostic() {
-    // Time-based rather than click-based. The first version fired on isLeftClicking(), which
-    // Window suppresses whenever ImGui has the mouse -- so a click that landed on a panel, or any
-    // frame where the UI wanted the pointer, printed nothing at all. A diagnostic that can silently
-    // decline to run is worse than none, because its silence reads as evidence.
-    const double now = glfwGetTime();
-    if (now - cursorDiagLast < 1.0) return;
-    cursorDiagLast = now;
-
-    double rectX = 0, rectY = 0, rectW = 0, rectH = 0, dpr = 0, backW = 0, backH = 0;
-    double domX = -1, domY = -1;
-    // The browser's own answer for the same things, including where it last saw the pointer.
-    // A listener is installed on first use; until one event has arrived domX/domY stay -1.
-    // No comma may appear at the top level of this block. EM_ASM takes the code as a macro
-    // argument, and the preprocessor splits arguments on commas that are not inside PARENTHESES --
-    // braces do not protect them, so an object literal written {x: -1, y: -1} is torn in half and
-    // the errors land on the C++ side, describing JavaScript as though it were C++. The commas
-    // inside addEventListener(...) are fine, being parenthesised. Double quotes rather than single
-    // for the same family of reason: the body is stringified, and 'mousemove' first has to survive
-    // being tokenised as a C++ multi-character character constant.
-    EM_ASM({
-        var c = document.getElementById("canvas");
-        var r = c.getBoundingClientRect();
-        if (!window.__sandPtr) {
-            window.__sandPtr = {};
-            window.__sandPtr.x = -1;
-            window.__sandPtr.y = -1;
-            window.addEventListener("mousemove", function (e) {
-                var b = c.getBoundingClientRect();
-                window.__sandPtr.x = e.clientX - b.left;
-                window.__sandPtr.y = e.clientY - b.top;
-            }, true);
-        }
-        // HEAPF64 rather than setValue: setValue is a runtime method that has to be exported to be
-        // reachable from EM_ASM, and the failure if it is not is a runtime "setValue is not
-        // defined" -- from diagnostic code, which would be its own small joke. HEAPF64 always
-        // exists.
-        HEAPF64[$0 >> 3] = r.left;   HEAPF64[$1 >> 3] = r.top;
-        HEAPF64[$2 >> 3] = r.width;  HEAPF64[$3 >> 3] = r.height;
-        HEAPF64[$4 >> 3] = window.devicePixelRatio;
-        HEAPF64[$5 >> 3] = c.width;  HEAPF64[$6 >> 3] = c.height;
-        HEAPF64[$7 >> 3] = window.__sandPtr.x;
-        HEAPF64[$8 >> 3] = window.__sandPtr.y;
-    }, &rectX, &rectY, &rectW, &rectH, &dpr, &backW, &backH, &domX, &domY);
-
-    // The ratio is the whole question. The error scales with the window rather than sitting at a
-    // constant offset, so what is wanted is not "are these equal" but "by how much do they differ,
-    // and does that factor look like dpr, like backing/css, or like something else".
-    const double gx = window->getMouseX(), gy = window->getMouseY();
-    std::printf("[cursor] glfw=(%.1f, %.1f)  dom=(%.1f, %.1f)  ratio glfw/dom=(%.4f, %.4f)\n",
-                gx, gy, domX, domY,
-                (domX > 0.0) ? gx / domX : 0.0, (domY > 0.0) ? gy / domY : 0.0);
-    std::printf("[cursor] divisor=%dx%d  ndc if divided by rect=(%.4f, %.4f)  by backing=(%.4f, %.4f)\n",
-                window->getWidth(), window->getHeight(),
-                (rectW > 0.0) ? (gx / rectW) * 2.0 - 1.0 : 0.0,
-                (rectH > 0.0) ? (gy / rectH) * 2.0 - 1.0 : 0.0,
-                (backW > 0.0) ? (gx / backW) * 2.0 - 1.0 : 0.0,
-                (backH > 0.0) ? (gy / backH) * 2.0 - 1.0 : 0.0);
-    std::printf("[cursor] canvas rect=(%.1f, %.1f) %.1fx%.1f  backing=%.0fx%.0f  dpr=%.3f  "
-                "configured=%ux%u\n",
-                rectX, rectY, rectW, rectH, backW, backH, dpr,
-                configuredWidth, configuredHeight);
-    std::printf("[cursor] ndc=(%.4f, %.4f)  aspectScale=(%.4f, %.4f)  spawn=(%d, %d, %d)\n",
-                window->getMouseNdcX(), window->getMouseNdcY(),
-                frameConstants.aspectScaleX, frameConstants.aspectScaleY,
-                frameConstants.spawnX, frameConstants.spawnY, frameConstants.spawnZ);
 }
 
 void WebGpuRenderer::configureSurface(uint32_t width, uint32_t height) {
@@ -811,8 +736,6 @@ void WebGpuRenderer::frame() {
     // The same raycast the desktop runs, from the same file. Placing blocks works now: spawnActive
     // is set by a click and the compute shader does the rest.
     buildFrameConstants(*window, uiManager, config.tuning, (float)glfwGetTime(), frameConstants);
-
-    reportCursorDiagnostic();
 
     // The three UI actions. Safe to do here between frames: everything below touches buffers only
     // through the queue, which orders them against work already submitted.

@@ -8,6 +8,8 @@
 #include "UiBackend.hpp"
 
 #include <imgui.h>
+
+#include <cfloat>   // FLT_MAX, for ImGui's "no mouse" sentinel
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_wgpu.h>
 
@@ -19,16 +21,20 @@ namespace {
 // read by UiBackend, which is why it sits above both rather than inside either.
 ImVec2 g_displaySize{};
 ImVec2 g_framebufferScale{};
+ImVec2 g_mouseScale{1.0f, 1.0f};
 bool   g_haveMetrics = false;
 
 } // namespace
 
 namespace UiBackendWebGpu {
 
-void setDisplayMetrics(float cssWidth, float cssHeight, float fbWidth, float fbHeight) {
-    if (cssWidth <= 0.0f || cssHeight <= 0.0f || fbWidth <= 0.0f || fbHeight <= 0.0f) return;
+void setDisplayMetrics(float cssWidth, float cssHeight, float fbWidth, float fbHeight,
+                       float glfwWidth, float glfwHeight) {
+    if (cssWidth <= 0.0f || cssHeight <= 0.0f || fbWidth <= 0.0f || fbHeight <= 0.0f
+        || glfwWidth <= 0.0f || glfwHeight <= 0.0f) return;
     g_displaySize = ImVec2(cssWidth, cssHeight);
     g_framebufferScale = ImVec2(fbWidth / cssWidth, fbHeight / cssHeight);
+    g_mouseScale = ImVec2(cssWidth / glfwWidth, cssHeight / glfwHeight);
     g_haveMetrics = true;
 }
 
@@ -74,6 +80,17 @@ void newFrame() {
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize = g_displaySize;
         io.DisplayFramebufferScale = g_framebufferScale;
+
+        // The GLFW backend has just set MousePos from glfwGetCursorPos, which on this platform is
+        // scaled to the window size GLFW believes in rather than the canvas. Rescale it into the
+        // space DisplaySize is now expressed in.
+        //
+        // Guarded on the sentinel: ImGui uses -FLT_MAX for "the mouse is not available", and
+        // multiplying that produces a position rather than preserving the absence of one.
+        if (io.MousePos.x > -FLT_MAX && io.MousePos.y > -FLT_MAX) {
+            io.MousePos.x *= g_mouseScale.x;
+            io.MousePos.y *= g_mouseScale.y;
+        }
     }
 }
 

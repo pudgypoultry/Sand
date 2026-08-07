@@ -65,9 +65,11 @@ void buildFrameConstants(const Window& window,
     // off the edges because the window was made narrower, which is the complaint this is meant to
     // fix rather than a different form of it. Expanding instead guarantees the 4:3 view is always
     // fully visible, with the surplus spent on more world.
+    // From the VIEWPORT, not the window: this is a property of the picture, and on the web the
+    // canvas being drawn into is not the size GLFW thinks its window is.
     constexpr float kReferenceAspect = 4.0f / 3.0f;
-    const int px = window.getWidth();
-    const int py = window.getHeight();
+    const int px = window.getViewportWidth();
+    const int py = window.getViewportHeight();
     const float aspect = (px > 0 && py > 0) ? (float)px / (float)py : kReferenceAspect;
     if (aspect >= kReferenceAspect) {
         fc.aspectScaleX = aspect / kReferenceAspect;
