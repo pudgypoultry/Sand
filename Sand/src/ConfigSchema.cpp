@@ -85,6 +85,12 @@ const ConfigField kConfigFields[] = {
       offsetof(TuningParams, rainWaitMinTicks), 1.0, 2047.0,
       "The lower end of that wait. Raising it toward the maximum makes a storm arrive all at once; "
       "widening the gap spreads it out." },
+    { "Clouds", "cloud.steam_condense_ticks", "Steam condense ticks", FieldKind::UInt,
+      offsetof(TuningParams, steamCondenseTicks), 1.0, 255.0,
+      "Dispatches a steam voxel may go without moving before it condenses where it stands. A "
+      "failsafe: steam normally condenses on reaching the roof or on rising into settled cloud, but "
+      "a cloud block can rise into a steam voxel's cell, and steam in that position is touching "
+      "cloud without being under it. Rather than enumerate those cases, stalled steam condenses." },
     { "Clouds", "cloud.column_full_count", "Column full count", FieldKind::Float,
       offsetof(TuningParams, cloudColumnFullCount), 1.0, 512.0,
       "How many cloud blocks stacked in one column read as a fully dense cloud. Lower makes thin "

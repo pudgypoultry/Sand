@@ -61,7 +61,11 @@ struct TuningParams {
     float cloudVoxelSize = 3.0f;
     float cloudEdgeThresholdMin = 0.15f;
     float cloudEdgeThresholdMax = 0.7f;
-    uint32_t maxCloudSteps = 32;
+    // Raised from 32 when the cloud march stopped being one short interval per ellipsoid and became
+    // one walk up the whole column. A ray crossing a 128-cube diagonally visits about 74 cloud cells
+    // at the default cloudVoxelSize, and a budget that ran out partway made the sky flicker as the
+    // camera turned. Only pixels whose ray actually traverses the band pay for it.
+    uint32_t maxCloudSteps = 96;
     // --- Physics ---
     uint32_t sandMoistureCapacity = 10;
     uint32_t dirtMoistureCapacity = 30;
@@ -294,6 +298,14 @@ struct TuningParams {
     uint32_t cloudClumpThreshold = 9;  // UNUSED: cloud spreads like sand, with no cohesion rule
     // The floor of a raincloud's wait at the ceiling. See rainWaitMaxTicks.
     uint32_t rainWaitMinTicks = 256;
+    // Dispatches a steam voxel may go without moving before it condenses where it stands.
+    //
+    // A failsafe, and it earns its keep. Steam condenses on reaching the roof or on rising into
+    // settled cloud, but a cloud block can rise INTO a steam voxel's cell -- the two fields do not
+    // look at each other -- and steam in that position is touching cloud without being under it, so
+    // neither rule fires and it hangs there. Rather than enumerate the ways that can happen, steam
+    // that has gone nowhere for this long simply becomes cloud.
+    uint32_t steamCondenseTicks = 10;
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

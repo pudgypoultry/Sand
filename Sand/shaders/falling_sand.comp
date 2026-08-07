@@ -203,6 +203,7 @@ layout(std140, binding = 2) uniform TuningParams {
     float cloudThicknessPerBlock; // world units of cloud drawn per block in the column
     uint cloudClumpThreshold;     // UNUSED: cloud spreads like sand, no cohesion
     uint rainWaitMinTicks;        // floor of a raincloud's wait at the ceiling
+    uint steamCondenseTicks;      // dispatches of stillness before steam condenses in place
 } tuning;
 
 #define LAYER_SIZE (uint(WIDTH) * uint(HEIGHT)) // one layer of the world
@@ -2562,6 +2563,25 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
     }
 
     uint newAge = min(currentAge + 1u, 255u);
+
+    // 0. Stalled steam condenses where it stands.
+    //
+    // The rules below cover steam that reaches the roof and steam that rises into settled cloud, but
+    // not steam a cloud block has risen INTO -- the two fields do not look at each other, so a cloud
+    // can occupy the cell a steam voxel is already in, and that steam is touching cloud without
+    // being under it. It has nowhere to rise to and no rule to catch it, so it hangs in the air.
+    //
+    // A timeout catches that and anything else like it without having to enumerate them. A block
+    // that has genuinely nowhere to go is, physically, a block that should have condensed.
+    if (currentSleep >= tuning.steamCondenseTicks) {
+        // The compare-and-swap is allowed to fail: failing means a cloud block already occupies this
+        // cell, which is exactly the case that stranded this voxel, and the steam merges into it.
+        // Either way the steam is gone, so the grid write is unconditional.
+        uint newKind = (rainPhase == 2u || cloudTouchesRain(pos)) ? CLOUD_RAIN : CLOUD_CALM;
+        atomicCompSwap(cloudCells[currentIndex], 0u, packCloud(newKind, false, 0u, 0u));
+        atomicExchange(grid[currentIndex], 0u);
+        return;
+    }
 
     // 1. Scatter randomly (horizontal or vertical)
     if (fract(randVal * 88.0f) < tuning.steamScatterChance) {
