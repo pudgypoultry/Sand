@@ -2776,10 +2776,25 @@ void updateCloudBlock(ivec3 pos) {
         // integer resolution a rate of 0.08 against a difference of one truncates to zero and the
         // value sticks forever, one short of where it should be.
         float rate = clamp(tuning.cloudSmoothRate, 0.01f, 1.0f);
-        cloudColumn[base + 2u] = easeTowards(cloudColumn[base + 2u],
-                                             float(cloudColumn[base + 0u]) * 16.0f, rate);
-        cloudColumn[base + 3u] = easeTowards(cloudColumn[base + 3u],
-                                             float(cloudColumn[base + 1u]) * 16.0f, rate);
+        uint tallied = cloudColumn[base + 0u];
+
+        cloudColumn[base + 2u] = easeTowards(cloudColumn[base + 2u], float(tallied) * 16.0f, rate);
+
+        // The height is only eased when this window actually counted something, and that guard is
+        // the whole point of it.
+        //
+        // The height accumulator is an atomicMax reset to zero, so a column that happened to hold no
+        // block during one window publishes a height of zero -- not "unchanged", but "the floor".
+        // Easing toward that dragged the drawn surface down through the world and then let it climb
+        // back as blocks reappeared, which is the cloud seen bubbling upward from under the roof,
+        // with pieces of deck stranded well below it. A window with nothing in it says nothing about
+        // where the cloud is; the previous height stands, and the count easing to zero is what makes
+        // an emptied column fade out.
+        if (tallied > 0u) {
+            cloudColumn[base + 3u] = easeTowards(cloudColumn[base + 3u],
+                                                 float(cloudColumn[base + 1u]) * 16.0f, rate);
+        }
+
         cloudColumn[base + 0u] = 0u;
         cloudColumn[base + 1u] = 0u;
     }
