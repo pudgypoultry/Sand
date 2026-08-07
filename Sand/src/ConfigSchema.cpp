@@ -15,6 +15,11 @@ const ConfigField kConfigFields[] = {
     { "World", "render.shadow_max_steps", "Shadow max steps", FieldKind::UInt,
       offsetof(TuningParams, shadowMaxSteps), 0.0, 1024.0,
       nullptr },
+    { "World", "render.resolution_scale", "Resolution scale", FieldKind::Float,
+      offsetof(TuningParams, renderScale), 0.25, 2.0,
+      "Pixels rendered, as a fraction of the window. Halving it quarters the pixel count, which is "
+      "most of the cost of a raymarcher. Web build only for now -- the desktop draws at the "
+      "swapchain's size and would need rendering to an offscreen target to honour this." },
 
     // ---- Rain ----
     { "Rain", "rain.start_layers", "Start layers", FieldKind::UInt,

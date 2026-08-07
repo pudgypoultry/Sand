@@ -4,7 +4,7 @@
 // Edit raymarch.frag and re-run that script instead; edits here are overwritten and, worse,
 // silently diverge from the shader the desktop build uses.
 //
-// source-sha256: c1c38d0dd0db0a8fcb893d023615d7c7fa1496b175890d5c9f415947927c59f6
+// source-sha256: 80dace5f8654cf735ce3a845059d3cc3000ba342a9180b6e2987f774303cf781
 
 struct TuningParams {
     gridWidth: u32,
@@ -106,6 +106,7 @@ struct TuningParams {
     treeLeafBurnChance: f32,
     treeTrunkColumns: u32,
     treeTrunkRadius: f32,
+    renderScale: f32,
 }
 
 struct SimStats {

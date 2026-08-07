@@ -18,12 +18,10 @@
 
 // The WebGPU renderer.
 //
-// MILESTONE 2 of the port (see docs/WEB_BUILD.md section 6): this raymarches a world seeded on the
-// CPU and draws the UI over it. There is still no simulation -- falling_sand.comp is milestone 3,
-// and it is where the difficulty lives -- so the world is inert. What this milestone proves is the
-// buffers, the bind group, the render pipeline and, above all, the std140-to-WGSL uniform layout:
-// TuningParams is a 99-field binary contract between C++ and both shaders, and it is the likeliest
-// thing to be subtly wrong.
+// The web counterpart of VulkanRenderer: it runs the same simulation compute shader, raymarches
+// the same grid and draws the same UI over it. The thing most likely to be subtly wrong is not any
+// of that but the std140-to-WGSL uniform layout -- TuningParams is a 100-field binary contract
+// between C++ and both shaders, and a single misplaced field shifts every one after it.
 //
 // The one structural difference from VulkanRenderer, and it shapes everything else: WebGPU has no
 // synchronous way to get a device. requestAdapter and requestDevice are both asynchronous with no
@@ -44,6 +42,7 @@ private:
     void initGpu();      // starts the async adapter -> device chain, then returns
     void onDeviceReady(WGPUDevice device);  // the far end of that chain; finishes setup
     void configureSurface(uint32_t width, uint32_t height);
+    void syncCanvasSize();
     void frame();
     void drawFrame();
 
@@ -71,6 +70,11 @@ private:
     // the configured surface and the pipeline ImGui builds is rejected at draw time, and the
     // symptom is a blank canvas with one console line -- worth ten lines of querying to avoid.
     WGPUTextureFormat surfaceFormat = WGPUTextureFormat_Undefined;
+
+    // The sRGB view of it that everything actually renders through. A canvas may only be configured
+    // with a non-sRGB format, so the encode Vulkan gets from its VK_FORMAT_B8G8R8A8_SRGB swapchain
+    // has to come from the view instead -- without it the whole image is markedly darker.
+    WGPUTextureFormat viewFormat = WGPUTextureFormat_Undefined;
 
     // Set once the device callback has landed. Until then frame() does nothing: there is no device
     // to encode against and no ImGui backend initialised.

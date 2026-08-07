@@ -257,6 +257,12 @@ struct TuningParams {
     float treeLeafBurnChance = 0.15f;    // chance per tick for fire to take an adjacent leaf
     uint32_t treeTrunkColumns = 2;       // upper bound on the little stems drawn inside a trunk
     float treeTrunkRadius = 0.17f;       // stem radius in voxel units
+
+    // Appended rather than filed with the other render settings, deliberately: every field before
+    // this one has an offset that both shaders' uniform blocks depend on, and inserting into the
+    // middle would move all of them. The options screen still shows it under World, because the
+    // schema orders the UI by its own table rather than by this declaration.
+    float renderScale = 1.0f;            // drawing-buffer size as a fraction of the display area
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

@@ -226,6 +226,49 @@ Net: the backend gets *smaller*. `VulkanBuffer.cpp` and `VulkanSwapchain.cpp` (1
 counterpart at all, and `VulkanContext.cpp`'s physical-device enumeration and queue-family search
 collapse into two async calls.
 
+### 4.5 Colour space and canvas size
+
+Two differences that produce no error anywhere — not a validation message, not a console line — and
+show up only as the image looking wrong. Both cost real debugging time, so they are written down.
+
+**The canvas is not an sRGB target by default.** The desktop swapchain is
+`VK_FORMAT_B8G8R8A8_SRGB` (`VulkanSwapchain.cpp:39`), so the hardware encodes linear → sRGB on
+every write. `wgpuSurfaceGetCapabilities` reports `BGRA8Unorm`, which encodes nothing, and the
+shader writes linear values into it verbatim. The result is a correct render that is markedly too
+dark — dark enough to read as a lighting bug, which is where the time goes.
+
+The fix is not to configure the surface as sRGB; WebGPU does not permit that. Instead list the sRGB
+variant in the surface configuration's `viewFormats`, then take an explicit
+`WGPUTextureViewDescriptor` with `format` set to it. The encode comes from the *view*. Everything
+that names a colour format has to name the view's: both pipelines' colour targets and the
+`renderTargetFormat` ImGui is initialised with — a mismatch there is rejected at draw time.
+
+**The canvas has two sizes and they are unrelated.** The CSS box is what the page lays out; the
+drawing buffer is what is actually rendered. GLFW sets the drawing buffer from `glfwCreateWindow`'s
+arguments — 1600×1200 — while `shell.html` stretches the element to `100vw`/`100vh`. Every frame
+was being rendered at 4:3 and stretched by the browser to fill a 16:9 window.
+
+`syncCanvasSize()` reads the CSS size with `emscripten_get_element_css_size`, multiplies by
+`render.resolution_scale`, and calls `emscripten_set_canvas_element_size` plus a surface
+reconfigure when it differs from what is configured. Doing this per frame rather than on a resize
+event is deliberate: the CSS size changes for reasons no GLFW callback fires for, including the
+window being zoomed and the device pixel ratio changing when a window moves between monitors.
+
+That multiply is also the resolution control. A raymarcher's cost is very nearly linear in pixels,
+so `render.resolution_scale` at 0.5 quarters the most expensive thing the frame does — by far the
+most effective quality knob on a low-end machine. It is web-only for now: the desktop renders
+directly into the swapchain image and would need an offscreen target to honour it.
+
+**The same size confusion had already broken clicking, silently.** `Window::getMouseNdcX/Y` divide
+the cursor position by the window's dimensions, which were set once in the constructor and never
+updated. On the desktop that is correct by construction — `GLFW_RESIZABLE` is `GLFW_FALSE`, so the
+window really does stay 1600×1200. A canvas does not honour that hint; the stylesheet sizes it. So
+unless the browser window happened to be 4:3, every raycast was scaled wrong and blocks were placed
+somewhere the user had not clicked, drifting further from the pointer towards the edges of the
+screen. `syncCanvasSize` now calls `Window::setSize` with the **CSS** size — not the backing store,
+because mouse positions arrive in the element's coordinate system and `render.resolution_scale`
+deliberately detaches the two.
+
 ---
 
 ## 5. What it costs and what it buys

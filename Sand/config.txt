@@ -30,6 +30,10 @@ render.march_max_steps=0
 # stay short at large world sizes where tracing every shadow in full is the expensive half of a frame.
 render.shadow_max_steps=256
 
+# Pixels rendered as a fraction of the window. 0.5 quarters the pixel count -- most of the cost
+# of a raymarcher is pixels rather than what is in the scene. Web build only at present.
+render.resolution_scale=1.0
+
 # --- Rain ---
 # A storm begins once the water deficit (peak level minus current level) exceeds start_layers
 # full grid layers (1 layer = 128*128 = 16384). It then returns water at drops_per_tick per

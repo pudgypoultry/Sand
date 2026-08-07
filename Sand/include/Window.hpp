@@ -64,6 +64,20 @@ public:
     float getMouseNdcX() const;
     float getMouseNdcY() const;
 
+    // FUNCTION: setSize
+    // Tells the window how large it actually is, which getMouseNdcX/Y divide by.
+    //
+    // The desktop never needs this: GLFW_RESIZABLE is false, so the window stays the size it was
+    // constructed with and the constructor's values stay true. A canvas does not honour that hint
+    // -- the page's stylesheet sizes it -- so on the web the constructor's 1600x1200 is wrong the
+    // moment the browser window is any other shape, and the cursor raycast lands somewhere the
+    // user did not click. WebGpuRenderer::syncCanvasSize keeps this current.
+    //
+    // In CSS pixels, deliberately. Mouse positions arrive in the element's coordinate system, so
+    // this must match that and not the backing store, which render.resolution_scale detaches
+    // from it.
+    void setSize(int w, int h) { width = w; height = h; }
+
     //// FUNCTION: getCurrentMaterial
     //// Accessor for selected material
     //int getCurrentMaterial() const { return currentMaterial; }

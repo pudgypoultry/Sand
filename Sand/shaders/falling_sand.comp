@@ -162,6 +162,7 @@ layout(std140, binding = 2) uniform TuningParams {
     float treeLeafBurnChance;
     uint treeTrunkColumns;
     float treeTrunkRadius;
+    float renderScale;
 } tuning;
 
 #define LAYER_SIZE (uint(WIDTH) * uint(HEIGHT)) // one layer of the world

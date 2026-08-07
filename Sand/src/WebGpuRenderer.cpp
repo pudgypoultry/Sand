@@ -12,6 +12,7 @@
 #include "SimStats.hpp"
 
 #include <GLFW/glfw3.h>
+#include <emscripten/html5.h>
 
 #include <chrono>
 #include <cmath>
@@ -104,6 +105,15 @@ void dumpCompilationInfo(WGPUShaderModule module, const char* label) {
         }
     };
     wgpuShaderModuleGetCompilationInfo(module, info);
+}
+
+// The sRGB counterpart of a canvas format, or the format itself if it has none.
+WGPUTextureFormat srgbViewFor(WGPUTextureFormat f) {
+    switch (f) {
+        case WGPUTextureFormat_BGRA8Unorm: return WGPUTextureFormat_BGRA8UnormSrgb;
+        case WGPUTextureFormat_RGBA8Unorm: return WGPUTextureFormat_RGBA8UnormSrgb;
+        default: return f;
+    }
 }
 
 } // namespace
@@ -209,17 +219,20 @@ void WebGpuRenderer::onDeviceReady(WGPUDevice newDevice) try {
         surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
     }
 
-    int fbWidth = 0, fbHeight = 0;
-    glfwGetFramebufferSize(window->getGLFWwindow(), &fbWidth, &fbHeight);
-    // A canvas that has not been laid out yet reports 0x0, and configureSurface refuses that -- so
-    // taking it at face value leaves the surface unconfigured and every getCurrentTexture failing
-    // forever. Fall back to what the window was asked for; the per-frame check corrects it as soon
-    // as the real size is known.
-    if (fbWidth <= 0 || fbHeight <= 0) {
-        glfwGetWindowSize(window->getGLFWwindow(), &fbWidth, &fbHeight);
-    }
-    if (fbWidth <= 0 || fbHeight <= 0) { fbWidth = 1600; fbHeight = 1200; }
-    configureSurface(uint32_t(fbWidth), uint32_t(fbHeight));
+    // Everything is drawn THROUGH an sRGB view of that surface, and this is why the web build
+    // looked so much darker than the desktop.
+    //
+    // The desktop swapchain is VK_FORMAT_B8G8R8A8_SRGB, so the hardware encodes the shader's linear
+    // output to sRGB on write -- which is most of the apparent brightness in the midtones. A canvas
+    // reports bgra8unorm and does no such conversion, so the same linear values go straight to the
+    // screen and every mid grey lands far too dark.
+    //
+    // A canvas cannot be CONFIGURED as sRGB; WebGPU only allows the non-sRGB format there. What it
+    // does allow is listing the sRGB variant in viewFormats and rendering through a view of that
+    // type, which puts the conversion back exactly where Vulkan has it.
+    viewFormat = srgbViewFor(surfaceFormat);
+
+    syncCanvasSize();
 
     window->setWorldExtents((float)config.tuning.gridWidth,
                             (float)config.tuning.gridHeight,
@@ -245,14 +258,14 @@ void WebGpuRenderer::onDeviceReady(WGPUDevice newDevice) try {
     UiBackendWebGpu::InitInfo uiInit;
     uiInit.window = window->getGLFWwindow();
     uiInit.device = device;
-    uiInit.renderTargetFormat = surfaceFormat;
+    uiInit.renderTargetFormat = viewFormat;
     UiBackendWebGpu::init(uiInit);
 
     uiManager.setTuning(config.tuning);
 
     ready = true;
-    std::printf("[sand] ready: %ux%u, surface format %d\n", configuredWidth, configuredHeight,
-                (int)surfaceFormat);
+    std::printf("[sand] ready: %ux%u, surface format %d drawn through sRGB view %d\n",
+                configuredWidth, configuredHeight, (int)surfaceFormat, (int)viewFormat);
 }
 // Everything above runs inside a C callback invoked from the runtime's JS glue. Letting an
 // exception cross that boundary is undefined behaviour, and in practice it takes the whole module
@@ -427,7 +440,7 @@ void WebGpuRenderer::createRaymarchPipeline() {
     WGPUPipelineLayout pipelineLayout = wgpuDeviceCreatePipelineLayout(device, &plDesc);
 
     WGPUColorTargetState colorTarget = WGPU_COLOR_TARGET_STATE_INIT;
-    colorTarget.format = surfaceFormat;
+    colorTarget.format = viewFormat;
     colorTarget.writeMask = WGPUColorWriteMask_All;
 
     WGPUFragmentState fragment = WGPU_FRAGMENT_STATE_INIT;
@@ -629,6 +642,49 @@ void WebGpuRenderer::applyOptions(const TuningParams& requested) {
                 shapeChanged ? " (buffers reallocated)." : ".");
 }
 
+// syncCanvasSize: makes the canvas's drawing buffer match the area it is displayed in.
+//
+// This is what "the resolution is off" was. A canvas has two sizes: the CSS box it occupies on the
+// page, and the backing store it is actually drawn into. GLFW set the backing store to the 1600x1200
+// the window was asked for, while the stylesheet stretches the element across the viewport -- so the
+// image was rendered at 4:3 and then scaled to whatever shape the browser window happened to be.
+// Blurry, and the wrong aspect ratio into the bargain.
+//
+// The CSS size is the truth here, and the backing store follows it. renderScale multiplies it, so
+// half resolution is a quarter of the pixels and roughly four times the headroom for a big world --
+// worth having on a raymarcher, where cost scales with pixels rather than with what is in the scene.
+void WebGpuRenderer::syncCanvasSize() {
+    double cssWidth = 0.0, cssHeight = 0.0;
+    if (emscripten_get_element_css_size("#canvas", &cssWidth, &cssHeight) != EMSCRIPTEN_RESULT_SUCCESS
+        || cssWidth <= 0.0 || cssHeight <= 0.0) {
+        // Before the first layout there is no size to read. Anything non-zero will do; the next
+        // frame corrects it, and refusing to configure at all is what left the surface unusable.
+        cssWidth = 1600.0;
+        cssHeight = 1200.0;
+    }
+
+    // The cursor raycast divides mouse positions by this, and mouse positions are in CSS pixels.
+    // Set before the early-out below, because the CSS size can change without the backing store
+    // changing at all -- resize by a fraction of a pixel, or move a window between monitors with
+    // different device pixel ratios, and the two stop agreeing.
+    window->setSize((int)cssWidth, (int)cssHeight);
+
+    const float scale = std::clamp(config.tuning.renderScale, 0.25f, 2.0f);
+    uint32_t want_w = (uint32_t)std::max(1.0, std::floor(cssWidth * scale));
+    uint32_t want_h = (uint32_t)std::max(1.0, std::floor(cssHeight * scale));
+
+    // maxTextureDimension2D is 8192 by default, and a 4K display at scale 2 would exceed it.
+    want_w = std::min(want_w, 8192u);
+    want_h = std::min(want_h, 8192u);
+
+    if (want_w == configuredWidth && want_h == configuredHeight) return;
+
+    // The element's own attributes, not just the surface: the surface presents into the canvas's
+    // drawing buffer, so configuring one without resizing the other only stretches differently.
+    emscripten_set_canvas_element_size("#canvas", (int)want_w, (int)want_h);
+    configureSurface(want_w, want_h);
+}
+
 void WebGpuRenderer::configureSurface(uint32_t width, uint32_t height) {
     // A zero-sized configuration is invalid and a hidden or not-yet-laid-out canvas reports zero,
     // so this is a real case rather than defensive noise.
@@ -638,6 +694,9 @@ void WebGpuRenderer::configureSurface(uint32_t width, uint32_t height) {
     surfaceConfig.device = device;
     surfaceConfig.format = surfaceFormat;
     surfaceConfig.usage = WGPUTextureUsage_RenderAttachment;
+    // Permission to make the sRGB view the render passes actually target.
+    surfaceConfig.viewFormatCount = (viewFormat != surfaceFormat) ? 1 : 0;
+    surfaceConfig.viewFormats = &viewFormat;
     surfaceConfig.width = width;
     surfaceConfig.height = height;
     surfaceConfig.presentMode = WGPUPresentMode_Fifo;
@@ -659,15 +718,7 @@ void WebGpuRenderer::frame() {
 
     // The page can resize the canvas at any point, and a surface configured for the old size draws
     // a stretched image. Cheap to check, and the failure it prevents looks like a rendering bug.
-    int fbWidth = 0, fbHeight = 0;
-    glfwGetFramebufferSize(window->getGLFWwindow(), &fbWidth, &fbHeight);
-    if (fbWidth <= 0 || fbHeight <= 0) {
-        glfwGetWindowSize(window->getGLFWwindow(), &fbWidth, &fbHeight);
-    }
-    if (fbWidth > 0 && fbHeight > 0 &&
-        (uint32_t(fbWidth) != configuredWidth || uint32_t(fbHeight) != configuredHeight)) {
-        configureSurface(uint32_t(fbWidth), uint32_t(fbHeight));
-    }
+    syncCanvasSize();
 
     uiManager.buildUI();
     window->processInput(uiManager.wantsCaptureMouse(), uiManager.wantsCaptureKeyboard());
@@ -728,7 +779,14 @@ void WebGpuRenderer::drawFrame() {
         return;
     }
 
-    WGPUTextureView view = wgpuTextureCreateView(surfaceTexture.texture, nullptr);
+    // Explicit descriptor rather than nullptr: the default view would take the texture's own
+    // bgra8unorm format and skip the sRGB encode, which is the whole point of having it.
+    WGPUTextureViewDescriptor viewDesc = WGPU_TEXTURE_VIEW_DESCRIPTOR_INIT;
+    viewDesc.format = viewFormat;
+    viewDesc.dimension = WGPUTextureViewDimension_2D;
+    viewDesc.mipLevelCount = 1;
+    viewDesc.arrayLayerCount = 1;
+    WGPUTextureView view = wgpuTextureCreateView(surfaceTexture.texture, &viewDesc);
 
     WGPURenderPassColorAttachment colour = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
     colour.view = view;

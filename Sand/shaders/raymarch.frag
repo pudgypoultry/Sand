@@ -134,6 +134,7 @@ layout(std140, binding = 2) uniform TuningParams {
     float treeLeafBurnChance;
     uint treeTrunkColumns;
     float treeTrunkRadius;
+    float renderScale;
 } tuning;
 
 // Per-frame state the CPU writes: camera pose, cursor position, brush.

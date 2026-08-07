@@ -4,7 +4,7 @@
 // Edit falling_sand.comp and re-run that script instead; edits here are overwritten and, worse,
 // silently diverge from the shader the desktop build uses.
 //
-// source-sha256: e1d1a027a7e51e6434d6abb67ea7198fcdde6d34e5f8dc76b5c2d3c3ad0c89ee
+// source-sha256: 9b0abd8ebeb33e1ec0e04f1b27b0cc24f5252edc968639e55ad642ecc26bd710
 
 struct VoxelGrid {
     grid: array<u32>,
@@ -110,6 +110,7 @@ struct TuningParams {
     treeLeafBurnChance: f32,
     treeTrunkColumns: u32,
     treeTrunkRadius: f32,
+    renderScale: f32,
 }
 
 struct SimStats {
