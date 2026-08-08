@@ -50,16 +50,32 @@ message(STATUS "Sand backend: ${SAND_BACKEND}")
 # -------------------------------------------------------------------------------------------------
 # Vendored dependencies
 # -------------------------------------------------------------------------------------------------
-# vendor/ is not in the repository -- see BUILDING.md -- so the failure has to name what is missing
-# rather than surfacing sixty lines later as an unfound header.
-set(SAND_VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor" CACHE PATH "Directory holding glfw/ and imgui/")
+# Sand/vendor/ IS in the repository -- glfw and imgui are both tracked, GLFW's prebuilt .lib through
+# Git LFS. See BUILDING.md. The default below has to name that location; it said plain vendor/ until
+# the vendoring landed, which was correct while the directory was something each clone made for
+# itself and silently wrong afterwards.
+set(SAND_VENDOR_IN_TREE "${CMAKE_CURRENT_SOURCE_DIR}/Sand/vendor")
+set(SAND_VENDOR_DIR "${SAND_VENDOR_IN_TREE}" CACHE PATH "Directory holding glfw/ and imgui/")
+
+# A build directory configured before that default was fixed still holds the old path in its cache,
+# and a cached value wins over a changed default -- so the fix alone would leave anyone with an
+# existing build-web/ staring at the same error and no reason for it. Repoint it, but only when the
+# cached path is genuinely unusable and the in-tree one is genuinely there, so that a deliberate
+# -DSAND_VENDOR_DIR pointing somewhere valid is never second-guessed.
+if(NOT EXISTS "${SAND_VENDOR_DIR}/imgui/imgui.cpp" AND EXISTS "${SAND_VENDOR_IN_TREE}/imgui/imgui.cpp")
+    message(STATUS "SAND_VENDOR_DIR was ${SAND_VENDOR_DIR}, which has no imgui -- "
+                   "using the vendored ${SAND_VENDOR_IN_TREE} instead.")
+    set(SAND_VENDOR_DIR "${SAND_VENDOR_IN_TREE}" CACHE PATH "Directory holding glfw/ and imgui/" FORCE)
+endif()
+
 set(IMGUI_DIR "${SAND_VENDOR_DIR}/imgui")
 
 if(NOT EXISTS "${IMGUI_DIR}/imgui.cpp")
     message(FATAL_ERROR
         "Dear ImGui not found at ${IMGUI_DIR}.\n"
-        "Clone it there (git clone https://github.com/ocornut/imgui) or point -DSAND_VENDOR_DIR at "
-        "the directory that holds glfw/ and imgui/.")
+        "It is tracked in this repository at Sand/vendor/imgui, so this points at an incomplete "
+        "checkout rather than a missing dependency. `git checkout -- Sand/vendor` restores it.\n"
+        "Or point -DSAND_VENDOR_DIR at a directory that holds glfw/ and imgui/.")
 endif()
 
 set(IMGUI_SOURCES
@@ -81,6 +97,7 @@ set(SAND_CORE_SOURCES
     "${SAND_DIR}/src/Config.cpp"
     "${SAND_DIR}/src/ConfigSchema.cpp"
     "${SAND_DIR}/src/AssetPaths.cpp"
+    "${SAND_DIR}/src/CursorRay.cpp"
     "${SAND_DIR}/src/Storage.cpp"
     "${SAND_DIR}/src/FrameLoop.cpp"
     "${SAND_DIR}/src/Window.cpp"
@@ -171,7 +188,14 @@ if(EMSCRIPTEN)
     # Only the port is a compile option. It has to be, because it is what puts webgpu.h on the
     # include path. -sUSE_GLFW=3 is link-only -- Emscripten's GLFW headers are in the sysroot
     # unconditionally -- and passing it here earns a warning on every translation unit.
-    target_compile_options(${SAND_TARGET} PRIVATE "--use-port=emdawnwebgpu")
+    # -fwasm-exceptions, on both sides, because Emscripten disables exception CATCHING by default:
+    # try/catch compiles, and then `throw` calls abort() and the handler never runs. The symptom is
+    # "Aborted(undefined)" with the real message -- the one the throw was carrying -- never printed.
+    # Every error path in this renderer is a throw, so without this they are all silent aborts.
+    #
+    # The wasm form rather than the JS one: it is the modern mechanism, needs no JS glue, and costs
+    # very little when nothing is thrown. Chrome and Edge have had it since 95.
+    target_compile_options(${SAND_TARGET} PRIVATE "--use-port=emdawnwebgpu" "-fwasm-exceptions")
 
     # Everything below produces a page, so it belongs to the executable and not to a static library
     # that has nothing to link yet.
@@ -179,6 +203,7 @@ if(EMSCRIPTEN)
     target_link_options(${SAND_TARGET} PRIVATE
         "-sUSE_GLFW=3"
         "--use-port=emdawnwebgpu"
+        "-fwasm-exceptions"
         # The grid is the dominant allocation and it scales with the cube of the world size, so a
         # fixed heap would have to be sized for the largest world anyone might configure. Growth
         # costs a bounds check per access in exchange for not reserving a gigabyte on a page that
@@ -190,6 +215,10 @@ if(EMSCRIPTEN)
         "-sEXPORTED_RUNTIME_METHODS=['UTF8ToString','stringToUTF8','lengthBytesUTF8']"
         "-sEXPORTED_FUNCTIONS=['_main','_malloc','_free']"
         "-sSTACK_SIZE=1048576"
+        # On while the port is being brought up. Without it an abort prints "Aborted(undefined)"
+        # and the actual reason is discarded, which has already cost several rounds of guessing.
+        # Worth the size until the web build stops surprising us.
+        "-sASSERTIONS=1"
         # SHELL: keeps the flag and its argument together as one entry.
         #
         # Without it they are two list items, and target_link_options DE-DUPLICATES: a second
@@ -272,12 +301,27 @@ if(EMSCRIPTEN AND SAND_HAVE_EXECUTABLE)
     target_link_options(${SAND_TARGET} PRIVATE
         "SHELL:--preload-file ${SAND_DIR}/config.txt@/config.txt")
 
-    # Only when there are some. Until the WGSL exists this directory is empty, and there is nothing
-    # to be gained by packing it.
-    if(SAND_SHADER_OUTPUTS)
-        target_link_options(${SAND_TARGET} PRIVATE
-            "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/shaders@/shaders")
-    endif()
+    # One --preload-file per shader, naming the real file, rather than one naming a directory. A
+    # directory is opaque to the generator: it cannot tell that the contents changed, so the link
+    # never re-ran and the package kept its old copy. Naming the files makes them dependencies that
+    # actually work.
+    foreach(preload IN LISTS SAND_SHADER_PRELOADS)
+        target_link_options(${SAND_TARGET} PRIVATE "SHELL:--preload-file ${preload}")
+    endforeach()
+
+    # LINK_DEPENDS, and it is load-bearing rather than tidiness.
+    #
+    # Preloaded files are baked into Sand.data at LINK time, but they are arguments to a flag, not
+    # inputs the generator knows about -- and add_dependencies(target sand_shaders) only creates an
+    # ORDER-ONLY edge in Ninja. So the copy would run, put a new shader in the directory, and the
+    # link would be considered up to date and not repackage it. Editing a shader then changed
+    # nothing observable, and the page silently kept running the previous build's copy -- which is
+    # exactly the failure the source-sha256 guard exists to prevent, arriving by a different route
+    # and past that guard, since the file on disk was correct all along.
+    #
+    # LINK_DEPENDS makes them real inputs, so touching any of them relinks.
+    set_property(TARGET ${SAND_TARGET} APPEND PROPERTY
+                 LINK_DEPENDS "${SAND_SHADER_OUTPUTS};${SAND_DIR}/config.txt")
 elseif(NOT EMSCRIPTEN AND SAND_HAVE_EXECUTABLE)
     add_custom_command(TARGET ${SAND_TARGET} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different

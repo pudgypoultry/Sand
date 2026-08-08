@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Regenerates the committed WGSL from the GLSL sources.
+#
+# The web build needs WGSL, and a browser accepts nothing else -- no SPIR-V, by design. Rather than
+# make every clone install a shader translator, the translated output is committed and this script
+# is what refreshes it. Run it after changing raymarch.frag or screen.vert.
+#
+# All three shaders, falling_sand.comp included. That last one was expected to need hand-writing:
+# WGSL forbids a storage buffer being both atomic and non-atomic, and the shader reads the grid both
+# ways, so there is no direct translation of what it says. naga resolves it the way a person would
+# have had to -- declares the binding array<atomic<u32>> and routes the plain reads through
+# atomicLoad and the plain writes through atomicStore -- and the result validates. The rule was real;
+# the conclusion that no tool could satisfy it was not.
+#
+# Requires:
+#   glslangValidator   from the Vulkan SDK
+#   naga               cargo install naga-cli
+set -euo pipefail
+
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+src="$repo/Sand/shaders"
+out="$src/wgsl"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+mkdir -p "$out"
+
+for pair in screen.vert:vert raymarch.frag:frag falling_sand.comp:comp; do
+    glsl="${pair%%:*}"
+    stage="${pair##*:}"
+    stem="${glsl%.*}"
+
+    # -DSAND_WEB swaps the push-constant block for a uniform at binding 3. WebGPU has no push
+    # constants, so the Vulkan declaration cannot be translated at all -- see the #ifdef in the
+    # shader itself.
+    glslangValidator -V -DSAND_WEB -S "$stage" "$src/$glsl" -o "$tmp/$stem.spv" >/dev/null
+    naga "$tmp/$stem.spv" "$tmp/$stem.wgsl"
+
+    # The hash of the GLSL this was made from. cmake/Shaders.cmake re-computes it and refuses to
+    # build against a stale translation -- which matters because the failure is otherwise silent
+    # and specific: the page renders last week's shader and nothing says so.
+    #
+    # Line endings are stripped first, and cmake/Shaders.cmake does the same. .gitattributes sets
+    # `* text=auto`, so this file is LF in the repository and CRLF in a Windows working tree; a hash
+    # of the raw bytes would depend on which machine last touched it and fire on translations that
+    # are perfectly current.
+    hash="$(sed 's/\r$//' "$src/$glsl" | sha256sum | cut -d' ' -f1)"
+    {
+        echo "// GENERATED FILE -- DO NOT EDIT."
+        echo "//"
+        echo "// Translated from $glsl by tools/gen_wgsl.sh (glslangValidator -DSAND_WEB, then naga)."
+        echo "// Edit $glsl and re-run that script instead; edits here are overwritten and, worse,"
+        echo "// silently diverge from the shader the desktop build uses."
+        echo "//"
+        echo "// source-sha256: $hash"
+        echo ""
+        cat "$tmp/$stem.wgsl"
+    } > "$out/$stem.wgsl"
+
+    printf '  %-18s -> %s (%s lines)\n' "$glsl" "wgsl/$stem.wgsl" "$(wc -l < "$out/$stem.wgsl")"
+done
+
+echo "Done. Commit the results."

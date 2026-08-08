@@ -127,11 +127,22 @@ void VulkanPipeline::createComputePipeline() {
     tuningBinding.descriptorCount = 1;
     tuningBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    VkDescriptorSetLayoutBinding bindings[] = { sboLayoutBinding, cloudStatsBinding, tuningBinding };
+    // Binding 4, not 3: 3 is the ex-push-constant uniform the web build needs and the desktop does
+    // not declare. Keeping the number free here means one set of binding numbers serves both.
+    VkDescriptorSetLayoutBinding cloudGridBinding{};
+    cloudGridBinding.binding = 4;
+    cloudGridBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    cloudGridBinding.descriptorCount = 1;
+    // Both stages. The fragment shader draws clouds from the per-column census in SimStats, not from
+    // the cloud voxels -- but the "show cloud blocks" debug view reads the voxels directly.
+    cloudGridBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutBinding bindings[] = { sboLayoutBinding, cloudStatsBinding, tuningBinding,
+                                                cloudGridBinding };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 3;
+    layoutInfo.bindingCount = 4;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(context->getDevice(), &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {

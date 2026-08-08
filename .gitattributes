@@ -45,4 +45,10 @@
 # Vendored code is not this project's code. Without this GitHub reports the repository as being
 # mostly whatever ImGui is written in, and a dependency bump buries everything else in a pull
 # request's diff.
-vendor/** linguist-vendored
+#
+# The leading **/ is doing real work. A pattern containing a slash is anchored to the directory
+# holding this file, so plain `vendor/**` matches a vendor/ at the repository root -- and the
+# vendored trees are at Sand/vendor/. It matched nothing at all, silently, exactly as the same
+# mistake did in .gitignore. `git check-attr linguist-vendored -- Sand/vendor/imgui/imgui.cpp`
+# is the way to tell; the patterns above have no slash in them and so float to any depth already.
+**/vendor/** linguist-vendored

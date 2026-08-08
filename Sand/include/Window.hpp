@@ -64,6 +64,32 @@ public:
     float getMouseNdcX() const;
     float getMouseNdcY() const;
 
+    // GLFW's own coordinate space -- the size it thinks this window is, which is what it expresses
+    // cursor positions in and therefore what getMouseNdcX/Y must divide by. NOT the size of the
+    // thing being drawn into; see setViewportSize.
+    //
+    // On the desktop the two are the same and the distinction is invisible. On the web they are
+    // not, and assuming they were is what put the cursor in the wrong place: Emscripten's GLFW
+    // scales pointer coordinates into the size passed to glfwCreateWindow -- 1600x1200 -- and goes
+    // on doing so however large the canvas actually is, because nothing ever tells it otherwise.
+    // Measured directly: with a 2048x983 canvas, GLFW reported (807.8, 529.7) for a pointer the DOM
+    // put at (1034, 434). 807.8/1600 and 1034/2048 are the same fraction. So are 529.7/1200 and
+    // 434/983.
+    int getWidth() const { return width; }
+    int getHeight() const { return height; }
+
+    // FUNCTION: setViewportSize
+    // The size of the area actually being rendered and displayed, in the same units as the mouse.
+    //
+    // Separate from width/height because on the web they genuinely differ, and they are wanted for
+    // different things: width/height normalise the cursor, this gives the projection its aspect
+    // ratio. Defaults to the window size, so the desktop -- where they are the same number -- needs
+    // no call and behaves exactly as before.
+    void setViewportSize(int w, int h) { viewportWidth = w; viewportHeight = h; }
+
+    int getViewportWidth() const { return viewportWidth > 0 ? viewportWidth : width; }
+    int getViewportHeight() const { return viewportHeight > 0 ? viewportHeight : height; }
+
     //// FUNCTION: getCurrentMaterial
     //// Accessor for selected material
     //int getCurrentMaterial() const { return currentMaterial; }
@@ -107,6 +133,9 @@ private:
 
     int width;
     int height;
+    // 0 until someone says otherwise, which means "same as the window" -- the desktop case.
+    int viewportWidth = 0;
+    int viewportHeight = 0;
     std::string windowName;
     GLFWwindow* window;
 

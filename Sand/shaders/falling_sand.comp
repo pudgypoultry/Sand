@@ -37,29 +37,70 @@ void writeCell(uint index, uint value) { grid[index] = value; }
 // table instead, which every captured particle scans in full -- 8 entries is cheap enough to read
 // per voxel per dispatch, and it means the orbit field is exact rather than sampled.
 const int BLACK_HOLE_MAX = 8;
-const int CLOUD_MAX = 64;
 
 // The per-slot reveal/footprint arrays are gone: the cloud field is now a fixed drifting
 // population whose layout is a pure function of (index, time), so there is nothing per-cloud
 // left to store. See the CLOUD FIELD section below.
 layout(std430, binding = 1) buffer SimStats {
     uint waterVoxelCount;
-    uint waterHighMark;          // peak water level ever observed -- the target rain restores to
-    uint cloudWaterCount;        // steam banked since the last storm; drives how charged the sky looks
+    uint waterHighMark;          // UNUSED since clouds became blocks; kept so offsets do not shift
+    uint cloudWaterCount;        // UNUSED since clouds became blocks; kept so offsets do not shift
     uint rainPhase;
     uint rainPhaseTimeBits;
-    uint rainTargetLevel;        // water level this storm rains toward (deficit + overshoot)
+    uint rainTargetLevel;        // UNUSED since clouds became blocks; kept so offsets do not shift
     uint rainCandidateCount;     // census of rainable columns, rebuilt every dispatch
     uint rainCandidateEstimate;  // last dispatch's census -- the divisor that sets drop odds
     uint cloudChargeBits;        // float bits: eased 0..1 group-wide cloud opacity/greyness
+    uint cloudBlockCount;        // live cloud + storm blocks; census, rotated every dispatch
+    uint cloudMovedCount;        // cloud blocks that moved this dispatch; census, rotated
+    uint cloudStillTicks;        // UNUSED: the storm check samples rather than accumulating
+    uint simTick;                // dispatches since startup; the clock the checks run on
+    uint lastRainTick;           // simTick at the last rain event, for the profiler
+    // The global Y range of the cloud field, so the renderer can start its march at the band
+    // instead of at the edge of the world. Accumulator pair and published pair, rotated once
+    // per dispatch like every other census here. Published min > max means no cloud at all.
+    uint cloudMinYAcc;
+    uint cloudMaxYAcc;
+    uint cloudMinY;
+    uint cloudMaxY;
     uint blackHoleCount;         // live table entries; 0 lets every voxel skip the scan entirely
     uint maxOccupiedY;           // ceiling on where matter can be; lets the renderer skip empty sky
     uint blackHoles[BLACK_HOLE_MAX];      // 0 = free slot, else BH_ACTIVE | linear voxel index
     uint blackHoleMass[BLACK_HOLE_MAX];   // voxels swallowed; the hole's body size is derived from it
     uint blackHoleStarve[BLACK_HOLE_MAX]; // dispatches since it last had anything captured
-    // Cloud placement, computed once per dispatch instead of re-derived by every reader. Seven floats
-    // per cloud: centre xyz, radius xyz, edge fade.
-    float cloudCache[CLOUD_MAX * 7];
+
+    // Per-column cloud census, four words per column at (x + z * WIDTH) * 4:
+    //   0 accumulator: cloud blocks counted this dispatch      (atomicAdd)
+    //   1 accumulator: highest cloud block's Y this dispatch    (atomicMax)
+    //   2 published:   last dispatch's count      -- what the renderer reads
+    //   3 published:   last dispatch's highest Y  -- what the renderer reads
+    //
+    // Runtime-sized, which a std430 block permits only as its last member, so nothing may be added
+    // below this line. Length is gridWidth * gridDepth * 4; both renderers size the buffer to match.
+    //
+    // Published separately from the accumulator because there is no way to order a clear against the
+    // atomics that fill it -- the same problem maxOccupiedY documents, solved the same way the rain
+    // census is: the column's owning invocation rotates the pair, and a contribution that races the
+    // rotation lands in one dispatch's tally or the next. That is a jitter of one block on a count,
+    // which is invisible, and it costs no barrier.
+    uint cloudColumn[];
+};
+
+// =================================================================================================
+// CLOUD BLOCKS
+//
+// A second voxel field, one uint per cell, laid out exactly like the main grid and indexed with the
+// same getIndex(). Clouds live here and nowhere else.
+//
+// A parallel buffer rather than a flag inside the voxel word, for two reasons. The word is full --
+// pack() is four 8-bit fields with nothing spare -- and, more importantly, pack() rewrites the whole
+// word in well over a hundred places, so a flag living inside it would be erased constantly and
+// unpredictably by code that has no idea clouds exist. Keeping clouds in their own buffer is what
+// makes a cloud block able to share a cell with ordinary matter: the two fields never alias, so
+// spawning stone into a cell cannot disturb the cloud in it, and a cloud drifting through cannot
+// disturb the stone.
+layout(std430, binding = 4) buffer CloudGrid {
+    uint cloudCells[];
 };
 
 layout(std140, binding = 2) uniform TuningParams {
@@ -162,11 +203,33 @@ layout(std140, binding = 2) uniform TuningParams {
     float treeLeafBurnChance;
     uint treeTrunkColumns;
     float treeTrunkRadius;
+    float renderScale;
+    uint cloudCheckIntervalTicks; // dispatches between storm checks
+    uint rainWaitMaxTicks;        // ceiling of a raincloud's wait, 0..2047
+    float cloudColumnFullCount;   // cloud blocks in a column that read as fully dense
+    float cloudThicknessPerBlock; // world units of cloud drawn per block in the column
+    uint cloudClumpThreshold;     // UNUSED: cloud spreads like sand, no cohesion
+    uint rainWaitMinTicks;        // floor of a raincloud's wait at the ceiling
+    uint steamCondenseTicks;      // dispatches of stillness before steam condenses in place
+    float cloudSmoothRate;        // how fast the drawn cloud surface follows the block field
 } tuning;
 
 #define LAYER_SIZE (uint(WIDTH) * uint(HEIGHT)) // one layer of the world
 
+// Per-frame state the CPU writes: camera pose, cursor position, brush.
+//
+// Vulkan takes this as push constants -- 60 bytes written straight into the command buffer, with
+// no buffer to allocate and nothing to synchronise. WebGPU has no equivalent at all; the web build
+// binds the same fields as an ordinary uniform buffer instead.
+//
+// Only the declaration differs. The fields are all scalars, so std140 packs them at exactly the
+// offsets a push-constant block uses, and the same C++ PushConstants struct is the payload either
+// way. Keeping it as one #ifdef rather than two shader files is what stops the two from drifting.
+#ifdef SAND_WEB
+layout(std140, binding = 3) uniform Constants {
+#else
 layout(push_constant) uniform Constants {
+#endif
     float time;
     float pitch;
     float yaw;
@@ -182,6 +245,12 @@ layout(push_constant) uniform Constants {
     float fovDistance;
     float perspectiveBlend;
     int spawnShape; // 0 = cube, 1 = sphere
+    // Unused here -- this shader casts no rays. Declared because the block's layout is a binary
+    // contract shared with raymarch.frag and FrameConstants.hpp, and a short block here would read
+    // every field before it correctly and then diverge for anything added later.
+    float aspectScaleX;
+    float aspectScaleY;
+    int showCloudBlocks; // debug view: draw the invisible cloud blocks as solid voxels
 } pc;
 
 // World extents. Macros rather than constants because they come from the UBO now -- every use below
@@ -241,6 +310,94 @@ uint getSleep(uint val) {
 // FUNCTION: getAge
 uint getAge(uint val) {
     return (val >> 24) & 0xFFu;
+}
+
+// FUNCTION: packCloud and its accessors
+// The cloud word -- a separate, narrower encoding from pack() above:
+//   bits 0-1   kind     0 = empty, 1 = cloud, 2 = raincloud
+//   bit  2     moved    did this block move on the last dispatch
+//   bits 3-13  counter  a raincloud's tick count at the ceiling, 0..2047
+//   bits 14-24 target   the count it is heading for, 0..2047
+// Nothing outside these functions should know the layout.
+//
+// eleven bits for each of the two counters, not the eight the wait field used to have: a raincloud
+// waits somewhere between rainWaitMinTicks and rainWaitMaxTicks, and 2048 does not fit in a byte.
+//
+// The `moved` bit is what the storm check reads. Storing it per block rather than only counting
+// moves globally means "did anything move last tick" is answerable from the block itself, which is
+// also what makes cloudIsAtRest a single mask instead of a threshold on a sleep counter.
+const uint CLOUD_NONE = 0u;
+const uint CLOUD_CALM = 1u;
+const uint CLOUD_RAIN = 2u;
+
+const uint CLOUD_COUNTER_MAX = 2047u;
+
+uint packCloud(uint kind, bool moved, uint counter, uint target) {
+    return (kind & 3u)
+         | (moved ? 4u : 0u)
+         | ((min(counter, CLOUD_COUNTER_MAX)) << 3)
+         | ((min(target,  CLOUD_COUNTER_MAX)) << 14);
+}
+uint getCloudKind(uint v)    { return v & 3u; }
+bool getCloudMoved(uint v)   { return (v & 4u) != 0u; }
+uint getCloudCounter(uint v) { return (v >> 3) & CLOUD_COUNTER_MAX; }
+uint getCloudTarget(uint v)  { return (v >> 14) & CLOUD_COUNTER_MAX; }
+
+// FUNCTION: cloudCellInBounds
+// Whether a cloud block may occupy a cell -- the same strict interior every other material is
+// confined to, NOT merely "inside the array".
+//
+// This matters far more than it looks. main() walls off a one-voxel border and returns before any
+// material update, so a voxel that reaches the border is never simulated again: it is frozen there
+// for good. Cloud movement used to test only against WIDTH and DEPTH, so blocks slid into the border
+// columns, and a storm block there turned into a water voxel that could never fall -- water welded
+// to the walls of the world.
+bool cloudCellInBounds(ivec3 p) {
+    return p.x >= 1 && p.x < WIDTH - 1 &&
+           p.y >= 1 && p.y < HEIGHT - 1 &&
+           p.z >= 1 && p.z < DEPTH - 1;
+}
+
+// FUNCTION: easeTowards
+// One step of an exponential average held as an integer, guaranteed to arrive.
+//
+// The obvious form -- uint(old + (target - old) * rate) -- does not. Once the remaining difference
+// is small the step is under one unit and the truncation throws it away, so the value parks short of
+// the target and stays there: at a rate of 0.08 an average chasing one block settles a quarter of
+// the way and never moves again. Forcing a whole unit of movement whenever there is any difference
+// left fixes that, and clamping to the target stops the forced step overshooting.
+uint easeTowards(uint current, float target, float rate) {
+    float old = float(current);
+    float next = old + (target - old) * rate;
+    if (target > old)      next = clamp(max(next, old + 1.0f), old, target);
+    else if (target < old) next = clamp(min(next, old - 1.0f), target, old);
+    return uint(max(next, 0.0f));
+}
+
+// FUNCTION: cloudTouchesRain
+// Whether any of the six face neighbours holds a raincloud. Faces only, not the 26-cell shell:
+// "touching" should mean touching, and a diagonal contact spreading the rain would let it jump
+// through the gap between two blocks that are not themselves connected.
+bool cloudTouchesRain(ivec3 pos) {
+    for (int i = 0; i < 6; i++) {
+        ivec3 n = pos + getOrthoDir(i);
+        if (!cloudCellInBounds(n)) continue;
+        if (getCloudKind(cloudCells[getIndex(n)]) == CLOUD_RAIN) return true;
+    }
+    return false;
+}
+
+// FUNCTION: cloudColumnBase
+// Where a column's four census words start. x and z only -- the whole point is that the renderer
+// can answer "how much cloud is over this spot" without marching the column.
+uint cloudColumnBase(int x, int z) { return uint(x + z * WIDTH) * 4u; }
+
+// FUNCTION: cloudIsAtRest
+// A cloud block that did not move on the last dispatch. Steam condenses onto these, so it has to
+// mean "settled" rather than merely "present": condensing against a block still on its way up would
+// turn a rising column into cloud from the bottom and fill the sky from the wrong end.
+bool cloudIsAtRest(uint v) {
+    return getCloudKind(v) != CLOUD_NONE && !getCloudMoved(v);
 }
 
 // FUNCTION: hash
@@ -490,25 +647,13 @@ ivec3 tree26(int i) {
 // the grid. Not "water in the system" -- water stored as soil moisture or as airborne steam is
 // deliberately NOT counted, because those are different storage forms with their own state.
 // Keeping this to a single, directly-observable meaning is what makes the conservation loop
-// auditable: water voxel -> steam (dec) -> vents off the top (cloudWaterCount +1) -> rains back
-// down (cloudWaterCount -1, inc) balances exactly, and soil absorption (dec) / percolation (inc)
+// auditable: water voxel -> steam (dec) -> vents off the top as a cloud block -> that block rides
+// the storm back down and becomes water again (inc), and soil absorption (dec) / percolation (inc)
 // balance against each other. Every transition that creates or destroys a water voxel must call
 // one of these. decWater relies on uint wraparound (adding 0xFFFFFFFFu == -1 under modular
 // arithmetic) since atomicAdd has no signed form.
 void incWater() { atomicAdd(waterVoxelCount, 1u); }
 void decWater() { atomicAdd(waterVoxelCount, 0xFFFFFFFFu); }
-
-// FUNCTION: decWaterHighMark
-// Saturating decrement of the rain target, used whenever water leaves the world for good.
-//
-// It has to saturate. atomicAdd has no signed form so the idiom is to add -1 under modular
-// arithmetic, and that silently turns 0 into four billion -- a high mark the level can never reach,
-// read as a permanent enormous deficit that the sky would then chase forever. Undoing the borrow
-// when it happens is cheaper than a CAS loop and is itself race-safe, since every invocation that
-// observes the underflow applies the same correction.
-void decWaterHighMark() {
-    if (atomicAdd(waterHighMark, 0xFFFFFFFFu) == 0u) atomicAdd(waterHighMark, 1u);
-}
 
 // FUNCTION: getRainThreshold
 // Was a compile-time `const` before its input moved into the TuningParams UBO; GLSL const
@@ -678,112 +823,6 @@ bool inBrush(ivec3 pos) {
     return dot(d, d) <= radius * radius;
 }
 
-// =================================================================================================
-// CLOUD FIELD -- shared placement math. THIS BLOCK IS DUPLICATED VERBATIM IN raymarch.frag.
-//
-// Cloud layout is a pure function of (index, time) and is stored nowhere. Both stages receive the
-// same pc.time in a single vkCmdPushConstants call, so the compute stage (deciding which columns
-// sit under a cloud and may rain) and the fragment stage (drawing them) derive byte-identical
-// positions with no synchronisation and no per-slot buffer. If you edit one copy you MUST edit
-// the other, or rain will fall out of a clear sky.
-//
-// The population is fixed: clouds scroll along +X and wrap, so one drifts out of the far border
-// exactly as another drifts in at the near one. Nothing is ever "revealed" or "retired".
-//
-// The placement maths below is now evaluated ONCE per dispatch, by the first CLOUD_MAX invocations,
-// into cloudCache. It used to be re-derived by every reader, and the readers are the whole top layer
-// of the grid and every pixel on screen -- six sin() calls per cloud, so 32 clouds cost 192
-// transcendentals to answer a question with one answer per frame. Caching also retires the hazard
-// that the comment above used to warn about: the fragment shader no longer carries its own copy of
-// this maths, so the two stages cannot drift apart and rain cannot fall from a clear sky.
-// =================================================================================================
-
-// FUNCTION: cloudRadiiSource
-vec3 cloudRadiiSource(int i) {
-    float h4 = hash(vec3(float(i), 211.0f, 5.0f));
-    float h5 = hash(vec3(float(i), 71.0f, 61.0f));
-    float h6 = hash(vec3(float(i), 19.0f, 173.0f));
-    float rxz = 10.0f + h4 * 18.0f;
-    return vec3(rxz, 4.0f + h5 * 6.0f, rxz * (0.7f + h6 * 0.6f));
-}
-
-// FUNCTION: cloudCenterXZSource
-vec2 cloudCenterXZSource(int i, float t) {
-    float h1 = hash(vec3(float(i), 11.0f, 3.0f));
-    float h2 = hash(vec3(float(i), 47.0f, 91.0f));
-    float phase = hash(vec3(float(i), 91.0f, 250.0f)) * 6.28318f;
-
-    float x = mod(h1 * float(WIDTH) + t * tuning.cloudDriftSpeed, float(WIDTH));
-    float z = mod(h2 * float(DEPTH) + sin(t * 0.12f + phase) * 3.0f, float(DEPTH));
-    return vec2(x, z);
-}
-
-// FUNCTION: cloudEdgeFade
-// 1 over the middle of the cube, falling to 0 at each border. The fade has to happen INSIDE the
-// footprint because the renderer already hard-clips clouds to the cube's XZ column -- fading
-// outside it would be invisible and clouds would still pop at the boundary. This is what makes a
-// cloud dissolve as it reaches the border and re-emerge on the opposite side.
-//
-// Only updateCloudCache calls this; every consumer reads the cached result. It depends on nothing
-// but the cloud's own centre, so like the placement maths it has exactly one answer per frame.
-float cloudEdgeFade(vec2 c) {
-    float d = max(tuning.cloudEdgeFadeDist, 0.001f);
-    float fx = smoothstep(0.0f, d, c.x) * smoothstep(0.0f, d, float(WIDTH) - c.x);
-    float fz = smoothstep(0.0f, d, c.y) * smoothstep(0.0f, d, float(DEPTH) - c.y);
-    return fx * fz;
-}
-
-// FUNCTION: cloudCenter / cloudRadii / cloudFade
-// Cache readers. Every consumer goes through these; only updateCloudCache touches the maths.
-vec3  cloudCenter(int i) { return vec3(cloudCache[i * 7 + 0], cloudCache[i * 7 + 1], cloudCache[i * 7 + 2]); }
-vec3  cloudRadii(int i)  { return vec3(cloudCache[i * 7 + 3], cloudCache[i * 7 + 4], cloudCache[i * 7 + 5]); }
-float cloudFade(int i)   { return cloudCache[i * 7 + 6]; }
-
-// FUNCTION: updateCloudCache
-// One invocation per cloud, taken from the first row of the dispatch. Those voxels sit in the border
-// the simulation walls off and return early anyway, so the work is close to free.
-//
-// Everything a consumer could want about a cloud is derived here, including the vertical centre and
-// the edge fade. Both used to be re-derived per pixel by the renderer -- the vertical centre carried
-// a hash() of its own, which is a sine per cloud per pixel, and the fade is four smoothsteps. Neither
-// depends on anything but the cloud index and the frame time.
-//
-// Readers may see the previous dispatch's values, which is deliberate and matches how the rain
-// census already rotates: clouds drift a fraction of a voxel per tick, so a one-dispatch-old position
-// is invisible, and the alternative would be a barrier for no visible gain.
-void updateCloudCache() {
-    if (gl_GlobalInvocationID.y != 0u || gl_GlobalInvocationID.z != 0u) return;
-    uint i = gl_GlobalInvocationID.x;
-    if (i >= uint(CLOUD_MAX)) return;
-
-    vec2 c = cloudCenterXZSource(int(i), pc.time);
-    vec3 r = cloudRadiiSource(int(i));
-
-    // Bottom edge sits at the world's top, with 0-4 units of gap.
-    float h3 = hash(vec3(float(i), 133.0f, 7.0f));
-    float cy = float(HEIGHT) + r.y + h3 * 4.0f;
-
-    cloudCache[i * 7u + 0u] = c.x;
-    cloudCache[i * 7u + 1u] = cy;
-    cloudCache[i * 7u + 2u] = c.y;
-    cloudCache[i * 7u + 3u] = r.x;
-    cloudCache[i * 7u + 4u] = r.y;
-    cloudCache[i * 7u + 5u] = r.z;
-    cloudCache[i * 7u + 6u] = cloudEdgeFade(c);
-}
-
-// FUNCTION: getWaterDeficit
-// How far the cube's water level has fallen below its peak -- this, not a running tally of
-// evaporation events, is what a storm has to repay. Counting events could only ever undercount
-// the real loss, because water leaves the visible pool through paths that were never credited:
-// steam absorbed into soil on the way up never reaches the top to be banked, and rain absorbed
-// into soil on the way down repaid the old debt while adding no water back. Measuring the level
-// directly is immune to all of that -- however water went missing, and wherever it went, the
-// deficit reflects it, and rain keeps falling until the level is actually restored.
-uint getWaterDeficit() {
-    return (waterHighMark > waterVoxelCount) ? (waterHighMark - waterVoxelCount) : 0u;
-}
-
 // FUNCTION: tryMove
 bool tryMove(uint currentIndex, uint currentValue, uint targetIndex, uint newValue) {
     uint targetValue = readCell(targetIndex);
@@ -901,10 +940,10 @@ void updateOrbital(ivec3 pos, uint currentIndex, uint rawValue, ivec3 center, in
             if (!bhIsPurge(blackHoles[slot])) atomicAdd(blackHoleMass[slot], 1u);
 
             if (type == 2u) {
+                // No high mark to bring down any more: a storm's size is the cloud that fell, not a
+                // debt measured against a peak water level, so water swallowed by a hole simply
+                // stops existing and the sky never knew about it either way.
                 decWater();
-                // A hole keeps what it swallows, so this water can never be rained back. The high
-                // mark has to come down with it, or the sky would open a storm it can never finish.
-                decWaterHighMark();
             }
         }
         return;
@@ -1042,29 +1081,6 @@ bool captureByBlackHole(ivec3 pos, uint currentIndex, uint rawValue, float randV
     updateOrbital(pos, currentIndex, rawValue, bestCenter, bestSlot, bestLevel, bestPurge, sqrt(bestDistSq), randVal);
     return true;
 }
-
-// FUNCTION: getRainDropChance
-// Rain's rate control, expressed as a per-column probability rather than a shared allowance.
-//
-// The obvious implementation -- a global budget of N drops that columns claim atomically until
-// it runs out -- silently biases rain to one side of the cube. Workgroups are dispatched in
-// roughly spatial order, so low-x/low-z columns reliably reach the counter first and drain the
-// whole allowance before the far side ever attempts a claim. The rate comes out correct while
-// the distribution is badly skewed, which is exactly the sort of bug that looks like a rendering
-// problem and isn't.
-//
-// Instead, every eligible column rolls independently against the same probability, so placement
-// carries no dependence on execution order whatsoever. To keep the *rate* fixed while doing that,
-// the odds are divided by a live census of how many columns are currently rainable (counted last
-// dispatch): odds = wanted_drops / candidates, giving an expected wanted_drops per tick no matter
-// whether one small cloud or a full overcast sky is overhead. Capping wanted_drops at the
-// outstanding deficit tapers the final tick so a storm can't overshoot and ratchet the high mark.
-float getRainDropChance(uint candidates, uint remaining) {
-    if (candidates == 0u) return 0.0f;
-    uint want = min(tuning.rainDropsPerTick, remaining);
-    return clamp(float(want) / float(candidates), 0.0f, 1.0f);
-}
-
 
 // FUNCTION: grainCanMove
 // Cheap precondition for a grain's entire falling path: five reads answering "is there anywhere at
@@ -1490,8 +1506,8 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
 // tick -- goes fully inert and stays that way indefinitely; it does NOT age out or evaporate.
 // A settled lake/pool is meant to reach a steady state and remain there. The only ways water
 // leaves the system are the user's void brush and fire boiling it into steam (see updateFire),
-// and cloud moisture is only ever banked by that steam venting off the top of the grid (see
-// updateSteam) -- this function must never call atomicAdd(cloudWaterCount, ...).
+// and cloud moisture is only ever banked by that steam venting off the top of the grid as a cloud
+// block (see updateSteam) -- this function must never create one.
 void updateWater(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentSleep, uint currentAge, float randVal) {
     if (currentSleep > tuning.wakeSleepThreshold) {
         bool wake = false;
@@ -2473,13 +2489,9 @@ void updateSimState() {
     }
     blackHoleCount = live;
 
-    // The peak water level is the target a storm restores to. Only tracked while no storm is in
-    // progress: a storm deliberately overshoots past the old peak, and letting the mark chase
-    // that would move the goalposts mid-storm and stop it from ever finishing. Only a deliberate
-    // user void lowers it, so erasing water on purpose leaves no debt the sky keeps repaying.
-    if (rainPhase == 0u && waterVoxelCount > waterHighMark) waterHighMark = waterVoxelCount;
-
-    uint deficit = getWaterDeficit();
+    // Weather is driven by the cloud field going still, not by a water deficit. waterHighMark,
+    // rainTargetLevel and the deficit maths that used to live here are gone with it -- see the
+    // comments on those fields in SimStats.
 
     // --- Occupied-height ceiling ---------------------------------------------------------------
     // maxOccupiedY is a running high-water mark for "how high does matter reach", and the renderer
@@ -2503,49 +2515,54 @@ void updateSimState() {
     rainCandidateEstimate = rainCandidateCount;
     rainCandidateCount = 0u;
 
-    // --- Group cloud charge -------------------------------------------------------------------
-    // One value the entire sky renders from, so the whole field thickens and greys together
-    // rather than individual clouds blinking in and out. Before a storm it tracks banked steam,
-    // so the sky only darkens because smoke put moisture up there; once a storm is committed it
-    // tracks the outstanding deficit instead, so the clouds visibly thin out as the debt is
-    // repaid and are clear again exactly when the water is back. Eased rather than assigned so
-    // every transition -- including the source switch at the storm boundary -- is gradual.
-    uint remainingToTarget = (rainTargetLevel > waterVoxelCount) ? (rainTargetLevel - waterVoxelCount) : 0u;
-    uint chargeSource = (rainPhase == 0u) ? cloudWaterCount : remainingToTarget;
-    float chargeTarget = clamp(float(chargeSource) / max(tuning.cloudChargeSaturation, 1.0f), 0.0f, 1.0f);
+    // --- The storm check ------------------------------------------------------------------------
+    // Every cloudCheckIntervalTicks dispatches, ask one question: did any cloud block move on the
+    // dispatch just gone? If none did, the field has settled and a rain event begins.
+    //
+    // Periodic rather than a run of consecutive still ticks, which is what this used to be. A run
+    // resets on any movement, so one block jostling once every few hundred ticks postponed weather
+    // indefinitely; sampling instead asks only whether the sky is still at the moment it is asked.
+    //
+    // cloudMovedCount is read before the clear, so it is the tally accumulated since the last clear
+    // -- exactly one dispatch's worth, wherever in the dispatch this single writer happens to run.
+    simTick = simTick + 1u;
+    uint movedLastTick = cloudMovedCount;
+    uint liveClouds = cloudBlockCount;
+    cloudBlockCount = 0u;
+    cloudMovedCount = 0u;
+
+    // The band, rotated the same way. The min accumulator restarts at the maximum a uint can hold
+    // rather than at zero, which is what makes atomicMin meaningful -- and leaves min > max as an
+    // unambiguous "there is no cloud", which the renderer uses to skip the march entirely.
+    cloudMinY = cloudMinYAcc;
+    cloudMaxY = cloudMaxYAcc;
+    cloudMinYAcc = 0xFFFFFFFFu;
+    cloudMaxYAcc = 0u;
+
+    // --- Group cloud charge ---------------------------------------------------------------------
+    // One value the whole sky renders from, so it thickens and greys together rather than cloud by
+    // cloud. Clear while gathering, full once it is raining. Eased rather than assigned, so the
+    // change is gradual.
+    float chargeTarget = (rainPhase == 0u) ? 0.0f : 1.0f;
     float charge = uintBitsToFloat(cloudChargeBits);
     charge += (chargeTarget - charge) * clamp(tuning.cloudChargeEaseRate, 0.0f, 1.0f);
     cloudChargeBits = floatBitsToUint(clamp(charge, 0.0f, 1.0f));
 
     if (rainPhase == 0u) {
-        // Two independent preconditions, deliberately kept separate: cloudWaterCount > 0 means
-        // smoke actually put moisture in the sky (rain still only ever follows steam), while the
-        // deficit decides whether there is anything worth raining for. Storm SIZE is not tied to
-        // how much steam happened to reach the top -- it's tied to what's actually gone.
-        if (cloudWaterCount > 0u && deficit > getRainThreshold()) {
-            rainPhase = 1u;
-            rainPhaseTimeBits = floatBitsToUint(pc.time);
-            // Aim past the deficit rather than exactly at it. Drops still in flight already count
-            // as water voxels, so the level reads "restored" a moment before those drops have
-            // actually landed -- and some of them then soak into soil instead of pooling. Without
-            // headroom every storm therefore quits a little early and the level ratchets down
-            // over time. rainOvershoot is that headroom.
-            rainTargetLevel = waterHighMark + uint(float(deficit) * max(tuning.rainOvershoot, 0.0f));
-        }
-    } else if (rainPhase == 1u) {
-        float crossedTime = uintBitsToFloat(rainPhaseTimeBits);
-        if (pc.time - crossedTime >= tuning.rainDarkenDelay) {
+        uint interval = max(tuning.cloudCheckIntervalTicks, 1u);
+        if (simTick % interval == 0u && liveClouds > 0u && movedLastTick == 0u) {
             rainPhase = 2u;
-            rainPhaseTimeBits = floatBitsToUint(pc.time); // repurposed: now marks rain start time
+            rainPhaseTimeBits = floatBitsToUint(pc.time);
+            lastRainTick = simTick;   // read back by the profiler; nothing in the sim uses it
         }
-    } else if (rainPhase == 2u) {
-        // Ends only when the level actually reaches the target, not when some separately-counted
-        // reservoir runs dry. Water absorbed by soil mid-storm keeps the gap open, so the storm
-        // simply continues until the ground is sated and real water pools again.
-        if (remainingToTarget == 0u) {
+    } else {
+        // Raining. Every cloud block became a raincloud, and each makes its own way to the ceiling,
+        // waits out its counter and falls as water. The storm is over exactly when the last one has
+        // gone -- there is no target level to reach and nothing to overshoot, because the water that
+        // comes down is the water that went up, one block for one voxel.
+        if (liveClouds == 0u) {
             rainPhase = 0u;
             rainPhaseTimeBits = 0u;
-            cloudWaterCount = 0u; // clouds have spent their moisture; the sky eases back to clear
         }
     }
 }
@@ -2553,14 +2570,50 @@ void updateSimState() {
 // FUNCTION: updateSteam
 void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, uint currentAge, float randVal) {
     if (pos.y >= HEIGHT - 2) {
-        // No decWater() here: this voxel stopped counting as water back when fire turned it
-        // into steam. Venting only banks it as cloud moisture, which is what charges the sky.
-        atomicAdd(cloudWaterCount, 1u);
+        // Still no decWater(): this voxel stopped counting as water back when fire turned it into
+        // steam, and that is where the decrement already happened. What changed is where the
+        // moisture goes -- it used to become an abstract tally in cloudWaterCount, and now it
+        // becomes an actual cloud block occupying this cell in the cloud field.
+        //
+        // The cloud write has to succeed before the steam is cleared, or a steam voxel is destroyed
+        // and its moisture with it.
+        // Touching the roof always ends the steam, one way or the other. Letting it fall through to
+        // ordinary movement is what produced steam skating along the underside of the cube looking
+        // for a free cell, which should not be possible: reaching the top IS becoming cloud.
+        uint newKind = (rainPhase == 2u) ? CLOUD_RAIN : CLOUD_CALM;
+        if (atomicCompSwap(cloudCells[currentIndex], 0u, packCloud(newKind, false, 0u, 0u)) == 0u) {
+            atomicExchange(grid[currentIndex], 0u);
+            return;
+        }
+        // A cloud block already occupies this cell, so there is no slot to condense into. The steam
+        // merges into it and is gone rather than skating away. That does lose one voxel of moisture
+        // from the cycle, which is worth being explicit about -- but it is bounded and rare: steam
+        // treats clouded cells as solid (see the movement checks below), so the only way to be here
+        // is to have been created inside one, which means water boiled directly beneath the layer.
         atomicExchange(grid[currentIndex], 0u);
         return;
     }
 
     uint newAge = min(currentAge + 1u, 255u);
+
+    // 0. Stalled steam condenses where it stands.
+    //
+    // The rules below cover steam that reaches the roof and steam that rises into settled cloud, but
+    // not steam a cloud block has risen INTO -- the two fields do not look at each other, so a cloud
+    // can occupy the cell a steam voxel is already in, and that steam is touching cloud without
+    // being under it. It has nowhere to rise to and no rule to catch it, so it hangs in the air.
+    //
+    // A timeout catches that and anything else like it without having to enumerate them. A block
+    // that has genuinely nowhere to go is, physically, a block that should have condensed.
+    if (currentSleep >= tuning.steamCondenseTicks) {
+        // The compare-and-swap is allowed to fail: failing means a cloud block already occupies this
+        // cell, which is exactly the case that stranded this voxel, and the steam merges into it.
+        // Either way the steam is gone, so the grid write is unconditional.
+        uint newKind = (rainPhase == 2u || cloudTouchesRain(pos)) ? CLOUD_RAIN : CLOUD_CALM;
+        atomicCompSwap(cloudCells[currentIndex], 0u, packCloud(newKind, false, 0u, 0u));
+        atomicExchange(grid[currentIndex], 0u);
+        return;
+    }
 
     // 1. Scatter randomly (horizontal or vertical)
     if (fract(randVal * 88.0f) < tuning.steamScatterChance) {
@@ -2568,8 +2621,19 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
         ivec3 scatterPos = pos + getOrthoDir(d);
         if (scatterPos.x > 0 && scatterPos.x < WIDTH - 1 && scatterPos.y > 0 && scatterPos.y < HEIGHT - 1 && scatterPos.z > 0 && scatterPos.z < DEPTH - 1) {
             uint sType = getType(readCell(getIndex(scatterPos)));
-            if (sType == 0u || sType == 5u) {
-                if (tryMove(currentIndex, rawValue, getIndex(scatterPos), pack(6u, 0u, 0u, newAge))) return;
+            // A clouded cell is closed to steam. Without this steam wanders into the layer, and a
+            // steam voxel sharing a cell with a cloud block has nowhere to condense.
+            if ((sType == 0u || sType == 5u) &&
+                getCloudKind(cloudCells[getIndex(scatterPos)]) == CLOUD_NONE) {
+                // Carries the sleep counter forward rather than resetting it. Scattering is a
+                // lateral random walk, not progress towards the roof, and the counter exists to
+                // detect steam that cannot ascend. Resetting it here meant a voxel blocked from
+                // above kept clearing its own timer by drifting sideways -- ten CONSECUTIVE still
+                // ticks at a 30% scatter chance is a 2.8% event, so stalled steam wandered for
+                // hundreds of ticks instead of condensing. Only a successful rise resets it.
+                uint carried = min(currentSleep + 1u, 255u);
+                if (tryMove(currentIndex, rawValue, getIndex(scatterPos),
+                            pack(6u, 0u, carried, newAge))) return;
             }
         }
     }
@@ -2583,7 +2647,42 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
         checkPos[1] = pos + ivec3(0, 1, dir); checkPos[2] = pos + ivec3(dir, 1, 0);
     }
 
-    // 2. Check for moisture-absorbing blocks (Sand = 1u, Dirt = 4u)
+    // 2. Condense onto the underside of the cloud layer.
+    //
+    // This is the other half of how cloud forms, and without it the layer could only ever be one
+    // voxel deep: steam became cloud only at HEIGHT-2, so once that single row was full every
+    // further wisp had nowhere to go and simply milled about forever, which is what made steam look
+    // like a liquid that never settles. Rain was a drip for the same reason -- a storm can only
+    // return as many drops as there were blocks, and there were almost none.
+    //
+    // Rising into a settled cloud block turns this steam into cloud where it stands, so the layer
+    // thickens downward from the roof as more moisture arrives.
+    {
+        ivec3 upPos = pos + ivec3(0, 1, 0);
+        bool underSettled = cloudCellInBounds(upPos) && cloudIsAtRest(cloudCells[getIndex(upPos)]);
+        // Steam touching a raincloud joins the storm directly, which is what stops a rain event
+        // leaving a fog of steam behind that would have to condense and wait for the next one.
+        bool touchingRain = cloudTouchesRain(pos);
+
+        if (underSettled || touchingRain) {
+            // The compare-and-swap is allowed to fail, and the grid write happens either way.
+            //
+            // Failing means a cloud block already holds this cell -- steam suspended INSIDE the
+            // layer rather than under it, which is what a cloud block rising into a steam voxel
+            // produces. That steam has merged and is gone.
+            //
+            // Returning without writing, as this did, was an outright hang: the tail of this
+            // function is what advances the condense timer, so a voxel that took this branch every
+            // dispatch never aged, never tripped the failsafe, and hung between cloud blocks for
+            // the rest of the session. The timer cannot rescue a path that returns before it.
+            uint newKind = (touchingRain || rainPhase == 2u) ? CLOUD_RAIN : CLOUD_CALM;
+            atomicCompSwap(cloudCells[currentIndex], 0u, packCloud(newKind, false, 0u, 0u));
+            atomicExchange(grid[currentIndex], 0u);
+            return;
+        }
+    }
+
+    // 3. Check for moisture-absorbing blocks (Sand = 1u, Dirt = 4u)
     for (int i = 0; i < 3; i++) {
         ivec3 cPos = checkPos[i];
         if (cPos.x > 0 && cPos.x < WIDTH - 1 && cPos.z > 0 && cPos.z < DEPTH - 1) {
@@ -2604,12 +2703,19 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
         }
     }
 
-    // 3. Try moving upwards or diagonally upwards (Air = 0u, Fire = 5u)
+    // 4. Try moving upwards or diagonally upwards (Air = 0u, Fire = 5u)
+    //
+    // The Y bound is new and load-bearing. This function used to return before reaching here
+    // whenever pos.y was at HEIGHT-2, so a rise target could never be the border row; steam at the
+    // ceiling now falls through, and without this it would step into the border and freeze there
+    // permanently, since main() never simulates it again.
     for (int i = 0; i < 3; i++) {
         ivec3 sPos = checkPos[i];
-        if (sPos.x > 0 && sPos.x < WIDTH - 1 && sPos.z > 0 && sPos.z < DEPTH - 1) {
+        if (sPos.y < HEIGHT - 1 &&
+            sPos.x > 0 && sPos.x < WIDTH - 1 && sPos.z > 0 && sPos.z < DEPTH - 1) {
             uint sType = getType(readCell(getIndex(sPos)));
-            if (sType == 0u || sType == 5u) {
+            if ((sType == 0u || sType == 5u) &&
+                getCloudKind(cloudCells[getIndex(sPos)]) == CLOUD_NONE) {
                 if (tryMove(currentIndex, rawValue, getIndex(sPos), pack(6u, 0u, 0u, newAge))) return;
             }
         }
@@ -2617,6 +2723,187 @@ void updateSteam(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep,
     
     uint newSleep = min(currentSleep + 1u, 255u);
     atomicCompSwap(grid[currentIndex], rawValue, pack(6u, 0u, newSleep, newAge));
+}
+
+// FUNCTION: tryMoveCloud
+// Moves a cloud block one cell, in the cloud field only. The value written at the destination is
+// passed separately from the one expected at the source, because a moving block resets its sleep
+// counter on arrival.
+//
+// Destination claimed before the source is released, which is the opposite order from tryMove on
+// the main grid and deliberate: the failure it guards against is different. On the grid a voxel
+// briefly existing twice would be visible matter appearing from nowhere; here a cloud block briefly
+// existing twice is one dispatch of a slightly denser column, which nothing can see, while losing
+// one permanently removes moisture from a closed system.
+bool tryMoveCloud(uint fromIndex, uint newValue, uint toIndex, uint expectedFromValue) {
+    if (atomicCompSwap(cloudCells[toIndex], 0u, newValue) != 0u) return false;
+    if (atomicCompSwap(cloudCells[fromIndex], expectedFromValue, 0u) != expectedFromValue) {
+        // The source changed under us, so this block is not ours to move after all. Hand the
+        // destination back rather than leaving a copy behind.
+        atomicExchange(cloudCells[toIndex], 0u);
+        return false;
+    }
+    return true;
+}
+
+// FUNCTION: updateCloudBlock
+// The whole cloud simulation, run by every invocation for its own cell.
+//
+// It touches the main grid in exactly two places -- a raincloud finishing its count and becoming
+// water, and the census of steam it converts. Everywhere else it reads and writes cloudCells alone,
+// and that is what makes a cloud block able to share a cell with stone: the two fields never look at
+// each other, so neither can disturb the other.
+//
+// Cloud blocks fall upward: straight up, then one of two diagonals, exactly as a grain falls
+// downward. There is deliberately NO cohesion rule. Sand spreads because a blocked grain slides
+// aside; adding the clump test made a pile hold its shape instead, which is dirt's behaviour, and
+// cloud stacked into towers rather than spreading along the ceiling.
+void updateCloudBlock(ivec3 pos) {
+    uint idx = getIndex(pos);
+    uint base = cloudColumnBase(pos.x, pos.z);
+
+    // Rotate this column's census. y == 0 is in every column and is visited exactly once per
+    // dispatch, which makes it the natural single writer for the column.
+    if (pos.y == 0) {
+        // Eased into the published pair rather than copied, and held in sixteenths.
+        //
+        // The block field is never still, so a surface drawn straight from this dispatch's tally
+        // changes every dispatch and the deck boils -- which is what the edge flicker is, once the
+        // fill pattern itself was made stable. An exponential average lets the drawn shape drift
+        // toward the truth over tens of dispatches instead of chasing it every one.
+        //
+        // Sixteenths because the average has to be able to move by less than a whole block: at
+        // integer resolution a rate of 0.08 against a difference of one truncates to zero and the
+        // value sticks forever, one short of where it should be.
+        float rate = clamp(tuning.cloudSmoothRate, 0.01f, 1.0f);
+        uint tallied = cloudColumn[base + 0u];
+
+        cloudColumn[base + 2u] = easeTowards(cloudColumn[base + 2u], float(tallied) * 16.0f, rate);
+
+        // The height is only eased when this window actually counted something, and that guard is
+        // the whole point of it.
+        //
+        // The height accumulator is an atomicMax reset to zero, so a column that happened to hold no
+        // block during one window publishes a height of zero -- not "unchanged", but "the floor".
+        // Easing toward that dragged the drawn surface down through the world and then let it climb
+        // back as blocks reappeared, which is the cloud seen bubbling upward from under the roof,
+        // with pieces of deck stranded well below it. A window with nothing in it says nothing about
+        // where the cloud is; the previous height stands, and the count easing to zero is what makes
+        // an emptied column fade out.
+        if (tallied > 0u) {
+            cloudColumn[base + 3u] = easeTowards(cloudColumn[base + 3u],
+                                                 float(cloudColumn[base + 1u]) * 16.0f, rate);
+        }
+
+        cloudColumn[base + 0u] = 0u;
+        cloudColumn[base + 1u] = 0u;
+    }
+
+    uint cell = cloudCells[idx];
+    uint kind = getCloudKind(cell);
+    if (kind == CLOUD_NONE) return;
+
+    atomicAdd(cloudBlockCount, 1u);
+    atomicAdd(cloudColumn[base + 0u], 1u);
+    atomicMax(cloudColumn[base + 1u], uint(pos.y));
+    atomicMin(cloudMinYAcc, uint(pos.y));
+    atomicMax(cloudMaxYAcc, uint(pos.y));
+
+    // --- Becoming a raincloud -------------------------------------------------------------------
+    // Two ways in, and both matter. A rain event converts the whole field at once, which is what
+    // makes a storm a storm rather than a drizzle; and a calm block touching an existing raincloud
+    // joins it, which mops up whatever formed after the event began so a storm ends cleanly instead
+    // of leaving islands of calm cloud behind.
+    if (kind == CLOUD_CALM && (rainPhase == 2u || cloudTouchesRain(pos))) {
+        uint newCell = packCloud(CLOUD_RAIN, false, 0u, 0u);
+        if (atomicCompSwap(cloudCells[idx], cell, newCell) != cell) return;
+        cell = newCell;
+        kind = CLOUD_RAIN;
+    }
+
+    if (pos.y >= HEIGHT - 2) {
+        // At the ceiling. A calm block simply sits here -- there is nothing above to rise into, so
+        // it is at rest by construction and its moved bit must read false.
+        if (kind != CLOUD_RAIN) {
+            if (getCloudMoved(cell)) {
+                atomicCompSwap(cloudCells[idx], cell, packCloud(kind, false, 0u, 0u));
+            }
+            return;
+        }
+
+        // A raincloud at the ceiling picks how long to hang there, once, then counts up to it.
+        // Target zero means "not yet chosen" -- a real target is always at least rainWaitMinTicks,
+        // which the schema floors at 1, so zero is unambiguous.
+        uint target = getCloudTarget(cell);
+        if (target == 0u) {
+            uint lo = min(tuning.rainWaitMinTicks, tuning.rainWaitMaxTicks);
+            uint hi = max(tuning.rainWaitMinTicks, tuning.rainWaitMaxTicks);
+            float r = hash(vec3(pos) + vec3(pc.time, 17.0f, 3.0f));
+            target = lo + uint(r * float(hi - lo + 1u));
+            atomicCompSwap(cloudCells[idx], cell, packCloud(CLOUD_RAIN, false, 0u, target));
+            return;
+        }
+
+        uint counter = getCloudCounter(cell);
+        if (counter < target) {
+            atomicCompSwap(cloudCells[idx], cell, packCloud(CLOUD_RAIN, false, counter + 1u, target));
+            return;
+        }
+
+        // Time is up: become water. Never outside the simulated interior -- a water voxel in the
+        // border row is one main() would never update again, so it would hang on the wall forever.
+        if (!cloudCellInBounds(pos)) return;
+
+        uint g = readCell(idx);
+        if (getType(g) != 0u) return;   // occupied: hold the block and try again next dispatch
+        if (atomicCompSwap(grid[idx], g, pack(2u, 0u, 0u, 0u)) != g) return;
+
+        // Unconditional, not a compare-and-swap: nothing can move into an occupied cloud cell and
+        // only this invocation owns this cell, so there is no race -- and a compare-and-swap that
+        // failed for any reason would leave a cloud block standing over water it had already made.
+        atomicExchange(cloudCells[idx], 0u);
+        incWater();
+        if (uint(pos.y) > maxOccupiedY) atomicMax(maxOccupiedY, uint(pos.y));
+        return;
+    }
+
+    // --- Rise, the way a grain falls ------------------------------------------------------------
+    float randVal = hash(vec3(pos) + vec3(pc.time * 2.3f, 7.0f, 13.0f));
+    uint counter = getCloudCounter(cell);
+    uint target  = getCloudTarget(cell);
+
+    ivec3 upPos = pos + ivec3(0, 1, 0);
+    if (cloudCellInBounds(upPos) && getCloudKind(cloudCells[getIndex(upPos)]) == CLOUD_NONE) {
+        if (tryMoveCloud(idx, packCloud(kind, true, counter, target), getIndex(upPos), cell)) {
+            atomicAdd(cloudMovedCount, 1u);
+            return;
+        }
+    }
+
+    int dir = (fract(randVal * 10.0f) > 0.5f) ? 1 : -1;
+    ivec3 slide1, slide2;
+    if (fract(randVal * 100.0f) > 0.5f) {
+        slide1 = pos + ivec3(dir, 1, 0); slide2 = pos + ivec3(0, 1, dir);
+    } else {
+        slide1 = pos + ivec3(0, 1, dir); slide2 = pos + ivec3(dir, 1, 0);
+    }
+
+    for (int i = 0; i < 2; i++) {
+        ivec3 t = (i == 0) ? slide1 : slide2;
+        if (!cloudCellInBounds(t)) continue;
+        uint tIndex = getIndex(t);
+        if (getCloudKind(cloudCells[tIndex]) != CLOUD_NONE) continue;
+        if (tryMoveCloud(idx, packCloud(kind, true, counter, target), tIndex, cell)) {
+            atomicAdd(cloudMovedCount, 1u);
+            return;
+        }
+    }
+
+    // Went nowhere. Clear the moved bit so the next dispatch sees a block at rest -- this is the
+    // only thing that makes "did anything move last tick" mean last tick rather than ever.
+    if (getCloudMoved(cell)) {
+        atomicCompSwap(cloudCells[idx], cell, packCloud(kind, false, counter, target));
+    }
 }
 
 // FUNCTION: main
@@ -2630,7 +2917,10 @@ void main() {
     if (pos.x >= WIDTH || pos.y >= HEIGHT || pos.z >= DEPTH) return;
 
     updateSimState();
-    updateCloudCache();
+
+    // Before the interior-bounds test below: cloud blocks live in the border columns too, and a
+    // column that is never censused would have no cloud drawn over it.
+    updateCloudBlock(pos);
 
     if (pc.spawnActive == 1 && inBrush(pos)) {
         uint spawnIndex = getIndex(pos);
@@ -2642,10 +2932,10 @@ void main() {
         if (newType != 7u || oldType != 7u) {
             if (oldType != newType) {
                 if (oldType == 2u) {
+                    // Just the count. There is no high mark to lower any more: erasing water by
+                    // hand used to read as a deficit the sky would spend a storm refilling, and
+                    // weather no longer works by measuring the water level at all.
                     decWater();
-                    // Lower the target too: erasing water by hand is intentional, so it must not
-                    // register as a deficit that the sky then spends a storm trying to refill.
-                    decWaterHighMark();
                 }
                 if (oldType == 7u) bhRelease(pos);
                 if (newType == 2u) incWater();
@@ -2664,7 +2954,23 @@ void main() {
                 // this code, and it frees any slot whose voxel is not a hole -- so a slot becoming
                 // visible ahead of its voxel would get reaped instantly, leaving a black cube that
                 // pulls on nothing.
+                //
+                // There is no web equivalent, and this is not a translation gap that can be closed.
+                // GLSL's memoryBarrierBuffer orders THIS invocation's memory operations and
+                // synchronises nothing, so it is legal here, inside a per-voxel branch. WGSL's
+                // nearest spelling, storageBarrier, is a different instrument: a workgroup
+                // execution barrier every invocation must reach, and therefore illegal in divergent
+                // control flow -- Tint rejects it outright with "must only be called from uniform
+                // control flow". WGSL has no memory fence without the rendezvous.
+                //
+                // So the web build goes without, and the race it guards is live there: a black hole
+                // placed on the same dispatch its table sweep runs could be reaped between the two
+                // writes and leave an inert black voxel. Narrow, and currently unreachable anyway
+                // because placing blocks needs the mouse raycast, which the web renderer has not
+                // ported yet. Worth revisiting when it is.
+#ifndef SAND_WEB
                 memoryBarrierBuffer();
+#endif
                 if (!bhRegister(pos)) {
                     writeCell(spawnIndex, 0u); // table full: roll back rather than leave an inert hole
                 }
@@ -2687,49 +2993,21 @@ void main() {
     // rainDropsPerTick; what varies is the storm's LENGTH, which is proportional to how much
     // water was evaporated. There is deliberately no time-based ramp -- a ramp made the rate
     // depend on when you happened to look, which is what made this so hard to reason about.
+    // Rain columns. Rain is no longer spawned here by probability -- drops arrive as storm blocks
+    // reaching the ceiling and turning into water (see updateCloudBlock). What survives is the
+    // census, because it is still the honest answer to "how much of the sky is currently raining"
+    // and it costs one atomic on the top layer.
+    //
+    // The ellipsoid test this used to do is gone with the placement maths it read. A column is under
+    // cloud when it has cloud blocks in it, which is now a single lookup and, unlike the ellipsoids,
+    // is the same thing the renderer draws by construction rather than by two copies of one formula
+    // agreeing.
     if (currentType == 0u && rainPhase >= 1u && pos.y == HEIGHT - 2) {
-        // Evaluated live from the same placement math the renderer uses, so rain always falls
-        // from a cloud that is actually drawn overhead -- and follows it as it drifts. The
-        // edge-fade test matters: a cloud dissolving at the border must stop raining as it goes,
-        // otherwise drops would keep falling from a patch of empty sky.
-        bool underCloud = false;
-        int cloudN = int(min(tuning.cloudCount, uint(CLOUD_MAX)));
-        for (int ci = 0; ci < cloudN; ci++) {
-            if (cloudFade(ci) <= 0.01f) continue;
-            vec3 c = cloudCenter(ci);
-            vec3 r = cloudRadii(ci);
-            vec2 d = (vec2(float(pos.x), float(pos.z)) - c.xz) / vec2(r.x, r.z);
-            if (dot(d, d) <= 1.0f) { underCloud = true; break; }
-        }
-
-        if (underCloud) {
-            // Join this dispatch's census. Counting during the darkening phase too means the
-            // divisor is already warm the instant rain begins, so the first tick of a storm has
-            // correct odds instead of having to skip while an estimate builds.
+        if (cloudColumn[cloudColumnBase(pos.x, pos.z) + 2u] != 0u) {
             atomicAdd(rainCandidateCount, 1u);
-
-            if (rainPhase == 2u) {
-                // Independent roll, identical odds for every column under any cloud -- nothing
-                // here depends on which invocation got scheduled first, so rain lands evenly
-                // across the whole sky rather than piling up wherever the GPU happened to start.
-                uint remaining = (rainTargetLevel > waterVoxelCount) ? (rainTargetLevel - waterVoxelCount) : 0u;
-                float dropChance = getRainDropChance(rainCandidateEstimate, remaining);
-                float rainRandVal = hash(vec3(pos) + vec3(pc.time * 1.7f, 51.0f, 0.0f));
-
-                if (rainRandVal < dropChance) {
-                    if (atomicCompSwap(grid[currentIndex], rawValue, pack(2u, 0u, 0u, 0u)) == rawValue) {
-                        incWater();
-                        // This path returns before main's occupied-height report, and a fresh drop
-                        // is by definition the highest thing in the world, so it has to publish its
-                        // own height or it would be clipped away for the dispatch it spawns on.
-                        if (uint(pos.y) > maxOccupiedY) atomicMax(maxOccupiedY, uint(pos.y));
-                        return;
-                    }
-                }
-            }
         }
     }
-    
+
     if (currentType == 0u) return;
 
     // Raise the occupied-height ceiling if this voxel sits above it. The read-then-atomic shape is

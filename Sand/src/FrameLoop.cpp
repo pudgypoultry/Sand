@@ -49,9 +49,16 @@ void run(std::function<bool()> keepGoing, std::function<void()> frame) {
     // the background. A fixed rate here would keep simulating a world nobody is looking at and
     // drain a laptop battery to do it.
     //
-    // simulate_infinite_loop 1 makes this call not return, matching the desktop shape. It does so
-    // by throwing to unwind the stack, so nothing after it runs -- see the note in the header.
-    emscripten_set_main_loop(tick, 0, 1);
+    // simulate_infinite_loop 0, so this RETURNS and the callback runs afterwards. The 1 form does
+    // not return -- it unwinds by throwing -- which was harmless only while Emscripten's default
+    // disabled exception catching. Now that this build enables it so error messages survive, that
+    // throw would travel up into main()'s catch(...) and be reported as a fatal error moments
+    // before the first frame. Returning avoids the interaction rather than relying on the two
+    // settings staying compatible.
+    //
+    // Nothing tears down when main() returns: EXIT_RUNTIME defaults to 0, so the runtime stays
+    // alive for exactly this pattern and the loop keeps being called.
+    emscripten_set_main_loop(tick, 0, 0);
 }
 
 #endif // SAND_LOOP_IS_DRIVEN

@@ -1,9 +1,8 @@
 # Running Sand in a browser
 
 A plan for the web target, what it shares with the desktop build, and where the two genuinely
-differ. Milestone 1 is done: the page builds, opens a canvas, brings up a WebGPU device and draws
-the whole UI. The simulation and the raymarcher are not ported yet, and section 6 is the order that
-work goes in.
+differ. All three shaders are translated and running: the page brings up a WebGPU device, simulates,
+raymarches and draws the whole UI over it. Section 6 tracks what is done and what is left.
 
 ---
 
@@ -106,8 +105,8 @@ cmake --build build-web
 python3 -m http.server -d build-web      # then open Sand.html
 ```
 
-The backend follows the toolchain; `-DSAND_BACKEND=` overrides it. Both need `vendor/glfw` and
-`vendor/imgui`, which are tracked in the repository — GLFW's prebuilt `.lib` via Git LFS, so
+The backend follows the toolchain; `-DSAND_BACKEND=` overrides it. Both need `Sand/vendor/glfw` and
+`Sand/vendor/imgui`, which are tracked in the repository — GLFW's prebuilt `.lib` via Git LFS, so
 `git lfs install` has to happen before the clone. See BUILDING.md.
 
 The web target builds `Sand.html`, which needs serving over HTTP rather than opening off disk --
@@ -125,27 +124,53 @@ type-checked for the web either way.
 ### 4.1 The shading language, and the one real obstacle
 
 **WGSL only.** WebGPU does not accept SPIR-V, deliberately — the specification rejected binary
-shader input over driver bugs reachable from a web page. Tint (from Dawn) translates SPIR-V to
-WGSL, and `cmake/Shaders.cmake` wires it up for the two shaders that can be translated
-automatically.
+shader input over driver bugs reachable from a web page.
 
-`falling_sand.comp` cannot be one of them. **WGSL forbids a storage buffer being both atomic and
-non-atomic**: a binding is `array<atomic<u32>>` or `array<u32>`, never both, with no reinterpreting
-between them. The shader reads the grid plainly in 76 places and atomically in 72, so there is no
-legal WGSL a translator can emit — the resolution is a decision (route the plain reads through
-`atomicLoad`) rather than a transformation.
+`raymarch.frag` and `screen.vert` are translated by `tools/gen_wgsl.sh` (glslangValidator to
+SPIR-V, then `naga` from the wgpu project) and the **output is committed** under
+`Sand/shaders/wgsl/`, so an ordinary clone builds the web target with no shader translator
+installed. Each generated file carries the SHA-256 of the GLSL it came from, and
+`cmake/Shaders.cmake` re-computes that and refuses to build a stale one — timestamps cannot do that
+job, because a fresh clone gives every file the same mtime. The failure it prevents is otherwise
+silent and nasty: edit `raymarch.frag`, forget to regenerate, and the page renders last week's
+shader while the desktop renders this week's.
 
-That decision is now **two function bodies**. Every plain access goes through `readCell`/`writeCell`:
+Two things had to change in the GLSL before it would translate at all:
+
+**Push constants do not exist in WGSL.** Both shaders now carry an `#ifdef SAND_WEB` that swaps the
+`layout(push_constant)` block for a `std140` uniform at binding 3. Every field is a scalar, so the
+two layouts are byte-identical and the same C++ `PushConstants` struct is the payload either way.
+One `#ifdef` rather than two shader files is what stops them drifting — and the desktop SPIR-V is
+byte-identical before and after, checked.
+
+**A fragment shader may not bind a read-write storage buffer.** WebGPU permits those in compute
+only, so `SimStats` in `raymarch.frag` is now `readonly`. It never wrote to it, so this is simply
+the more accurate declaration; the SPIR-V gains 15 `NonWritable` decorations and *loses* three
+loads, the optimiser doing slightly better for knowing.
+
+`falling_sand.comp` was expected to be the exception, and it was not. **WGSL forbids a storage
+buffer being both atomic and non-atomic**: a binding is `array<atomic<u32>>` or `array<u32>`, never
+both, with no reinterpreting between them. This shader reads the grid plainly in 76 places and
+atomically in 72, so there is no *direct* translation of what it says.
+
+I concluded from that it would need hand-writing — that resolving the conflict was a decision rather
+than a transformation. **That was wrong.** naga resolves it the way a person would have: it declares
+the binding `array<atomic<u32>>` and routes every plain read through `atomicLoad` and every plain
+write through `atomicStore`. The output validates. The rule is real; the inference that no tool could
+satisfy it was not, and it went unchecked for several commits because it sounded right.
+
+The `readCell`/`writeCell` accessors added earlier were justified on the same mistaken grounds:
 
 ```glsl
 uint readCell(uint index) { return grid[index]; }
 void writeCell(uint index, uint value) { grid[index] = value; }
 ```
 
-which become `atomicLoad(&grid[index])` and `atomicStore(&grid[index], value)` in WGSL. Verified
-that this changed nothing: compiled before and after with `glslangValidator -Os`, and all 13,306
-instructions of the function bodies are identical, with the preamble differing only as a
-permutation from id renumbering.
+They were not necessary. They are still mildly worth having — the generated WGSL routes through two
+translated functions rather than scattering atomics through 76 inline sites, and in the GLSL they
+name what is a plain read and what is a claim — but that is a readability argument, not the
+correctness one originally given for them. Verified at the time that they changed nothing:
+`glslangValidator -Os` before and after gave 13,306 identical function-body instructions.
 
 The fragment shader needs no such treatment. It binds the grid `readonly` and touches it in one
 place, and a WGSL module's view of a buffer is per-module — so the compute module can declare
@@ -201,6 +226,136 @@ Net: the backend gets *smaller*. `VulkanBuffer.cpp` and `VulkanSwapchain.cpp` (1
 counterpart at all, and `VulkanContext.cpp`'s physical-device enumeration and queue-family search
 collapse into two async calls.
 
+### 4.4b Bindings, and the memory the cloud field costs
+
+The shaders declare five bindings, and the numbering is shared rather than per-backend:
+
+| Binding | Buffer | Stages | Notes |
+|---|---|---|---|
+| 0 | grid | compute + fragment | one `uint` per voxel |
+| 1 | SimStats | compute + fragment | scalars, black-hole table, then a **runtime-sized** per-column cloud census |
+| 2 | TuningParams | compute + fragment | uniform |
+| 3 | FrameConstants | compute + fragment | **web only** — the desktop uses push constants and leaves the number unused |
+| 4 | cloud field | compute + fragment | one `uint` per voxel, parallel to the grid; the fragment stage reads it read-only, and only for the "show cloud blocks" debug view |
+
+Binding 3 being web-only is why the cloud field is 4 and not 3: one set of numbers then serves both
+backends without an `#ifdef` on every declaration.
+
+Two consequences worth planning around. **The cloud field doubles per-voxel memory** — it is a second
+buffer the same size as the grid, so a 320³ world now asks the device for ~250 MiB rather than
+~125 MiB. Each buffer stays under the 128 MiB `maxStorageBufferBindingSize` on its own, which is what
+`createWorldBuffers` checks, but the practical ceiling on modest hardware is lower than that check
+implies. **The stats buffer is no longer a fixed size**: it is `SimStats::kFieldCount` plus four words
+per column, so it grows with the world and must be recreated when the world is resized.
+
+### 4.5 Colour space and canvas size
+
+Two differences that produce no error anywhere — not a validation message, not a console line — and
+show up only as the image looking wrong. Both cost real debugging time, so they are written down.
+
+**The canvas is not an sRGB target by default.** The desktop swapchain is
+`VK_FORMAT_B8G8R8A8_SRGB` (`VulkanSwapchain.cpp:39`), so the hardware encodes linear → sRGB on
+every write. `wgpuSurfaceGetCapabilities` reports `BGRA8Unorm`, which encodes nothing, and the
+shader writes linear values into it verbatim. The result is a correct render that is markedly too
+dark — dark enough to read as a lighting bug, which is where the time goes.
+
+The fix is not to configure the surface as sRGB; WebGPU does not permit that. Instead list the sRGB
+variant in the surface configuration's `viewFormats`, then take an explicit
+`WGPUTextureViewDescriptor` with `format` set to it. The encode comes from the *view*. Everything
+that names a colour format has to name the view's: both pipelines' colour targets and the
+`renderTargetFormat` ImGui is initialised with — a mismatch there is rejected at draw time.
+
+**The canvas has two sizes and they are unrelated.** The CSS box is what the page lays out; the
+drawing buffer is what is actually rendered. GLFW sets the drawing buffer from `glfwCreateWindow`'s
+arguments — 1600×1200 — while `shell.html` stretches the element to `100vw`/`100vh`. Every frame
+was being rendered at 4:3 and stretched by the browser to fill a 16:9 window.
+
+`syncCanvasSize()` reads the CSS size with `emscripten_get_element_css_size`, multiplies by
+`render.resolution_scale`, and calls `emscripten_set_canvas_element_size` plus a surface
+reconfigure when it differs from what is configured. Doing this per frame rather than on a resize
+event is deliberate: the CSS size changes for reasons no GLFW callback fires for, including the
+window being zoomed and the device pixel ratio changing when a window moves between monitors.
+
+That multiply is also the resolution control. A raymarcher's cost is very nearly linear in pixels,
+so `render.resolution_scale` at 0.5 quarters the most expensive thing the frame does — by far the
+most effective quality knob on a low-end machine. It is web-only for now: the desktop renders
+directly into the swapchain image and would need an offscreen target to honour it.
+
+**Matching the canvas to the window exposed a third problem: the projection had no aspect term.**
+`raymarch.frag` mapped its ±1 screen-space square across the target whatever shape it was, so a
+wide window squashed the world horizontally instead of revealing more of it. On the desktop this
+never showed — that window is a fixed 4:3 and `GLFW_RESIZABLE` is false — and while the canvas was
+stretched from a 4:3 backing store it was hidden behind the coarser stretching described above.
+
+`FrameConstants` now carries `aspectScaleX`/`aspectScaleY`, both 1.0 at 4:3 (so the desktop image is
+bit-for-bit what it was) and rising on whichever axis the window has spare room in. Expanding the
+roomy axis rather than shrinking the tight one means the 4:3 framing is always fully visible and the
+surplus buys more world — narrowing a window must not crop away what it used to show.
+
+They are computed once, on the CPU, in `buildFrameConstants`, because two things have to agree
+about the projection: the raymarcher and the CPU cursor raycast. Sending two ready-made scale
+factors instead of the aspect ratio keeps the branch that derives them in one place; a second copy
+in GLSL would be free to drift, and the symptom of drift is a cursor that no longer sits under the
+pointer.
+
+**ImGui has to be told the size too, and told it every frame.** Resizing the canvas through the
+HTML5 API goes behind GLFW's back — `glfwGetWindowSize` still reports what `glfwCreateWindow` was
+asked for. ImGui's GLFW backend rewrites `io.DisplaySize` and `io.DisplayFramebufferScale` from
+those stale numbers at the top of every frame, and its WebGPU backend scales its viewport and every
+scissor rect from their product. The result was a scissor of 1600×1200 against a 1567×983 target,
+which WebGPU rejects — invalidating the whole command buffer, so nothing drew at all and an
+uncaptured error arrived every frame.
+
+`UiBackendWebGpu::setDisplayMetrics` overrides both, after `ImGui_ImplGlfw_NewFrame` and before
+`ImGui::NewFrame`, which is the only window where the correction survives. `DisplaySize` is the CSS
+size, because that is the space GLFW reports mouse positions in and ImGui hit-tests in;
+`DisplayFramebufferScale` carries `render.resolution_scale`, since ImGui multiplies the two to get
+pixels. The rounding was checked exhaustively rather than reasoned about — across every canvas size
+to 3840×2160 and nine scale factors, the derived framebuffer size is never larger than the target
+(which is the direction that throws) and at worst one pixel smaller. There is no Vulkan counterpart:
+that window is fixed, so GLFW's numbers are true.
+
+One consequence worth knowing: below 1.0 the UI is drawn into the reduced target and upscaled with
+everything else, so it softens along with the scene. Keeping it sharp means rendering the raymarch
+to an offscreen texture and compositing the UI at native size — a second render target and a blit,
+which is more than this knob is worth today.
+
+### 4.6 The cursor: GLFW's window is not the canvas
+
+The one that took three attempts, because the obvious correction is the wrong one.
+
+`Window::getMouseNdcX/Y` divide the cursor position by the window's dimensions. The tempting fix,
+once the canvas and the window were known to differ, is to point that divisor at the canvas. **That
+is backwards.** Emscripten's GLFW scales pointer coordinates into the size that was passed to
+`glfwCreateWindow` — 1600×1200 — and keeps doing so no matter how large the canvas gets, because
+nothing ever tells it otherwise. Dividing GLFW's number by the canvas mixes two coordinate systems
+and the error grows with the difference between them.
+
+Measured rather than reasoned, on a 2048×983 canvas:
+
+| | x | y |
+|---|---|---|
+| GLFW's cursor | 807.8 | 529.7 |
+| The DOM's, relative to the canvas | 1034.0 | 434.0 |
+| `glfw / 1600`, `glfw / 1200` | 0.5049 | 0.4414 |
+| `dom / 2048`, `dom / 983.2` | 0.5049 | 0.4414 |
+
+The same fraction to four decimals on both axes, and again after resizing the window to 554×944.
+GLFW's coordinates are perfectly good — they are simply expressed in GLFW's window, so that is what
+they must be divided by. Which is also why the desktop was never affected: there the two are the
+same number, and `GLFW_RESIZABLE` is `GLFW_FALSE` so they stay that way.
+
+The symptom was a cursor down and to the left of the pointer, worsening with window size: 2048 > 1600
+pushes it left, 983 < 1200 pushes it down. `Window` now keeps both sizes and is explicit about which
+is which — `width/height` is GLFW's space and normalises the cursor, `viewportWidth/Height` is the
+canvas and supplies the projection's aspect ratio.
+
+ImGui needs the same correction for the opposite reason. It takes its mouse position from GLFW, in
+GLFW's space, but hit-tests against `io.DisplaySize`, which is the canvas so that panels are laid out
+at the right size and undistorted. `UiBackendWebGpu` therefore rescales `io.MousePos` between the
+two — guarded on ImGui's `-FLT_MAX` "no mouse" sentinel, which must be left alone rather than
+multiplied into a real position.
+
 ---
 
 ## 5. What it costs and what it buys
@@ -222,12 +377,45 @@ Sequenced so the boring parts are proven before the hard part is started.
    ImGui drawing through `UiBackendWebGpu`. Proved the toolchain, the shell, the asset packaging
    and the frame loop; the UI panels came up working, because they were already portable. Runs in
    Chrome and Edge.
-2. **`raymarch.frag` and `screen.vert`.** No atomics, two `grid[]` reads between them; Tint
-   translates them. Render a world seeded on the CPU. Proves the buffers, the bind groups and the
-   uniform layout.
-3. **`falling_sand.comp`.** The atomic split, the workgroup size, and the `std140` → WGSL uniform
-   layout re-verification. All the difficulty is here.
-4. **Storage and limits.** Confirm `localStorage` round-trips the config; clamp `grid_size`.
+2. **~~`raymarch.frag` and `screen.vert`.~~ DONE.** Both translated and committed, with bindings
+   where they should be (grid and stats read-only storage at 0 and 1, tuning uniform at 2,
+   ex-push-constants uniform at 3, all group 0). The renderer creates the four buffers, one
+   explicit bind group layout, and a render pipeline, and seeds a diagnostic world on the CPU: a
+   stone floor plus one pillar per material in id order. If the palette, the lighting and above all
+   the `std140` → WGSL uniform layout are right, that reads as a neat row of correctly coloured
+   columns; if `TuningParams` is misaligned by one field the world extents are wrong and it does
+   not.
+
+   That seed has since been **removed**, and is worth recording as a cautionary tale. It outlived
+   milestone 3 and turned into a simulation bug: the counters in `SimStats` are maintained by the
+   shader as voxels are created and destroyed, so writing voxels in from the CPU puts matter in the
+   world that those counters never saw. The pillar row included one of every material, so it seeded
+   water that `waterVoxelCount` did not know about and black holes with no entry in the table. When
+   the uncounted water later evaporated, `decWater` ran on a count of zero — and it is deliberately
+   not saturating, because `atomicAdd` has no signed form and it subtracts by wrapping. The count
+   became about four billion, `waterHighMark` followed, and the sky spent the rest of the session
+   raining against a deficit that never existed. `decWaterHighMark` in `falling_sand.comp` carries a
+   comment describing exactly this failure for the sibling counter; the seed walked into it from the
+   other side. The world now starts empty, which is byte-for-byte what `VulkanRenderer`'s `memset`
+   leaves.
+3. **~~`falling_sand.comp`.~~ DONE — it simulates.** Expected to be the bulk of the work and was
+   not: naga handles the atomic split, the workgroup was already fixed, and the uniform layout was
+   proved by milestone 2. The renderer runs a compute pass before the render pass, dispatching once
+   per step of the speed slider.
+
+   One thing WGSL genuinely cannot express turned up here. `memoryBarrierBuffer()` orders the
+   calling invocation's memory operations and synchronises nothing, so GLSL allows it inside a
+   branch; WGSL's nearest spelling, `storageBarrier()`, is a workgroup execution barrier every
+   invocation must reach, and Tint rejects it in divergent control flow. There is no memory fence
+   without the rendezvous, so the web build goes without — see the `#ifndef SAND_WEB` in the black
+   hole spawn path for what that costs.
+4. **~~Interaction.~~ DONE.** The cursor raycast moved to `CursorRay`, shared verbatim by both
+   renderers, so clicking places blocks. Clear Grid, Reset Camera and the options screen's Apply all
+   work; `beginPurge` differs in one documented way, because WebGPU cannot map a storage buffer for
+   the read-modify-write the desktop does.
+5. **Storage and limits.** Confirm `localStorage` round-trips the config across a reload; clamp
+   `sim.grid_size` to what the device's `maxStorageBufferBindingSize` actually allows rather than
+   warning after the fact.
 
 Step 1 took an afternoon. Step 3 is the bulk. Two to four weeks overall for someone doing it
 attentively, and the estimate is dominated by step 3 not being mechanical.
@@ -246,6 +434,12 @@ Netlify or any static host works.
   it does not apply.
 - Expect 3–6 MB total, dominated by the wasm. `-Os` and `--closure 1` are worth having.
 - The `.data` file is the packaged `shaders/` and `config.txt`.
+
+`.github/workflows/deploy-pages.yml` builds this target and publishes it to GitHub Pages on every
+push to `main`. It installs the Vulkan SDK (for `glslc`, which `cmake/Shaders.cmake` shells out to
+at configure time even on the web target -- see the comment there) and `emsdk`, runs the `emcmake`
+build above, renames `Sand.html` to `index.html`, and deploys the result. The one step it cannot do
+from a workflow file: Settings -> Pages -> Source must be set to "GitHub Actions" once, by hand.
 
 ---
 

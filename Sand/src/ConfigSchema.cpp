@@ -15,6 +15,11 @@ const ConfigField kConfigFields[] = {
     { "World", "render.shadow_max_steps", "Shadow max steps", FieldKind::UInt,
       offsetof(TuningParams, shadowMaxSteps), 0.0, 1024.0,
       nullptr },
+    { "World", "render.resolution_scale", "Resolution scale", FieldKind::Float,
+      offsetof(TuningParams, renderScale), 0.25, 2.0,
+      "Pixels rendered, as a fraction of the window. Halving it quarters the pixel count, which is "
+      "most of the cost of a raymarcher. Web build only for now -- the desktop draws at the "
+      "swapchain's size and would need rendering to an offscreen target to honour this." },
 
     // ---- Rain ----
     { "Rain", "rain.start_layers", "Start layers", FieldKind::UInt,
@@ -39,7 +44,9 @@ const ConfigField kConfigFields[] = {
       "world units per second" },
     { "Clouds", "cloud.edge_fade_dist", "Edge fade dist", FieldKind::Float,
       offsetof(TuningParams, cloudEdgeFadeDist), 0.0, 100.0,
-      nullptr },
+      "How far in from the world's edges the cloud deck tapers off. Without it the deck ends in a "
+      "straight vertical wall exactly on the boundary, because a column past the edge reads as "
+      "empty -- correct, and it looks like the sky was cut with a knife." },
     { "Clouds", "cloud.charge_saturation", "Charge saturation", FieldKind::Float,
       offsetof(TuningParams, cloudChargeSaturation), 100.0, 200000.0,
       nullptr },
@@ -62,8 +69,52 @@ const ConfigField kConfigFields[] = {
       offsetof(TuningParams, cloudEdgeThresholdMax), 0.0, 1.0,
       nullptr },
     { "Clouds", "cloud.max_steps", "Max steps", FieldKind::UInt,
-      offsetof(TuningParams, maxCloudSteps), 1.0, 128.0,
-      nullptr },
+      offsetof(TuningParams, maxCloudSteps), 1.0, 256.0,
+      "Step budget for the cloud march. It has to exceed the cells a ray crosses inside the cloud "
+      "band or cloud vanishes at a distance -- a distant ray is a shallow one, and a shallow ray "
+      "skims the band for the whole width of the world. Measured worst case is 98 cells at a "
+      "128-cube and 184 at a 256-cube, so raise this alongside sim.grid_size." },
+    { "Clouds", "cloud.check_interval_ticks", "Storm check interval", FieldKind::UInt,
+      offsetof(TuningParams, cloudCheckIntervalTicks), 1.0, 100000.0,
+      "Dispatches between storm checks. On each multiple of this the simulation asks whether any "
+      "cloud block moved on the previous dispatch; if none did, a rain event begins. Counted in "
+      "dispatches rather than seconds, so the speed slider scales it -- the profiler's tick counter "
+      "is the same clock." },
+    { "Clouds", "cloud.rain_wait_max_ticks", "Rain wait max", FieldKind::UInt,
+      offsetof(TuningParams, rainWaitMaxTicks), 1.0, 2047.0,
+      "The upper end of how long a raincloud hangs at the ceiling before falling as water. Each "
+      "block picks its own target between the minimum and this, so a storm falls as scattered drops "
+      "over a long while rather than as one sheet. Capped at 2047 by the 11-bit counter in the "
+      "cloud word." },
+    { "Clouds", "cloud.rain_wait_min_ticks", "Rain wait min", FieldKind::UInt,
+      offsetof(TuningParams, rainWaitMinTicks), 1.0, 2047.0,
+      "The lower end of that wait. Raising it toward the maximum makes a storm arrive all at once; "
+      "widening the gap spreads it out." },
+    { "Clouds", "cloud.steam_condense_ticks", "Steam condense ticks", FieldKind::UInt,
+      offsetof(TuningParams, steamCondenseTicks), 1.0, 255.0,
+      "Dispatches a steam voxel may go without moving before it condenses where it stands. A "
+      "failsafe: steam normally condenses on reaching the roof or on rising into settled cloud, but "
+      "a cloud block can rise into a steam voxel's cell, and steam in that position is touching "
+      "cloud without being under it. Rather than enumerate those cases, stalled steam condenses." },
+    { "Clouds", "cloud.smooth_rate", "Surface smooth rate", FieldKind::Float,
+      offsetof(TuningParams, cloudSmoothRate), 0.01, 1.0,
+      "How fast the drawn cloud surface follows the block field, per dispatch. The field is never "
+      "still -- blocks rise, rainclouds fall -- so a surface drawn straight from this dispatch's "
+      "counts changes every dispatch and the deck boils. Easing it lets the shape drift instead. "
+      "1.0 disables the smoothing." },
+    { "Clouds", "cloud.column_full_count", "Column full count", FieldKind::Float,
+      offsetof(TuningParams, cloudColumnFullCount), 1.0, 512.0,
+      "How many cloud blocks stacked in one column read as a fully dense cloud. Lower makes thin "
+      "cloud look solid sooner. This is what keeps cloud density from depending on world size." },
+    { "Clouds", "cloud.thickness_per_block", "Thickness per block", FieldKind::Float,
+      offsetof(TuningParams, cloudThicknessPerBlock), 0.1, 16.0,
+      "World units of cloud drawn per cloud block in the column, measured upward from the top of "
+      "the pile. Larger makes the same amount of cloud stand taller over the world." },
+    { "Clouds", "cloud.clump_threshold", "Clump threshold", FieldKind::UInt,
+      offsetof(TuningParams, cloudClumpThreshold), 0.0, 26.0,
+      "How many of a cloud block's 26 neighbours must also be cloud before it stops trying to move. "
+      "UNUSED. Cloud spreads like sand, with no cohesion rule -- cohesion made it stack into "
+      "towers like dirt instead of spreading along the ceiling." },
 
     // ---- Physics ----
     { "Physics", "physics.sand_moisture_capacity", "Sand moisture capacity", FieldKind::UInt,

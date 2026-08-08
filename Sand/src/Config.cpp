@@ -146,6 +146,12 @@ void sanitizeTuning(TuningParams& t) {
     // a literal 0 in place would give every ray a budget of no steps and blank the world.
     if (t.marchMaxSteps == 0u) t.marchMaxSteps = autoMarchSteps(t);
 
+    // A raincloud's wait counters are 11 bits inside the cloud word, so a larger value would be
+    // truncated on the way in and blocks would fall at unintended times. The schema already bounds
+    // them, but a hand-edited file does not go through the schema's slider.
+    t.rainWaitMaxTicks = std::clamp(t.rainWaitMaxTicks, 1u, 2047u);
+    t.rainWaitMinTicks = std::clamp(t.rainWaitMinTicks, 1u, t.rainWaitMaxTicks);
+
     // The trunk's height counter and the leaf's distance counter are each one byte, and a max height
     // of 0 would leave a sapling unable to ever be a crown -- so it would never put out a leaf.
     t.treeMaxHeight = std::clamp(t.treeMaxHeight, 1u, 255u);

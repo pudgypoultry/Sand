@@ -10,11 +10,12 @@ layout(std430, binding = 0) readonly buffer VoxelGrid {
 // Must stay byte-identical to the SimStats block in falling_sand.comp, and BH_INDEX_MASK must match
 // the slot encoding used there.
 const int BLACK_HOLE_MAX = 8;
-const int CLOUD_MAX = 64;
 const uint BH_INDEX_MASK = 0x3FFFFFFFu;
 const uint BH_PURGE = 0x40000000u;
 
-layout(std430, binding = 1) buffer SimStats {
+// readonly, and it has to be: WebGPU allows a read-write storage buffer in compute shaders only,
+// so a fragment shader binding this without it is rejected. Nothing here ever writes to it.
+layout(std430, binding = 1) readonly buffer SimStats {
     uint waterVoxelCount;
     uint waterHighMark;
     uint cloudWaterCount;
@@ -24,12 +25,34 @@ layout(std430, binding = 1) buffer SimStats {
     uint rainCandidateCount;
     uint rainCandidateEstimate;
     uint cloudChargeBits;
+    uint cloudBlockCount;
+    uint cloudChangedCount;
+    uint cloudStillTicks;        // UNUSED: the storm check samples rather than accumulating
+    uint simTick;                // dispatches since startup; the clock the checks run on
+    uint lastRainTick;           // simTick at the last rain event, for the profiler
+    // The global Y range of the cloud field, so the renderer can start its march at the band
+    // instead of at the edge of the world. Accumulator pair and published pair, rotated once
+    // per dispatch like every other census here. Published min > max means no cloud at all.
+    uint cloudMinYAcc;
+    uint cloudMaxYAcc;
+    uint cloudMinY;
+    uint cloudMaxY;
     uint blackHoleCount;
     uint maxOccupiedY;
     uint blackHoles[BLACK_HOLE_MAX];
     uint blackHoleMass[BLACK_HOLE_MAX];
     uint blackHoleStarve[BLACK_HOLE_MAX];
-    float cloudCache[CLOUD_MAX * 7];
+    // Four words per column at (x + z * WIDTH) * 4; slots 2 and 3 are the published count and top Y
+    // this shader reads. Must match falling_sand.comp exactly -- see the comment there. Runtime-sized
+    // and therefore necessarily last.
+    uint cloudColumn[];
+};
+
+// The cloud field, read-only. Bound purely for the "show cloud blocks" debug view -- the clouds
+// actually drawn come from the per-column census in SimStats, which is one number per column rather
+// than one per voxel, so normal rendering never touches this.
+layout(std430, binding = 4) readonly buffer CloudGrid {
+    uint cloudCells[];
 };
 
 layout(std140, binding = 2) uniform TuningParams {
@@ -132,9 +155,31 @@ layout(std140, binding = 2) uniform TuningParams {
     float treeLeafBurnChance;
     uint treeTrunkColumns;
     float treeTrunkRadius;
+    float renderScale;
+    uint cloudCheckIntervalTicks; // dispatches between storm checks
+    uint rainWaitMaxTicks;        // ceiling of a raincloud's wait, 0..2047
+    float cloudColumnFullCount;   // cloud blocks in a column that read as fully dense
+    float cloudThicknessPerBlock; // world units of cloud drawn per block in the column
+    uint cloudClumpThreshold;     // UNUSED: cloud spreads like sand, no cohesion
+    uint rainWaitMinTicks;        // floor of a raincloud's wait at the ceiling
+    uint steamCondenseTicks;      // dispatches of stillness before steam condenses in place
+    float cloudSmoothRate;        // how fast the drawn cloud surface follows the block field
 } tuning;
 
+// Per-frame state the CPU writes: camera pose, cursor position, brush.
+//
+// Vulkan takes this as push constants -- 60 bytes written straight into the command buffer, with
+// no buffer to allocate and nothing to synchronise. WebGPU has no equivalent at all; the web build
+// binds the same fields as an ordinary uniform buffer instead.
+//
+// Only the declaration differs. The fields are all scalars, so std140 packs them at exactly the
+// offsets a push-constant block uses, and the same C++ PushConstants struct is the payload either
+// way. Keeping it as one #ifdef rather than two shader files is what stops the two from drifting.
+#ifdef SAND_WEB
+layout(std140, binding = 3) uniform Constants {
+#else
 layout(push_constant) uniform Constants {
+#endif
     float time;
     float pitch;
     float yaw;
@@ -150,6 +195,11 @@ layout(push_constant) uniform Constants {
     float fovDistance;
     float perspectiveBlend;
     int spawnShape; // 0 = cube, 1 = sphere
+    // The view's reach sideways and vertically, relative to the 4:3 framing the camera was built
+    // around. Applied to screenSpace in main. See FrameConstants.hpp.
+    float aspectScaleX;
+    float aspectScaleY;
+    int showCloudBlocks; // debug view: draw the invisible cloud blocks as solid voxels
 } pc;
 
 // World extents, from the UBO. Must agree with falling_sand.comp.
@@ -176,6 +226,9 @@ vec3 worldExtent() { return vec3(float(WIDTH), float(HEIGHT), float(DEPTH)); }
 // cell in the dispatch that published it. Adding 2 therefore leaves at least one guaranteed-empty
 // cell above the highest matter -- which is also what keeps the DDA's face normal correct, since a
 // ray entering the clipped box always takes a step before it can hit anything.
+// The debug view's stand-in material. Far above every real id, so it can never collide with one.
+const uint CLOUD_DEBUG_TYPE = 200u;
+
 int marchCeiling() {
     return min(HEIGHT, int(maxOccupiedY) + 2);
 }
@@ -902,32 +955,87 @@ vec3 accretionGlow(vec3 color, ivec3 voxelPos) {
 }
 
 // =================================================================================================
-// CLOUD FIELD -- read only. The placement maths lives in falling_sand.comp, which evaluates it once
-// per dispatch into cloudCache; this stage just reads the answer.
+// CLOUD FIELD -- read only.
 //
-// It used to be duplicated here verbatim, with a warning that editing one copy without the other
-// would make rain fall from a clear sky. Sharing the cache removes that hazard outright, and removes
-// the cost that made it worth duplicating in the first place: six sin() calls per cloud, re-derived
-// by every pixel, is ~369 M transcendentals a frame at 32 clouds and 1600x1200.
+// Clouds are no longer a drifting population of ellipsoids derived from (index, time). They are the
+// shadow of an actual voxel field: falling_sand.comp simulates cloud blocks that rise and pile
+// against the ceiling, and publishes, per column, how many are stacked there and how high they
+// reach. This stage draws a slab over each column sized from those two numbers.
 //
-// The vertical centre and the edge fade are cached too. Both were still being re-derived here per
-// pixel after the first pass -- the centre carried a hash() of its own and the fade is four
-// smoothsteps -- and both are constant for the whole frame, so a pixel has nothing to contribute to
-// either answer.
+// That retires the duplication hazard for good. The old placement maths existed in both stages and
+// had to stay byte-identical or rain fell from a clear sky; there is nothing left to keep in step,
+// because the compute stage no longer decides where clouds *look* like they are -- it decides where
+// they *are*, and this stage reads it.
 // =================================================================================================
-vec3  cloudCenter(int i) { return vec3(cloudCache[i * 7 + 0], cloudCache[i * 7 + 1], cloudCache[i * 7 + 2]); }
-vec3  cloudRadii(int i)  { return vec3(cloudCache[i * 7 + 3], cloudCache[i * 7 + 4], cloudCache[i * 7 + 5]); }
-float cloudFade(int i)   { return cloudCache[i * 7 + 6]; }
+
+// FUNCTION: cloudColumnBase
+// Four words per column; slots 2 and 3 are the published count and top Y. Must match the identical
+// function in falling_sand.comp.
+uint cloudColumnBase(int x, int z) { return uint(x + z * WIDTH) * 4u; }
+
+// FUNCTION: sampleCloudColumn
+// One column's published depth and the height of its topmost block, or zeroes off the edge.
+void sampleCloudColumn(int x, int z, out float count, out float topY) {
+    if (x < 0 || x >= WIDTH || z < 0 || z >= DEPTH) { count = 0.0f; topY = 0.0f; return; }
+    uint b = cloudColumnBase(x, z);
+    // Sixteenths -- see the easing in falling_sand.comp's column rotation.
+    count = float(cloudColumn[b + 2u]) * (1.0f / 16.0f);
+    topY  = float(cloudColumn[b + 3u]) * (1.0f / 16.0f);
+
+    // Taper toward the world's edges. Without it the deck ends in a straight vertical wall exactly
+    // on the boundary, because a column off the edge reads as empty -- which is correct and looks
+    // like the sky was cut with a knife. cloudEdgeFadeDist was the old drifting-cloud field's border
+    // fade and was left dead when that went; this is the same idea doing the same job.
+    float d = max(tuning.cloudEdgeFadeDist, 0.001f);
+    float fx = smoothstep(0.0f, d, float(x)) * smoothstep(0.0f, d, float(WIDTH - 1 - x));
+    float fz = smoothstep(0.0f, d, float(z)) * smoothstep(0.0f, d, float(DEPTH - 1 - z));
+    count *= fx * fz;
+}
+
+// FUNCTION: smoothedCloudColumn
+// The same, blurred across the four neighbouring columns a cloud-cell away.
+//
+// This is what rounds the silhouette. Reading one column gives a slab with a hard vertical wall
+// wherever the block count steps, which is why the sky looked like a stack of boxes rather than
+// cloud; averaging the neighbours makes the depth fall off gradually at a bank's edge, so the
+// hash-filled shell tapers instead of ending. Still blocky -- the fill is per cloud-cell and that is
+// the point -- but blocky in a rounded envelope.
+//
+// The top is a max rather than an average, so a smoothed edge hangs below its neighbours rather than
+// sinking the whole bank toward the lowest one.
+void smoothedCloudColumn(int x, int z, int spread, out float count, out float topY) {
+    float c0, y0, c1, y1, c2, y2, c3, y3, c4, y4;
+    sampleCloudColumn(x, z, c0, y0);
+    sampleCloudColumn(x - spread, z, c1, y1);
+    sampleCloudColumn(x + spread, z, c2, y2);
+    sampleCloudColumn(x, z - spread, c3, y3);
+    sampleCloudColumn(x, z + spread, c4, y4);
+    count = (c0 * 2.0f + c1 + c2 + c3 + c4) / 6.0f;
+    topY  = max(max(max(y0, y1), max(y2, y3)), y4);
+}
 
 // FUNCTION: marchBlockyCloud
-// Walks a per-cloud voxel grid (same DDA stepping pattern as the primary raymarch loop) bounded
-// to the ray's intersection interval with the cloud's ellipsoid. A cell counts as solid only if
-// it's inside the ellipsoid AND passes a per-cell hash test biased toward emptiness near the
-// edge — giving a blocky, cube-faceted surface whose overall silhouette still reads as an
-// ellipsoid, with a ragged/fluffy boundary rather than a hard edge. Color blends from white/
-// light-grey (fresh) toward storm-grey as `greyness` (driven by the rain state machine) rises.
-bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, vec3 center, vec3 radii, float cloudSeed,
-                       float tEnter, float tExit, vec3 sunDir, float greyness, out float tHit, out vec3 hitColor) {
+// Walks a coarse voxel grid (the same DDA stepping pattern as the primary raymarch loop) and draws
+// the cloud slab standing over each column.
+//
+// A cell is solid when three things hold: its column has cloud blocks in it, the cell falls inside
+// that column's slab, and a per-cell hash beats a density threshold. The hash is what makes the
+// silhouette blocky and ragged rather than a flat-topped box, and it is keyed on the cell's own
+// integer coordinates -- clouds no longer drift, so a world-anchored pattern is stationary and will
+// not boil.
+//
+// The slab sits ABOVE the pile: its underside rests on the highest cloud block in the column and it
+// rises cloudThicknessPerBlock world units for every block beneath it. Cloud blocks are invisible
+// and pile against the ceiling, so this puts the visible cloud just over the roof of the world --
+// which is where clouds were drawn before any of this, and what makes a deep pile read as a tall
+// bank of cloud rather than a thicker lid. Its density -- how much of the slab is filled rather than
+// holes -- scales with the count against cloudColumnFullCount, so a thin column is wispy and a deep
+// one is solid.
+//
+// One march for the whole sky, where this used to be one march per cloud inside a loop over up to
+// 64 of them. Colour blends from white/light-grey toward storm-grey as `greyness` rises.
+bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, float tEnter, float tExit, vec3 sunDir,
+                      float greyness, out float tHit, out vec3 hitColor, out float hitDensity) {
 
     tEnter = max(tEnter, 0.0f);
     if (tEnter >= tExit) return false;
@@ -948,39 +1056,86 @@ bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, vec3 center, vec3 radii, floa
         (stepDir.z > 0) ? (1.0f - fracPos.z) * tDelta.z : fracPos.z * tDelta.z
     );
 
-    vec3 normal = vec3(0.0f);
+    // Up, not zero. A DDA that starts inside the volume has no entry face, and a zero normal makes
+    // the diffuse term collapse to its ambient floor -- so whether the first cell was the hit one
+    // changed the shading, and the sky flickered as the camera turned and that changed. Cloud lit
+    // from above is the right answer for the one cell that has no face of its own.
+    vec3 normal = vec3(0.0f, 1.0f, 0.0f);
     float t = tEnter;
 
-    // Hash the blocky fill in the cloud's OWN cell space, not world space. Now that clouds drift,
-    // a world-anchored pattern would boil and shimmer as cells slid through a stationary noise
-    // field. Subtracting the cloud's (rounded) cell origin pins the pattern to the cloud, so it
-    // holds its shape and simply translates -- the motion quantises to whole voxel steps, which
-    // reads correctly for a deliberately cube-faceted look.
-    ivec3 cloudOrigin = ivec3(round(center / tuning.cloudVoxelSize));
+    int spread = max(1, int(tuning.cloudVoxelSize));
 
     for (int i = 0; i < int(tuning.maxCloudSteps); i++) {
         if (t > tExit) break;
 
         vec3 cellCenter = (vec3(cellPos) + 0.5f) * tuning.cloudVoxelSize;
-        vec3 local = (cellCenter - center) / radii;
-        float localLen = length(local);
+        int cx = int(floor(cellCenter.x));
+        int cz = int(floor(cellCenter.z));
 
-        if (localLen <= 1.0f) {
-            vec3 localCell = vec3(cellPos - cloudOrigin);
-            float fillHash = hash(localCell + vec3(cloudSeed * 13.0f, cloudSeed * 7.0f, cloudSeed * 29.0f));
-            float edgeFactor = clamp(localLen, 0.0f, 1.0f);
-            float threshold = mix(tuning.cloudEdgeThresholdMin, tuning.cloudEdgeThresholdMax, edgeFactor); // sparser near the edge, denser near the center
+        if (cx >= 0 && cx < WIDTH && cz >= 0 && cz < DEPTH) {
+            float count, baseY;
+            smoothedCloudColumn(cx, cz, spread, count, baseY);
 
-            if (fillHash > threshold) {
-                tHit = t;
-                float shadeHash = hash(localCell * 3.71f + vec3(91.0f, cloudSeed, 7.0f));
-                vec3 baseColor = mix(vec3(0.76f, 0.76f, 0.78f), vec3(1.0f), shadeHash); // white -> light grey
-                vec3 stormColor = vec3(0.32f, 0.33f, 0.36f);
-                baseColor = mix(baseColor, stormColor, greyness);
+            if (count > 0.0f) {
+                // Bottom on the pile's top block, growing upward with the pile's depth -- and both
+                // faces snapped to the cloud-cell lattice.
+                //
+                // Snapping is what stops the edges shimmering. The slab's extent still follows the
+                // block count, which changes every dispatch, and an unsnapped face lands part way
+                // through a cell: that cell's edgeFactor then wobbles either side of its threshold
+                // and it blinks. Aligned to the lattice, a cell is wholly inside the slab or wholly
+                // outside, so the boundary only changes when the count moves a whole cell's worth
+                // -- rarely, and by a whole cell when it does.
+                float cell = max(tuning.cloudVoxelSize, 0.5f);
+                float thickness = count * max(tuning.cloudThicknessPerBlock, 0.01f);
+                baseY = floor(baseY / cell) * cell;
+                float capY = baseY + max(floor(thickness / cell), 1.0f) * cell;
 
-                float diffuse = 0.6f + 0.4f * max(dot(normal, sunDir), 0.0f);
-                hitColor = baseColor * diffuse;
-                return true;
+                if (cellCenter.y >= baseY && cellCenter.y <= capY) {
+                    float density = clamp(count / max(tuning.cloudColumnFullCount, 1.0f),
+                                          0.0f, 1.0f);
+
+                    // Distance from the slab's mid-height, 0 in the middle and 1 at either face --
+                    // the same role the ellipsoid's localLen played, so the existing edge threshold
+                    // tuning keeps its meaning: sparser at the boundary, denser through the core.
+                    float mid = (baseY + capY) * 0.5f;
+                    float edgeFactor = clamp(abs(cellCenter.y - mid) / max(thickness * 0.5f, 0.001f),
+                                             0.0f, 1.0f);
+                    // Density deliberately does NOT enter here. It used to -- the threshold was
+                    // pushed toward 1 for a thin column -- and that was wrong twice over.
+                    //
+                    // It made cloud sparse: a column a tenth of the way to full put the threshold at
+                    // 0.94, against a hash that is uniform on 0..1, so about one cell in sixteen
+                    // survived and the sky was a scatter of isolated cubes rather than cloud.
+                    //
+                    // And it made cloud unstable, which is the worse half. The count changes every
+                    // dispatch as blocks rise and rainclouds fall, so the threshold moved every
+                    // frame -- and up at 0.94 a small move flips a large share of the cells at once,
+                    // because that is where the tail of a uniform distribution is steepest. The
+                    // whole silhouette rearranged between consecutive frames.
+                    //
+                    // Shape now comes from geometry alone, which is stable frame to frame, and
+                    // density drives opacity instead, where a change is a smooth fade rather than a
+                    // rearrangement.
+                    float threshold = mix(tuning.cloudEdgeThresholdMin,
+                                          tuning.cloudEdgeThresholdMax, edgeFactor);
+
+                    float fillHash = hash(vec3(cellPos));
+                    if (fillHash > threshold) {
+                        tHit = t;
+                        hitDensity = density;
+                        float shadeHash = hash(vec3(cellPos) * 3.71f + vec3(91.0f, 5.0f, 7.0f));
+                        // Near white with only a hint of shading between cells. The old range bottomed
+                        // out at 0.76, which read as grey even with no storm anywhere near.
+                        vec3 baseColor = mix(vec3(0.90f, 0.91f, 0.94f), vec3(1.0f), shadeHash);
+                        vec3 stormColor = vec3(0.32f, 0.33f, 0.36f);
+                        baseColor = mix(baseColor, stormColor, greyness);
+
+                        float diffuse = 0.6f + 0.4f * max(dot(normal, sunDir), 0.0f);
+                        hitColor = baseColor * diffuse;
+                        return true;
+                    }
+                }
             }
         }
 
@@ -1004,8 +1159,14 @@ bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, vec3 center, vec3 radii, floa
 
 // FUNCTION: main
 void main() {
-    vec2 screenSpace = inUV * 2.0f - 1.0f; 
-    screenSpace.y = -screenSpace.y; 
+    vec2 screenSpace = inUV * 2.0f - 1.0f;
+    screenSpace.y = -screenSpace.y;
+
+    // Without this the +/-1 square is stretched onto whatever shape the window is, so a wide window
+    // squashes the world horizontally rather than revealing more of it. Both factors are 1.0 at the
+    // 4:3 the camera was framed for, which is why the desktop image is unchanged.
+    screenSpace.x *= pc.aspectScaleX;
+    screenSpace.y *= pc.aspectScaleY;
 
     vec3 baseOrigin = vec3(pc.camX, pc.camY, pc.camZ);
 
@@ -1042,7 +1203,12 @@ void main() {
     // The march runs against the world clipped to its occupied height, not the full cube. The full
     // extent is still what the wireframe edges above and the distance fade below are measured
     // against -- only where the DDA starts and stops changes.
-    int ceilingY = marchCeiling();
+    // marchCeiling tracks MATTER, and cloud blocks are not matter -- they live in a parallel field
+    // and never raise maxOccupiedY. With the debug view on, the ceiling would therefore clip the
+    // very blocks it is meant to show, and because the mark decays by one per dispatch and is
+    // re-asserted by whatever is highest, they would blink in and out as it drifted. The debug view
+    // pays for the whole column instead; normal rendering keeps the optimisation untouched.
+    int ceilingY = (pc.showCloudBlocks != 0) ? HEIGHT : marchCeiling();
     vec2 marchHit = intersectAABB(rayOrigin, rayDir, vec3(0.0f), vec3(float(WIDTH), float(ceilingY), float(DEPTH)));
 
     vec3 currentPos = rayOrigin + rayDir * max(0.0f, marchHit.x);
@@ -1088,6 +1254,19 @@ void main() {
         
         uint rawVoxel = getVoxel(voxelPos);
         hitType = rawVoxel & 0xFFu;
+
+        // Debug view. Tested before the ordinary hit so a cloud block sharing a cell with matter is
+        // hidden by it rather than replacing it -- the two fields genuinely coexist, and drawing the
+        // cloud over the stone would misrepresent that.
+        if (pc.showCloudBlocks != 0 && hitType == 0u) {
+            uint c = cloudCells[uint(voxelPos.x + voxelPos.y * WIDTH + voxelPos.z * WIDTH * HEIGHT)];
+            if ((c & 3u) != 0u) {
+                hitType = CLOUD_DEBUG_TYPE;
+                hitRawVoxel = c;
+                hit = true;
+                break;
+            }
+        }
 
         // A black hole's centre voxel must not register as a solid cube: the body is drawn as a
         // smooth ball after this loop, and at level 0 the voxel cube is strictly larger than the
@@ -1192,6 +1371,14 @@ void main() {
         
         vec3 finalVoxelColor = vec3(1.0f, 0.0f, 1.0f) * baseLighting; 
         
+        if (hitType == CLOUD_DEBUG_TYPE) {
+            // Storm blocks read warm, calm blocks cool, so a storm sweeping the field is visible as
+            // it happens rather than only in the rain that follows.
+            vec3 calm = vec3(0.35f, 0.65f, 1.00f);
+            vec3 rain = vec3(1.00f, 0.55f, 0.25f);
+            finalVoxelColor = mix(calm, rain, ((hitRawVoxel & 3u) == 2u) ? 1.0f : 0.0f) * baseLighting;
+        }
+
         switch (hitType) {
             case 1u:
                 finalVoxelColor = renderSand(hitRawVoxel, baseLighting);
@@ -1312,8 +1499,11 @@ void main() {
     {
         // Group charge, eased on the compute side. Drives opacity and colour together, which is
         // what makes the sky read as a single mass reacting to the water cycle.
+        // Charge drives COLOUR only. It used to drive opacity as well, and since it only rises once
+        // a storm is committed, the sky was invisible until it rained -- cloud blocks could be piled
+        // against the roof with nothing drawn over them. Opacity now comes from how much cloud is
+        // actually in the column, so a bank appears as soon as it exists.
         float charge = clamp(uintBitsToFloat(cloudChargeBits), 0.0f, 1.0f);
-        float groupAlpha = mix(tuning.cloudMinAlpha, tuning.cloudMaxAlpha, charge);
 
         // Colour tracks charge as well, so a lightly-charged sky is pale and a heavy one is grey
         // before the storm even breaks; the rain phases then force it the rest of the way.
@@ -1325,8 +1515,47 @@ void main() {
             cloudGreyness = 1.0f;
         }
 
-        if (groupAlpha > 0.002f) {
-            vec2 footprintClip = intersectAABB(rayOrigin, rayDir, vec3(0.0f, -1000000.0f, 0.0f), vec3(float(WIDTH), 1000000.0f, float(DEPTH)));
+        if (tuning.cloudMaxAlpha > 0.002f) {
+            // One march, not a loop over a cloud population. The interval is the cube's XZ
+            // footprint with Y left open, because the cloud blocks are inside the world but the
+            // cloud drawn from them stands above it -- clipping to the cube would cut off every
+            // slab at the roof.
+            // Clipped to the band the cloud field actually occupies, which the compute stage
+            // publishes each dispatch. This is what makes a fixed step budget sufficient.
+            //
+            // Bounding the box to the world was not enough: a ray entering low still had to cross
+            // the whole cube before reaching cloud that sits against the roof, so at some angles it
+            // ran out of steps and the sky flickered -- worse the further away the camera was,
+            // because distance is what makes a ray enter low and travel far. Starting at the band
+            // makes the march a few cells regardless of where the camera is.
+            //
+            // Published min above max is the shader's way of saying there is no cloud at all, in
+            // which case there is nothing to march.
+            // Backed off by one cloud cell. The band's floor is the lowest cloud block anywhere, so
+            // it moves as blocks come and go -- and starting the march exactly on it risks beginning
+            // inside the first fillable cell rather than before it, which would change the first hit
+            // as the floor drifted. Starting a cell early is always safe; starting late is not.
+            float slabMax = max(tuning.cloudColumnFullCount, 1.0f)
+                          * max(tuning.cloudThicknessPerBlock, 0.01f);
+            float bandHi = float(cloudMaxY) + slabMax;
+
+            // Floored, not just taken from the lowest block in the world. cloudMinY is a true
+            // minimum, so ONE stray block far below the deck -- a steam voxel that condensed in
+            // mid-air and has not finished rising -- stretched the band across the whole world. A
+            // shallow ray then crossed a tall band for its entire width, which is many cells, and
+            // ran out of budget: cloud went missing at a distance, because distance is what makes a
+            // ray shallow. Capping the depth bounds that traversal.
+            //
+            // The cost is that cloud more than slabMax below the top of the field is not drawn. That
+            // is the transient risers, which is the better answer anyway -- they were showing up as
+            // isolated grey cubes down at water level.
+            float bandLo = max(float(cloudMinY), float(cloudMaxY) - slabMax)
+                         - max(tuning.cloudVoxelSize, 1.0f);
+            vec2 cloudClip = (cloudMinY > cloudMaxY)
+                ? vec2(1.0f, -1.0f)   // empty interval: the tests below reject it
+                : intersectAABB(rayOrigin, rayDir,
+                                vec3(0.0f, bandLo, 0.0f),
+                                vec3(worldExtent().x, bandHi, worldExtent().z));
             vec3 cloudSunDir = normalize(vec3(0.8f, 1.0f, 0.5f));
 
             float bestT = 1000000.0f;
@@ -1334,47 +1563,22 @@ void main() {
             float bestAlpha = 0.0f;
             bool foundCloud = false;
 
-            int cloudN = int(min(tuning.cloudCount, uint(CLOUD_MAX)));
-            for (int i = 0; i < cloudN; i++) {
-                float edgeFade = cloudFade(i);
-                if (edgeFade <= 0.01f) continue;
-
-                vec3 center = cloudCenter(i);
-                vec3 radii = cloudRadii(i);
-
-                vec3 oc = (rayOrigin - center) / radii;
-                vec3 rdn = rayDir / radii;
-                float a = dot(rdn, rdn);
-                float b = dot(oc, rdn);
-                float c = dot(oc, oc) - 1.0f;
-                float disc = b * b - a * c;
-
-                if (disc > 0.0f) {
-                    float sq = sqrt(disc);
-                    float t0 = (-b - sq) / a;
-                    float t1 = (-b + sq) / a;
-
-                    float clippedNear = max(t0, footprintClip.x);
-                    float clippedFar = min(t1, footprintClip.y);
-
-                    // Only the nearest cloud is ever drawn, and only if it is in front of the
-                    // geometry, so a cloud whose whole interval starts behind either cannot change
-                    // the result -- and marching it is up to maxCloudSteps of DDA for an answer
-                    // already known. Exact rather than approximate: clippedNear is a lower bound on
-                    // anything this cloud could produce, and both tests below it are strict.
-                    if (clippedNear >= min(bestT, finalDist)) continue;
-
-                    if (clippedNear < clippedFar && clippedFar > 0.0f) {
-                        float cloudTHit;
-                        vec3 cloudColor;
-                        if (marchBlockyCloud(rayOrigin, rayDir, center, radii, float(i), clippedNear, clippedFar, cloudSunDir, cloudGreyness, cloudTHit, cloudColor)) {
-                            if (cloudTHit > 0.0f && cloudTHit < bestT) {
-                                bestT = cloudTHit;
-                                bestColor = cloudColor;
-                                bestAlpha = clamp(groupAlpha * edgeFade, 0.0f, 0.95f);
-                                foundCloud = true;
-                            }
-                        }
+            float nearT = max(cloudClip.x, 0.0f);
+            float farT  = min(cloudClip.y, finalDist);
+            if (nearT < farT) {
+                float cloudTHit;
+                vec3 cloudColor;
+                float cloudDensity;
+                if (marchBlockyCloud(rayOrigin, rayDir, nearT, farT, cloudSunDir, cloudGreyness,
+                                     cloudTHit, cloudColor, cloudDensity)) {
+                    if (cloudTHit > 0.0f) {
+                        bestT = cloudTHit;
+                        bestColor = cloudColor;
+                        // Thin cloud is see-through as well as sparse: a single stray block must not
+                        // draw at the same opacity as a full bank.
+                        bestAlpha = clamp(mix(tuning.cloudMinAlpha, tuning.cloudMaxAlpha, cloudDensity),
+                                          0.0f, 0.95f);
+                        foundCloud = true;
                     }
                 }
             }

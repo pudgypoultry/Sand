@@ -28,35 +28,47 @@ struct TuningParams {
     // and at large world sizes tracing them in full is the more expensive half of the frame.
     uint32_t shadowMaxSteps = 256;
     // --- Rain ---
-    // A storm begins once the water deficit exceeds rainStartLayers full grid layers, then
-    // returns water at rainDropsPerTick per dispatch until the deficit is repaid -- so storm
-    // length scales with how much actually went missing. The rate is achieved by dividing
-    // rainDropsPerTick across a live census of rainable columns, giving every column under any
-    // cloud identical odds, so rain stays evenly spread no matter how many clouds are overhead.
-    // rainOvershoot is deliberate headroom: drops still falling already count as water, so the
-    // level reads restored slightly before they land (and some then soak into soil instead of
-    // pooling). 0.2 delivers 20% past the measured deficit to absorb that.
-    uint32_t rainStartLayers = 2;
-    uint32_t rainDropsPerTick = 50;
-    float rainOvershoot = 0.05f;
-    float rainDarkenDelay = 6.0f;
+    // Rain is no longer metered against a water deficit. Steam that reaches the top of the world
+    // becomes a cloud block; once the cloud field has been still for cloud.still_ticks_to_storm
+    // dispatches the sky darkens for rainDarkenDelay seconds, and then every cloud block becomes a
+    // storm block that makes its own way to the ceiling and falls back as water. A storm therefore
+    // returns exactly the water that evaporated, one block for one voxel, and ends when the last
+    // block has fallen -- there is no target level to reach and nothing to overshoot.
+    //
+    // The first three are dead, kept for their offsets.
+    uint32_t rainStartLayers = 2;      // UNUSED: no threshold; stillness starts a storm
+    uint32_t rainDropsPerTick = 50;    // UNUSED: no rate; every cloud block falls once
+    float rainOvershoot = 0.05f;       // UNUSED: no target level to overshoot
+    float rainDarkenDelay = 6.0f;      // still used: seconds of darkening before rain starts
     // --- Clouds ---
-    // A fixed population of cloudCount clouds drifts along +X and wraps, dissolving over
-    // cloudEdgeFadeDist as it nears a border. The whole field shares one "charge" value -- eased
-    // toward banked steam before a storm and toward the outstanding water deficit during one --
-    // which drives opacity between cloudMinAlpha and cloudMaxAlpha and greys the field as it
-    // rises, so the sky reacts as a single mass instead of clouds appearing one at a time.
-    uint32_t cloudCount = 32;          // hard-capped at 64 by the shaders
-    float cloudDriftSpeed = 2.0f;      // world units per second
-    float cloudEdgeFadeDist = 20.0f;
-    float cloudChargeSaturation = 20000.0f;
+    // Clouds are the visible shadow of an actual voxel field: cloud blocks rise, pile against the
+    // ceiling, and the renderer draws a slab over each column sized from how many are stacked there.
+    // The field still shares one "charge" value, which now tracks the storm phase rather than a
+    // water deficit, driving opacity between cloudMinAlpha and cloudMaxAlpha and greying the sky as
+    // it rises -- so the whole sky still reacts as one mass.
+    //
+    // Three of the fields below are dead: clouds became simulated voxels, so there is no drifting
+    // population to count, no drift speed, and no water deficit for the charge to track. They stay
+    // declared because every field after them has an offset both shaders depend on -- see the note
+    // on renderScale at the end of this struct. cloudEdgeFadeDist came back into use: it fades the
+    // deck at the world's edges, which is the same job it did for the old ellipsoids.
+    uint32_t cloudCount = 32;          // UNUSED: clouds are voxels now, not a fixed population
+    float cloudDriftSpeed = 2.0f;      // UNUSED: clouds no longer drift
+    float cloudEdgeFadeDist = 20.0f;   // in use again: tapers the cloud deck at the world's edges
+    float cloudChargeSaturation = 20000.0f; // UNUSED: charge tracks the storm phase, not a deficit
     float cloudChargeEaseRate = 0.02f; // per dispatch, so it is framerate-dependent by design
     float cloudMinAlpha = 0.00f;       // set to 0 for a completely clear sky until steam appears
     float cloudMaxAlpha = 0.9f;
     float cloudVoxelSize = 3.0f;
     float cloudEdgeThresholdMin = 0.15f;
     float cloudEdgeThresholdMax = 0.7f;
-    uint32_t maxCloudSteps = 32;
+    // Must exceed the cells a ray crosses within the cloud band, or cloud goes missing at a
+    // distance -- distance is what makes a ray shallow, and a shallow ray skims the band for the
+    // whole width of the world. Measured worst case, with the band depth capped as the renderer
+    // caps it, is 98 cells at a 128-cube and 184 at a 256-cube: so 128 covers the default world
+    // with room, and a larger world wants this raised to match. Only pixels whose ray actually
+    // traverses the band pay for it.
+    uint32_t maxCloudSteps = 128;
     // --- Physics ---
     uint32_t sandMoistureCapacity = 10;
     uint32_t dirtMoistureCapacity = 30;
@@ -257,6 +269,54 @@ struct TuningParams {
     float treeLeafBurnChance = 0.15f;    // chance per tick for fire to take an adjacent leaf
     uint32_t treeTrunkColumns = 2;       // upper bound on the little stems drawn inside a trunk
     float treeTrunkRadius = 0.17f;       // stem radius in voxel units
+
+    // Appended rather than filed with the other render settings, deliberately: every field before
+    // this one has an offset that both shaders' uniform blocks depend on, and inserting into the
+    // middle would move all of them. The options screen still shows it under World, because the
+    // schema orders the UI by its own table rather than by this declaration.
+    float renderScale = 1.0f;            // drawing-buffer size as a fraction of the display area
+
+    // --- Cloud blocks (see the CLOUD BLOCKS section in falling_sand.comp) -------------------------
+    // Appended for the same reason renderScale was: every field above has an offset both shaders'
+    // uniform blocks depend on.
+    //
+    // How often the sky is tested for a storm, in dispatches. On every multiple of this the
+    // simulation asks whether any cloud block moved on the previous dispatch; if none did, the
+    // field has settled and a rain event begins. A periodic check rather than a run of consecutive
+    // still ticks, so a single block jostling once cannot postpone weather indefinitely.
+    uint32_t cloudCheckIntervalTicks = 5000;
+    // A raincloud that reaches the ceiling picks a target between rainWaitMinTicks and this, then
+    // counts up to it before becoming water -- so a storm falls as scattered drops over a long
+    // while rather than as one sheet. Both are capped at 2047 by the 11-bit counters in the cloud
+    // word; sanitizeTuning enforces that.
+    uint32_t rainWaitMaxTicks = 2048;
+    // How many cloud blocks in a column count as a fully opaque cloud. The divisor that makes cloud
+    // density independent of world size.
+    // Lowered from 24: with density no longer thinning the fill pattern it drives opacity alone,
+    // and 24 blocks deep is a lot of cloud to demand before the sky looks solid.
+    float cloudColumnFullCount = 10.0f;
+    // World units of cloud drawn per cloud block in the column, rising from the top of the pile.
+    float cloudThicknessPerBlock = 1.5f;
+    // Cloud neighbours (of 26) at which a block counts as clumped and stops trying to move. The
+    // counterpart of sandClumpThreshold, and it does the same job: without it a pile slumps into a
+    // flat even sheet, and with it the field holds lumpy, cloud-shaped mounds.
+    uint32_t cloudClumpThreshold = 9;  // UNUSED: cloud spreads like sand, with no cohesion rule
+    // The floor of a raincloud's wait at the ceiling. See rainWaitMaxTicks.
+    uint32_t rainWaitMinTicks = 256;
+    // Dispatches a steam voxel may go without moving before it condenses where it stands.
+    //
+    // A failsafe, and it earns its keep. Steam condenses on reaching the roof or on rising into
+    // settled cloud, but a cloud block can rise INTO a steam voxel's cell -- the two fields do not
+    // look at each other -- and steam in that position is touching cloud without being under it, so
+    // neither rule fires and it hangs there. Rather than enumerate the ways that can happen, steam
+    // that has gone nowhere for this long simply becomes cloud.
+    uint32_t steamCondenseTicks = 10;
+    // How fast the drawn cloud surface follows the block field, per dispatch, 0..1.
+    //
+    // The field is never still -- blocks rise, rainclouds fall -- so a surface drawn straight from
+    // this dispatch's counts changes every dispatch, and the deck boils. Easing it means the shape
+    // drifts smoothly instead. 1.0 disables the smoothing and restores the boiling.
+    float cloudSmoothRate = 0.08f;
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

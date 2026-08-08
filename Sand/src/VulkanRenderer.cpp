@@ -3,6 +3,8 @@
 #include "AssetPaths.hpp"
 #include "Storage.hpp"
 #include "FrameLoop.hpp"
+#include "CursorRay.hpp"
+#include "SimStats.hpp"
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -15,28 +17,6 @@
 // build compiles against, does not forward it either.
 #include <cmath>
 
-// Size of the SimStats SSBO at binding 1, in uint32_t fields: 9 cloud/water scalars, then
-// blackHoleCount and maxOccupiedY, then three BLACK_HOLE_MAX-sized arrays (table slots,
-// swallowed-voxel counts, starvation clocks). Must match the SimStats block declared in
-// falling_sand.comp and raymarch.frag.
-static constexpr uint32_t BLACK_HOLE_MAX = 8;
-static constexpr uint32_t SIM_STATS_CLOUD_FIELDS = 9;               // waterVoxelCount .. cloudChargeBits
-static constexpr uint32_t SIM_STATS_COUNT = SIM_STATS_CLOUD_FIELDS; // blackHoleCount
-static constexpr uint32_t SIM_STATS_MAX_Y = SIM_STATS_COUNT + 1;    // maxOccupiedY
-static constexpr uint32_t SIM_STATS_HOLES = SIM_STATS_MAX_Y + 1;    // blackHoles[]
-static constexpr uint32_t SIM_STATS_MASS = SIM_STATS_HOLES + BLACK_HOLE_MAX;
-static constexpr uint32_t SIM_STATS_STARVE = SIM_STATS_MASS + BLACK_HOLE_MAX;
-static constexpr uint32_t SIM_STATS_STARVE_END = SIM_STATS_STARVE + BLACK_HOLE_MAX;
-// Cloud placement, cached once per dispatch instead of re-derived by every voxel and every pixel.
-// Seven floats per cloud (centre xyz, radius xyz, edge fade); must match the cloudCache array in
-// both shaders.
-static constexpr uint32_t CLOUD_MAX = 64;
-static constexpr uint32_t SIM_STATS_FIELDS = SIM_STATS_STARVE_END + CLOUD_MAX * 7;
-
-// Black hole table slot encoding. Must match the constants in falling_sand.comp.
-static constexpr uint32_t BH_ACTIVE = 0x80000000u;
-static constexpr uint32_t BH_PURGE = 0x40000000u;
-static constexpr uint32_t BH_INDEX_MASK = 0x3FFFFFFFu;
 
 // Constructor: Initializes the managed architecture instances
 VulkanRenderer::VulkanRenderer() {
@@ -239,15 +219,30 @@ void VulkanRenderer::createWorldBuffers() {
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
 
-    // Shared simulation stats: 9 cloud/water scalars (waterVoxelCount, waterHighMark,
+    // The cloud field: one uint per voxel, exactly parallel to the grid above and indexed the same
+    // way. Cloud blocks live here so that they can share a cell with ordinary matter -- see the
+    // CLOUD BLOCKS comment in falling_sand.comp for why a flag inside the voxel word could not work.
+    // Bound at binding 4, compute only.
+    cloudBuffer = std::make_unique<VulkanBuffer>(
+        context.get(),
+        bufferSize,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+
+    // Shared simulation stats: 12 cloud/water scalars (waterVoxelCount, waterHighMark,
     // cloudWaterCount, rainPhase, rainPhaseTimeBits, rainTargetLevel, rainCandidateCount,
-    // rainCandidateEstimate, cloudChargeBits), then maxOccupiedY and the black hole table
-    // (blackHoleCount plus BLACK_HOLE_MAX slots), then the per-cloud placement cache. Must stay in
-    // sync with the SimStats block in falling_sand.comp and raymarch.frag.
+    // rainCandidateEstimate, cloudChargeBits, cloudBlockCount, cloudMovedCount, cloudStillTicks),
+    // then maxOccupiedY and the black hole table (blackHoleCount plus SimStats::kBlackHoleMax
+    // slots), then the per-column cloud census. Must stay in sync with the SimStats block in
+    // falling_sand.comp and raymarch.frag.
+    //
+    // Variable length now: the census is four words per column, so the buffer grows with the world
+    // and has to be rebuilt when the world is resized.
     // Bound at binding 1, shared by compute and fragment.
     steamCounterBuffer = std::make_unique<VulkanBuffer>(
         context.get(),
-        sizeof(uint32_t) * SIM_STATS_FIELDS,
+        sizeof(uint32_t) * SimStats::statsWordCount(config.tuning.gridWidth, config.tuning.gridDepth),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     );
@@ -322,6 +317,7 @@ void VulkanRenderer::cleanup() {
 
     // Frees VRAM automatically via the VulkanBuffer destructor
     ssboBuffer.reset();
+    cloudBuffer.reset();
     steamCounterBuffer.reset();
     tuningBuffer.reset();
 }
@@ -334,18 +330,26 @@ void VulkanRenderer::seedParticles() {
     memset(data, 0, sizeof(uint32_t) * totalVoxels);
     ssboBuffer->unmapMemory();
 
+    // The cloud field starts empty too. Sharing the grid's dimensions, it shares its clear.
+    void* cloudData = cloudBuffer->mapMemory();
+    memset(cloudData, 0, sizeof(uint32_t) * totalVoxels);
+    cloudBuffer->unmapMemory();
+
     // Every SimStats field starts at 0, including cloudChargeBits -- a zero bit pattern is
     // +0.0f as a float, so the sky correctly starts completely uncharged with no sentinel needed.
     // Zero is also the "free slot" marker for the black hole table, so clearing the grid correctly
     // forgets every hole that was in it.
-    std::vector<uint32_t> statsInit(SIM_STATS_FIELDS, 0u);
+    uiManager.resetTicks();
+
+    std::vector<uint32_t> statsInit(
+        SimStats::statsWordCount(config.tuning.gridWidth, config.tuning.gridDepth), 0u);
 
     // maxOccupiedY is the exception: it starts at the roof rather than at zero. Over-reporting it is
     // always safe (the renderer just marches sky that turns out to be empty) while under-reporting
     // hides matter, and the compute shader only walks it down one voxel per dispatch. Starting high
     // means the very first frame is drawn unclipped instead of being cropped to the floor until the
     // first dispatch has had a chance to publish.
-    statsInit[SIM_STATS_MAX_Y] = config.tuning.gridHeight;
+    statsInit[SimStats::kMaxY] = config.tuning.gridHeight;
 
     void* counterData = steamCounterBuffer->mapMemory();
     memcpy(counterData, statsInit.data(), sizeof(uint32_t) * statsInit.size());
@@ -366,7 +370,7 @@ size_t VulkanRenderer::voxelCount() const {
 // Safe to touch the buffers directly from here: the caller has already waited on the frame fence, so
 // the GPU is idle, which is the same guarantee seedParticles relies on.
 //
-// Nothing here schedules the ending. The hole is flagged BH_PURGE and the simulation's existing
+// Nothing here schedules the ending. The hole is flagged SimStats::kPurge and the simulation's existing
 // starvation path does the rest -- a hole that catches nothing shrinks and deletes itself, which is
 // already exactly the behaviour wanted, just with a shorter fuse and a faster burn.
 void VulkanRenderer::beginPurge() {
@@ -376,32 +380,45 @@ void VulkanRenderer::beginPurge() {
     // Any hole already in the table is removed first, voxel as well as slot. Black holes are the one
     // thing the purge hole cannot eat -- capture skips type 7 so they would otherwise sit untouched
     // through a Clear Grid and be the only survivors.
-    for (uint32_t i = 0; i < BLACK_HOLE_MAX; i++) {
-        uint32_t code = stats[SIM_STATS_HOLES + i];
-        if (code != 0u) grid[code & BH_INDEX_MASK] = 0u;
-        stats[SIM_STATS_HOLES + i] = 0u;
-        stats[SIM_STATS_MASS + i] = 0u;
-        stats[SIM_STATS_STARVE + i] = 0u;
+    for (uint32_t i = 0; i < SimStats::kBlackHoleMax; i++) {
+        uint32_t code = stats[SimStats::kHoles + i];
+        if (code != 0u) grid[code & SimStats::kIndexMask] = 0u;
+        stats[SimStats::kHoles + i] = 0u;
+        stats[SimStats::kMass + i] = 0u;
+        stats[SimStats::kStarve + i] = 0u;
     }
 
-    // Sky back to base. Zeroing waterHighMark here matters beyond tidiness: the purge is about to
-    // destroy every water voxel in the world, and a high mark left standing would read as an
-    // enormous permanent deficit afterwards and open a storm over an empty grid.
-    for (uint32_t i = 0; i < SIM_STATS_CLOUD_FIELDS; i++) stats[i] = 0u;
+    // Sky back to base. Clearing the scalars matters beyond tidiness: waterVoxelCount is about to
+    // stop describing a world that is being destroyed, and cloudStillTicks left standing would have
+    // the sky open a storm over an empty grid the moment the purge finishes.
+    for (uint32_t i = 0; i < SimStats::kCloudScalarCount; i++) stats[i] = 0u;
+
+    // The per-column cloud census as well, or the renderer keeps drawing clouds over columns whose
+    // cloud blocks are about to be erased below.
+    const uint32_t columnWords =
+        config.tuning.gridWidth * config.tuning.gridDepth * SimStats::kColumnWords;
+    for (uint32_t i = 0; i < columnWords; i++) stats[SimStats::kColumnBase + i] = 0u;
+
+    // And the cloud field itself. The purge hole eats the main grid, but it has no reach into the
+    // cloud buffer -- nothing there is matter it can capture -- so those blocks would survive a
+    // Clear Grid and rain down onto the empty world afterwards.
+    uint32_t* cloud = static_cast<uint32_t*>(cloudBuffer->mapMemory());
+    memset(cloud, 0, sizeof(uint32_t) * voxelCount());
+    cloudBuffer->unmapMemory();
 
     const uint32_t w = config.tuning.gridWidth, h = config.tuning.gridHeight, d = config.tuning.gridDepth;
     const uint32_t centre = (w / 2) + (h / 2) * w + (d / 2) * w * h;
     grid[centre] = 7u; // pack(BlackHole, 0, 0, 0)
 
-    stats[SIM_STATS_HOLES] = BH_ACTIVE | BH_PURGE | centre;
-    stats[SIM_STATS_MASS] = config.tuning.purgeMass;
-    stats[SIM_STATS_STARVE] = 0u;
-    stats[SIM_STATS_COUNT] = 1u;
+    stats[SimStats::kHoles] = SimStats::kActive | SimStats::kPurge | centre;
+    stats[SimStats::kMass] = config.tuning.purgeMass;
+    stats[SimStats::kStarve] = 0u;
+    stats[SimStats::kCount] = 1u;
 
     // The purge hole is written straight into the grid from here, so it never passes through the
     // dispatch that would normally publish its height. Raising the ceiling to match means its body
     // is not clipped away on the frame it appears.
-    stats[SIM_STATS_MAX_Y] = std::max(stats[SIM_STATS_MAX_Y], h / 2);
+    stats[SimStats::kMaxY] = std::max(stats[SimStats::kMaxY], h / 2);
 
     ssboBuffer->unmapMemory();
     steamCounterBuffer->unmapMemory();
@@ -437,7 +454,7 @@ void VulkanRenderer::createFramebuffers() {
 void VulkanRenderer::createDescriptorSet() {
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[0].descriptorCount = 2; // grid + cloud/water stats
+    poolSizes[0].descriptorCount = 3; // grid + cloud/water stats + cloud voxels
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 1; // tuning params
 
@@ -487,7 +504,12 @@ void VulkanRenderer::writeDescriptorSet() {
     tuningBufferInfo.offset = 0;
     tuningBufferInfo.range = VK_WHOLE_SIZE;
 
-    VkWriteDescriptorSet writes[3]{};
+    VkDescriptorBufferInfo cloudBufferInfo{};
+    cloudBufferInfo.buffer = cloudBuffer->getBuffer();
+    cloudBufferInfo.offset = 0;
+    cloudBufferInfo.range = VK_WHOLE_SIZE;
+
+    VkWriteDescriptorSet writes[4]{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = descriptorSet;
     writes[0].dstBinding = 0;
@@ -509,7 +531,14 @@ void VulkanRenderer::writeDescriptorSet() {
     writes[2].descriptorCount = 1;
     writes[2].pBufferInfo = &tuningBufferInfo;
 
-    vkUpdateDescriptorSets(context->getDevice(), 3, writes, 0, nullptr);
+    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[3].dstSet = descriptorSet;
+    writes[3].dstBinding = 4;
+    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[3].descriptorCount = 1;
+    writes[3].pBufferInfo = &cloudBufferInfo;
+
+    vkUpdateDescriptorSets(context->getDevice(), 4, writes, 0, nullptr);
 }
 
 // createCommandPoolAndBuffer: Prepares the command buffer for recording rendering and compute commands
@@ -666,135 +695,25 @@ void VulkanRenderer::drawFrame() {
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->getComputePipeline());
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->getComputePipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
 
+    // The camera basis, the cursor raycast and the brush bounds all live in CursorRay now: they
+    // are pure maths that the web renderer needs identically, and a second copy would be a second
+    // thing to keep in step with raymarch.frag -- which neither copy can see.
     PushConstants pc{};
-    pc.time = (float)glfwGetTime();
-    pc.pitch = window->getPitch();
-    pc.yaw = window->getYaw();
-    pc.camX = window->getCamX();
-    pc.camY = window->getCamY();
-    pc.camZ = window->getCamZ();
-    pc.spawnActive = 0;
-
-    // Read the selected material from the UI Manager
-    pc.spawnType = static_cast<int>(uiManager.getCurrentMaterial());
-
-    // A black hole is a single tracked object rather than paint, and the compute shader will only
-    // ever place the one at the brush's centre. Pinning the brush to 1 voxel here keeps the cursor
-    // honest about that instead of outlining a volume that a click won't fill.
-    int brushSize = (uiManager.getCurrentMaterial() == MaterialType::BlackHole)
-        ? 1
-        : uiManager.getBrushSize();
-
-    pc.spawnSize = brushSize;
-    pc.spawnShape = static_cast<int>(uiManager.getCursorShape());
-    pc.fovDistance = uiManager.getFovDistance();
-    pc.perspectiveBlend = uiManager.getPerspectiveBlend();
-
-    // Set default out-of-bounds so the cursor hides if looking into the void
-    pc.spawnX = -1; pc.spawnY = -1; pc.spawnZ = -1;
-
-    // --- CPU RAYCAST FOR MOUSE CURSOR AND CLICK ---
-    float ndcX = window->getMouseNdcX();
-    float ndcY = -window->getMouseNdcY();
-
-    // Builds the same forward/right/up camera basis as raymarch.frag, then blends between
-    // perspective (shared origin, per-pixel direction) and orthographic (shared direction,
-    // per-pixel origin) using the same t = perspectiveBlend factor, so the cursor stays
-    // accurate across the whole slider range instead of only matching at t = 1.
-    struct RayVec3 { float x, y, z; };
-
-    auto rotateByCamera = [](RayVec3 v, float pitch, float yaw) -> RayVec3 {
-        float cp = std::cos(pitch), sp = std::sin(pitch);
-        float ny = v.y * cp - v.z * sp;
-        float nz = v.y * sp + v.z * cp;
-        v.y = ny; v.z = nz;
-
-        float cy = std::cos(yaw), sy = std::sin(yaw);
-        float nx = v.x * cy - v.z * sy;
-        float nz2 = v.x * sy + v.z * cy;
-        v.x = nx; v.z = nz2;
-        return v;
-        };
-
-    RayVec3 forward = rotateByCamera({ 0.0f, 0.0f, 1.0f }, pc.pitch, pc.yaw);
-    RayVec3 right = rotateByCamera({ 1.0f, 0.0f, 0.0f }, pc.pitch, pc.yaw);
-    RayVec3 up = rotateByCamera({ 0.0f, 1.0f, 0.0f }, pc.pitch, pc.yaw);
-
-    float t = std::clamp(pc.perspectiveBlend, 0.0f, 1.0f);
-
-    const float extentX = (float)config.tuning.gridWidth;
-    const float extentY = (float)config.tuning.gridHeight;
-    const float extentZ = (float)config.tuning.gridDepth;
-
-    float viewDistance = std::max(1.0f,
-        (extentX * 0.5f - pc.camX) * forward.x +
-        (extentY * 0.5f - pc.camY) * forward.y +
-        (extentZ * 0.5f - pc.camZ) * forward.z);
-    float orthoHalfSize = viewDistance / pc.fovDistance;
-
-    float localDirX = (1.0f - t) * 0.0f + t * ndcX;
-    float localDirY = (1.0f - t) * 0.0f + t * ndcY;
-    float localDirZ = (1.0f - t) * 1.0f + t * pc.fovDistance;
-
-    float rx = right.x * localDirX + up.x * localDirY + forward.x * localDirZ;
-    float ry = right.y * localDirX + up.y * localDirY + forward.y * localDirZ;
-    float rz = right.z * localDirX + up.z * localDirY + forward.z * localDirZ;
-    float len = std::sqrt(rx * rx + ry * ry + rz * rz);
-    rx /= len; ry /= len; rz /= len;
-
-    float originOffsetX = (right.x * ndcX + up.x * ndcY) * orthoHalfSize * (1.0f - t);
-    float originOffsetY = (right.y * ndcX + up.y * ndcY) * orthoHalfSize * (1.0f - t);
-    float originOffsetZ = (right.z * ndcX + up.z * ndcY) * orthoHalfSize * (1.0f - t);
-
-    float ox = pc.camX + originOffsetX;
-    float oy = pc.camY + originOffsetY;
-    float oz = pc.camZ + originOffsetZ;
-
-    bool isInside = (ox > 0.0f && ox < extentX && oy > 0.0f && oy < extentY && oz > 0.0f && oz < extentZ);
-
-    int halfDistMin = brushSize / 2;
-    int halfDistMax = (brushSize - 1) / 2;
-    int minBound = 1 + halfDistMin;
-    int maxBoundX = (int)config.tuning.gridWidth - 2 - halfDistMax;
-    int maxBoundY = (int)config.tuning.gridHeight - 2 - halfDistMax;
-    int maxBoundZ = (int)config.tuning.gridDepth - 2 - halfDistMax;
-
-    if (isInside) {
-        float spawnDist = 30.0f;
-        float hitX = ox + rx * spawnDist;
-        float hitY = oy + ry * spawnDist;
-        float hitZ = oz + rz * spawnDist;
-
-        if (hitX >= minBound && hitX <= maxBoundX && hitY >= minBound && hitY <= maxBoundY &&
-            hitZ >= minBound && hitZ <= maxBoundZ) {
-            pc.spawnX = (int)hitX;
-            pc.spawnY = (int)hitY;
-            pc.spawnZ = (int)hitZ;
-            if (window->isLeftClicking()) pc.spawnActive = 1;
-        }
-    }
-    else {
-        float t1 = (0.0f - ox) / rx;  float t2 = (extentX - ox) / rx;
-        float t3 = (0.0f - oy) / ry;  float t4 = (extentY - oy) / ry;
-        float t5 = (0.0f - oz) / rz;  float t6 = (extentZ - oz) / rz;
-
-        float tmin = std::max({ std::min(t1, t2), std::min(t3, t4), std::min(t5, t6) });
-        float tmax = std::min({ std::max(t1, t2), std::max(t3, t4), std::max(t5, t6) });
-
-        if (tmax >= 0 && tmin > 0 && tmin <= tmax) {
-            float hitX = ox + rx * tmin + rx * 0.01f;
-            float hitY = oy + ry * tmin + ry * 0.01f;
-            float hitZ = oz + rz * tmin + rz * 0.01f;
-
-            pc.spawnX = std::clamp((int)hitX, minBound, maxBoundX);
-            pc.spawnY = std::clamp((int)hitY, minBound, maxBoundY);
-            pc.spawnZ = std::clamp((int)hitZ, minBound, maxBoundZ);
-            if (window->isLeftClicking()) pc.spawnActive = 1;
-        }
-    }
+    buildFrameConstants(*window, uiManager, config.tuning, (float)glfwGetTime(), pc);
 
     // --- MULTI-STEP PHYSICS DISPATCH ---
+    // The simulation's weather counters, straight off the mapped buffer. Host-visible and
+    // host-coherent, so this is a read of memory the GPU wrote -- no staging copy, no fence. The web
+    // backend has to work considerably harder for the same three numbers.
+    {
+        const uint32_t* stats = static_cast<const uint32_t*>(steamCounterBuffer->mapMemory());
+        uiManager.setSimState(stats[SimStats::kRainPhase], stats[SimStats::kSimTick],
+                              stats[SimStats::kLastRain], true);
+        steamCounterBuffer->unmapMemory();
+    }
+
     int simSteps = uiManager.getSimulationSpeed();
+    uiManager.advanceTicks(simSteps);
     for (int step = 0; step < simSteps; step++) {
         // We dispatch the compute shader multiple times, allowing it to run physics multiple times per visual frame
         vkCmdPushConstants(commandBuffer, pipeline->getComputePipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &pc);

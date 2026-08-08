@@ -2,27 +2,15 @@
 
 #include "VulkanContext.hpp"
 #include "VulkanSwapchain.hpp"
+#include "FrameConstants.hpp"
 #include <vector>
 #include <string>
 
-// Push constant layout shared across compute and fragment shaders
-struct PushConstants {
-    float time;
-    float pitch;
-    float yaw;
-    float camX;
-    float camY;
-    float camZ;
-    int spawnX;
-    int spawnY;
-    int spawnZ;
-    int spawnActive;
-    int spawnType;
-    int spawnSize;
-    float fovDistance;
-    float perspectiveBlend;
-    int spawnShape; // 0 = cube, 1 = sphere
-};
+// The layout moved to FrameConstants.hpp so the WebGPU backend can share it -- there it is a
+// uniform buffer rather than push constants, but the bytes are the same. The old name is kept
+// because on THIS side they really are push constants, and it saves churning call sites that are
+// correct as they stand.
+using PushConstants = FrameConstants;
 
 class VulkanPipeline {
 public:
