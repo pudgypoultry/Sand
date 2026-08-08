@@ -1,0 +1,74 @@
+name: Deploy web build to GitHub Pages
+
+# Builds the Emscripten/WebGPU target (see docs/WEB_BUILD.md) and publishes it to GitHub Pages.
+#
+# Requires no secrets. The only one-time manual step is Settings -> Pages -> Source: "GitHub
+# Actions" in this repository -- that cannot be done from a workflow file.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deployment at a time; a push that lands mid-deploy cancels the older run rather than
+# racing it, matching how actions/deploy-pages expects to be used.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      # glslc is required at CMake configure time even for the web target: the GLSL is always
+      # compiled to SPIR-V first (see cmake/Shaders.cmake), and only then, on the web, translated
+      # to WGSL -- or, in the normal case, skipped in favour of the committed shaders/wgsl/*.wgsl
+      # translation. Either way, configure fails fast if glslc is missing, so it has to be here.
+      - name: Install Vulkan SDK (glslc)
+        run: |
+          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list \
+            https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt-get update
+          sudo apt-get install -y vulkan-sdk
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+
+      - name: Configure (emcmake)
+        run: emcmake cmake -B build-web -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build-web -j"$(nproc)"
+
+      - name: Assemble Pages site
+        run: |
+          mkdir -p site
+          cp build-web/Sand.html site/index.html
+          cp build-web/Sand.js site/
+          cp build-web/Sand.wasm site/
+          cp build-web/Sand.data site/
+          touch site/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-22.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

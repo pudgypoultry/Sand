@@ -435,6 +435,12 @@ Netlify or any static host works.
 - Expect 3–6 MB total, dominated by the wasm. `-Os` and `--closure 1` are worth having.
 - The `.data` file is the packaged `shaders/` and `config.txt`.
 
+`.github/workflows/deploy-pages.yml` builds this target and publishes it to GitHub Pages on every
+push to `main`. It installs the Vulkan SDK (for `glslc`, which `cmake/Shaders.cmake` shells out to
+at configure time even on the web target -- see the comment there) and `emsdk`, runs the `emcmake`
+build above, renames `Sand.html` to `index.html`, and deploys the result. The one step it cannot do
+from a workflow file: Settings -> Pages -> Source must be set to "GitHub Actions" once, by hand.
+
 ---
 
 ## 8. Files added for this
