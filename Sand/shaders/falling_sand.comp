@@ -2137,6 +2137,38 @@ void locustBud(ivec3 pos, float randVal) {
 void updateLocust(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentSleep, uint currentAge, float randVal) {
     uint type = getType(rawValue);
 
+    // --- Fire and lava --------------------------------------------------------------------------
+    // Ahead of the clock, which is the whole of what "immediately" means here. Every other rule a
+    // swarm has is counted in locust ticks and therefore acts on one dispatch in
+    // locustTickDispatches; burning is not a rule the swarm gets to act on but something done to
+    // it, and a swarm sitting unharmed in a lava flow because its own tick has not come round yet
+    // is visibly wrong for as long as that tick lasts -- which at the default rate is most of a
+    // second.
+    //
+    // The 26 neighbours rather than the 6, matching how fire itself decides what to light: a flame
+    // that catches a leaf across a corner should catch a swarm across the same corner.
+    //
+    // Voided rather than set alight. A swarm is not fuel: there is no locust-shaped flame to leave
+    // behind, and turning one into a fire voxel would seed new fire wherever a swarm happened to
+    // die, carrying the burn into ground that was never lit.
+    //
+    // Unconditional, so it costs 26 reads per swarm per dispatch where fire's own scan buys its way
+    // out with a probability roll first. Affordable for the opposite reason to fire's: a canopy
+    // fire is thousands of flames running at once, whereas swarms are counted in dozens and each
+    // one already spends up to 24 reads searching for grass on the ticks it acts.
+    {
+        int start = int(fract(randVal * 61.0f) * 26.0f);
+        for (int i = 0; i < 26; i++) {
+            ivec3 nPos = pos + tree26((start + i) % 26);
+            if (!locustInBounds(nPos)) continue;
+            uint nType = getType(readCell(getIndex(nPos)));
+            if (nType == 5u || isLava(nType)) {
+                atomicCompSwap(grid[currentIndex], rawValue, 0u);
+                return;
+            }
+        }
+    }
+
     // --- The clock ------------------------------------------------------------------------------
     uint phase = currentSleep + 1u;
     if (phase < tuning.locustTickDispatches) {
