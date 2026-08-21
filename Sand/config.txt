@@ -109,6 +109,34 @@ physics.fire_burn_grass_chance=0.05
 physics.fire_spread_chance=0.1
 physics.steam_scatter_chance=0.3
 
+# --- Ash ---
+# What a fire leaves behind, and what makes burning a forest down a cycle rather than a deletion.
+# Ash falls like sand but slumps flat instead of standing up in a cone, and a grain resting on dirt
+# eventually works into it as flora -- so burnt ground greens back faster than ground that never
+# burned.
+#
+#   fire_ash_chance = chance a fire that BURNS OUT leaves a grain. A fire put out by water or spent
+#                     drying sand leaves nothing, because those are separate endings. Rolled rather
+#                     than certain: fire spreads faster than it ends, and a grain per flame would
+#                     bury a burnt forest in grey. Set to 0 to switch ash off.
+#   drift_chance    = chance a grain that cannot fall steps sideways instead. Higher spreads drifts
+#                     flatter.
+#   settle_ticks    = how long a grain goes on slumping after it lands, in ticks, after which it
+#                     sets. Together with drift_chance this is how far a drift spreads. Ash needs
+#                     its own budget here rather than borrowing physics.wake_sleep_threshold: that
+#                     is 5, which is about two sideways steps and no flatter than sand, and it is a
+#                     knob for something else. 0 makes ash pile up like sand.
+#   enrich_chance   = chance per tick that a grain resting on dirt works into it and disappears.
+#   enrich_amount   = flora that grain is worth, out of the 100 that is full grass. Capped at 99 in
+#                     the shader so the last step is still taken by the normal grass roll -- the
+#                     tree bloom only fires on that step, so ash gives you grassland and the water
+#                     table still decides whether it becomes forest.
+ash.fire_ash_chance=0.25
+ash.drift_chance=0.35
+ash.settle_ticks=24
+ash.enrich_chance=0.02
+ash.enrich_amount=25
+
 # --- Black hole ---
 # A black hole is a single tracked object (max 8 at once), not a paintable material. Anything
 # within `radius` stops running its own physics and follows the hole's orbit field instead.

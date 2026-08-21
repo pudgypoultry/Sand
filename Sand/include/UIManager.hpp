@@ -42,7 +42,10 @@ enum class MaterialType {
     // are placeable so a forest can be started by hand, but neither is on a shortcut -- trees are
     // meant to arrive by blooming out of grass, not by being painted.
     TreeTrunk = 18,
-    TreeLeaf = 19
+    TreeLeaf = 19,
+    // What a fire leaves behind. Placeable so a drift can be laid down by hand, but not on a
+    // shortcut -- the whole point of ash is that it arrives by burning something.
+    Ash = 20
 };
 
 enum class CursorShape {
@@ -115,7 +118,7 @@ public:
         const char* items[] = { "Void", "Sand", "Water", "Stone", "Dirt", "Fire", "Steam", "Black Hole",
                                 "Lava", "Lava (Hot)", "Lava (Warm)", "Lava (Cooling)", "Dark Stone",
                                 "Locusts (10)", "Locusts (20)", "Locusts (30)", "Locusts (40)",
-                                "Locusts (50)", "Tree Trunk", "Tree Leaves" };
+                                "Locusts (50)", "Tree Trunk", "Tree Leaves", "Ash" };
         int currentMat = static_cast<int>(m_currentMaterial);
         if (ImGui::Combo("Material", &currentMat, items, IM_ARRAYSIZE(items))) {
             m_currentMaterial = static_cast<MaterialType>(currentMat);

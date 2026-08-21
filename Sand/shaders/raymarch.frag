@@ -165,6 +165,11 @@ layout(std140, binding = 2) uniform TuningParams {
     uint steamCondenseTicks;      // dispatches of stillness before steam condenses in place
     float cloudSmoothRate;        // how fast the drawn cloud surface follows the block field
     uint treeMinHeight;           // shortest a tree may top out at; treeMaxHeight is the tallest
+    float fireAshChance;          // chance a fire that burns out leaves ash behind
+    float ashDriftChance;         // chance settling ash slumps sideways instead of holding still
+    float ashEnrichChance;        // chance per dispatch that ash resting on soil works into it
+    uint ashEnrichAmount;         // flora a worked-in grain of ash is worth
+    uint ashSettleTicks;          // dispatches a grain slumps for after landing, then sets
 } tuning;
 
 // Per-frame state the CPU writes: camera pose, cursor position, brush.
@@ -858,6 +863,16 @@ vec3 renderTrunk(ivec3 voxelPos, vec3 subCell, vec3 baseLighting) {
     return bark * baseLighting;
 }
 
+// FUNCTION: renderAsh
+// Flat, dusty grey with a faint warm cast, and a wide per-voxel spread so a drift reads as loose
+// powder rather than as a poured slab. Deliberately duller than stone: the two are both grey, and
+// the thing that has to separate them at a glance is that ash does not catch the light.
+vec3 renderAsh(ivec3 voxelPos, vec3 baseLighting) {
+    float n = hash(vec3(voxelPos));
+    vec3 c = mix(vec3(0.20f, 0.19f, 0.18f), vec3(0.47f, 0.45f, 0.42f), n);
+    return c * baseLighting;
+}
+
 // FUNCTION: renderLeaf
 // Canopy. The colour is pushed around by the leaf's distance from its trunk as well as by noise:
 // the outer ring of a canopy is lighter and yellower, which gives the mass some depth and quietly
@@ -1420,6 +1435,9 @@ void main() {
                 break;
             case 19u:
                 finalVoxelColor = renderLeaf(hitRawVoxel, voxelPos, baseLighting);
+                break;
+            case 20u:
+                finalVoxelColor = renderAsh(voxelPos, baseLighting);
                 break;
             // No case for type 7: the march above never reports a black hole voxel as a hit, because
             // the body is drawn as a ball further down rather than as the voxel it is anchored to.

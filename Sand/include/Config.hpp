@@ -327,6 +327,25 @@ struct TuningParams {
     // ground position gives all of them the same number for free. Equal values here restore the
     // old behaviour, where every tree grew to exactly treeMaxHeight.
     uint32_t treeMinHeight = 3;
+    // Chance a fire that burns out leaves a grain of ash rather than nothing. Rolled rather than
+    // certain because fire spreads faster than it ends: one grain per flame buries a burnt forest.
+    // Zero turns ash off entirely without removing the material.
+    float fireAshChance = 0.25f;
+    // Chance per dispatch that a grain of ash which cannot fall steps sideways instead. This is
+    // what makes ash settle flatter than sand -- see the slump rule in updateAsh, which bounds it
+    // against wakeSleepThreshold so a drift stops spreading instead of creeping for ever.
+    float ashDriftChance = 0.35f;
+    // Chance per dispatch that ash resting on dirt works into it and disappears.
+    float ashEnrichChance = 0.02f;
+    // How much flora a worked-in grain of ash is worth. Capped at 99 inside the shader, one short
+    // of full, so the last step is still taken by the normal grass roll and the tree bloom that
+    // hangs off it can still fire.
+    uint32_t ashEnrichAmount = 25;
+    // How many dispatches a grain of ash goes on slumping for after it lands, before it sets.
+    // Deliberately not wakeSleepThreshold, which is a knob for how grains wake each other and is 5
+    // by default -- about two sideways steps, which is not visibly flatter than sand. Capped at 255
+    // by the sleep byte it counts in.
+    uint32_t ashSettleTicks = 24;
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

@@ -213,6 +213,11 @@ layout(std140, binding = 2) uniform TuningParams {
     uint steamCondenseTicks;      // dispatches of stillness before steam condenses in place
     float cloudSmoothRate;        // how fast the drawn cloud surface follows the block field
     uint treeMinHeight;           // shortest a tree may top out at; treeMaxHeight is the tallest
+    float fireAshChance;          // chance a fire that burns out leaves ash behind
+    float ashDriftChance;         // chance settling ash slumps sideways instead of holding still
+    float ashEnrichChance;        // chance per dispatch that ash resting on soil works into it
+    uint ashEnrichAmount;         // flora a worked-in grain of ash is worth
+    uint ashSettleTicks;          // dispatches a grain slumps for after landing, then sets
 } tuning;
 
 #define LAYER_SIZE (uint(WIDTH) * uint(HEIGHT)) // one layer of the world
@@ -429,6 +434,10 @@ const uint DARK_STONE = 12u;
 // takes them and lava voids them outright, so the id has to exist before any of those can name it.
 const uint TREE_TRUNK = 18u;
 const uint TREE_LEAF = 19u;
+
+// What a fire leaves behind. Declared here with the other material ids for the same reason the tree
+// ids are: fire is defined below this point and has to be able to name it.
+const uint ASH = 20u;
 
 // FUNCTION: isLava
 bool isLava(uint type) { return type >= LAVA_HOTTEST && type <= LAVA_COLDEST; }
@@ -1519,11 +1528,22 @@ void updateDirt(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
                 if (fract(randVal * 66.0f) < tuning.grassSubmergedDecayChance) floraState++;
                 if (floraState >= 200u) floraState = 0u;
             }
-        } else if (aboveType != 5u && !isLocust(aboveType)) {
+        } else if (aboveType != 5u && aboveType != ASH && !isLocust(aboveType)) {
             // Anything else resting on top smothers the grass at once. Fire is excepted because it
             // burns grass down over time instead, and locusts for the same reason -- a swarm eats a
             // block over 10 to 30 of its own ticks, and smothering would delete the meal on the
             // first dispatch after it arrived, so a swarm could never actually be fed.
+            //
+            // Ash is excepted because smothering would cancel the one thing ash is for. A grain
+            // works itself into the soil as flora and then disappears, but a drift is many grains
+            // deep and only the bottom one is touching dirt -- so with ash smothering, every grain
+            // after the first would find the flora its predecessor added already reset to zero, and
+            // a foot of ash would be worth exactly one grain. It also reads wrong: ash is a dusting
+            // of fertiliser, not a slab of rock.
+            //
+            // Note this leaves buried grass neither growing nor dying: the growth branch above wants
+            // open sky and ash is not that. Flora holds where it is until the drift works in or is
+            // washed away, which is the right answer for ground under ash.
             floraState = 0u;
         }
     }
@@ -2382,6 +2402,127 @@ void updateLocust(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, 
                    pack(newType, locustPackNav(heading, steps), 0u, count));
 }
 
+// =================================================================================================
+// ASH
+//
+// What a fire leaves behind, and the thing that makes burning a forest down a cycle rather than a
+// deletion. Fire used to void itself on burning out, so a fire's whole legacy was the absence of
+// whatever it ate. Ash falls, slumps flat, and works into soil as flora -- so burnt ground greens
+// back faster than ground that never burned, and a fire eventually pays for the stand it took.
+//
+// Carries no state of its own. The dir and age bytes are unused; sleep is the ordinary sleep
+// counter, put to one specific purpose here -- see the slump rule below.
+// =================================================================================================
+
+// FUNCTION: updateAsh
+void updateAsh(ivec3 pos, uint currentIndex, uint rawValue, uint currentSleep, float randVal) {
+    // --- Washed away ------------------------------------------------------------------------------
+    // Both the cell below and the cell above, which between them cover the two ways ash and water
+    // meet: ash falling into standing water, and rain landing on a drift of it. Two reads rather
+    // than the six a full contact test would cost, and ash is numerous enough for that to matter --
+    // a forest fire leaves thousands of grains.
+    //
+    // Voided rather than turned into anything. Ash that sank and stayed would silt up a lake bed
+    // permanently, and it is the one thing here with no way back out of the water.
+    if (pos.y > 1 && getType(readCell(getIndex(pos + ivec3(0, -1, 0)))) == 2u) {
+        atomicCompSwap(grid[currentIndex], rawValue, 0u);
+        return;
+    }
+    if (pos.y < HEIGHT - 1 && getType(readCell(getIndex(pos + ivec3(0, 1, 0)))) == 2u) {
+        atomicCompSwap(grid[currentIndex], rawValue, 0u);
+        return;
+    }
+
+    // --- Working into the soil --------------------------------------------------------------------
+    // The whole point of the material. A grain resting on dirt eventually disappears into it and is
+    // worth ashEnrichAmount of flora, so ground that has burned greens over without waiting on the
+    // slow per-tick grass roll.
+    //
+    // Capped at 99 rather than 100, and that one off-by-one is deliberate. updateDirt rolls for a
+    // tree at the moment flora reaches exactly 100 THROUGH ITS OWN GROWTH STEP; a block driven
+    // straight to 100 from outside skips that roll and could never bloom. Stopping one short leaves
+    // the last step to the normal path, so ash gives you grassland and the water table still
+    // decides whether it becomes forest.
+    //
+    // Only below 99, so ash does not silently evaporate on ground that is already green -- there it
+    // piles up visibly instead, which is what a drift of ash should do. Soil past 100 is drowning
+    // and is excluded by the same test.
+    if (pos.y > 1 && fract(randVal * 19.0f) < tuning.ashEnrichChance) {
+        uint belowIndex = getIndex(pos + ivec3(0, -1, 0));
+        uint belowValue = readCell(belowIndex);
+        if (getType(belowValue) == 4u) {
+            uint flora = getDir(belowValue);
+            if (flora < 99u) {
+                uint fed = min(flora + max(tuning.ashEnrichAmount, 1u), 99u);
+                if (atomicCompSwap(grid[belowIndex], belowValue,
+                                   pack(4u, fed, getSleep(belowValue), getAge(belowValue))) == belowValue) {
+                    atomicCompSwap(grid[currentIndex], rawValue, 0u);
+                    return;
+                }
+            }
+        }
+    }
+
+    // --- Falling ----------------------------------------------------------------------------------
+    // Straight down, then either diagonal, exactly as sand does. Sleep resets to zero on a fall,
+    // which is what hands a grain a fresh slump budget every time it lands somewhere new.
+    if (pos.y > 1) {
+        ivec3 belowPos = pos + ivec3(0, -1, 0);
+        if (getType(readCell(getIndex(belowPos))) == 0u) {
+            if (tryMove(currentIndex, rawValue, getIndex(belowPos), pack(ASH, 0u, 0u, 0u))) return;
+        }
+
+        int dir = (fract(randVal * 67.0f) > 0.5f) ? 1 : -1;
+        ivec3 slide[2];
+        if (fract(randVal * 73.0f) > 0.5f) {
+            slide[0] = pos + ivec3(dir, -1, 0); slide[1] = pos + ivec3(0, -1, dir);
+        } else {
+            slide[0] = pos + ivec3(0, -1, dir); slide[1] = pos + ivec3(dir, -1, 0);
+        }
+        for (int s = 0; s < 2; s++) {
+            if (slide[s].x > 0 && slide[s].x < WIDTH - 1 && slide[s].z > 0 && slide[s].z < DEPTH - 1) {
+                if (getType(readCell(getIndex(slide[s]))) == 0u) {
+                    if (tryMove(currentIndex, rawValue, getIndex(slide[s]), pack(ASH, 0u, 0u, 0u))) return;
+                }
+            }
+        }
+    }
+
+    // --- Slumping ---------------------------------------------------------------------------------
+    // Ash settles far flatter than sand, and this is what does it: a grain that cannot fall will
+    // still step sideways for a while, so a heap spreads out instead of standing up in a cone.
+    //
+    // Two things bound it, and both are needed. The target must have something under it, so ash
+    // creeps along a surface rather than marching off the edge of one into thin air. And it only
+    // runs for the grain's first ashSettleTicks dispatches, with the sleep counter CARRIED THROUGH
+    // the sideways move rather than reset by it -- a slump does not buy more slumping. Without that
+    // second rule a grain on level ground random-walks for ever, never settles, and costs its reads
+    // every dispatch until the world is cleared.
+    //
+    // Its own budget rather than wakeSleepThreshold, which was the obvious thing to reuse and is
+    // the wrong number twice over: it is 5 by default, which is about two sideways steps and not
+    // visibly flatter than sand, and it is a knob for how grains wake each other up. Ash's spread
+    // would then move whenever that was tuned for something else entirely.
+    //
+    // Falling resets sleep to zero, so a grain that lands, slumps, and topples off an edge gets a
+    // fresh budget where it lands. That is wanted: it is somewhere new.
+    if (currentSleep < tuning.ashSettleTicks && fract(randVal * 79.0f) < tuning.ashDriftChance) {
+        int start = int(fract(randVal * 89.0f) * 8.0f);
+        for (int i = 0; i < 8; i++) {
+            ivec3 target = pos + getHDir((start + i) % 8);
+            if (target.x <= 0 || target.x >= WIDTH - 1 || target.z <= 0 || target.z >= DEPTH - 1) continue;
+            if (getType(readCell(getIndex(target))) != 0u) continue;
+            if (target.y <= 1) continue;
+            if (getType(readCell(getIndex(target + ivec3(0, -1, 0)))) == 0u) continue;
+
+            uint carried = min(currentSleep + 1u, 255u);
+            if (tryMove(currentIndex, rawValue, getIndex(target), pack(ASH, 0u, carried, 0u))) return;
+        }
+    }
+
+    atomicCompSwap(grid[currentIndex], rawValue, pack(ASH, 0u, min(currentSleep + 1u, 255u), 0u));
+}
+
 // FUNCTION: updateFire
 void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, uint currentSleep, uint currentAge, float randVal) {
     uint newAge = currentAge + 1u;
@@ -2492,7 +2633,16 @@ void updateFire(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, ui
     }
 
     if (newAge > tuning.fireLifetime) {
-        atomicExchange(grid[currentIndex], 0u);
+        // A fire that BURNS OUT leaves ash; a fire that is put out does not. The two are already
+        // separate paths -- every other ending above this one (doused by water, spent drying sand)
+        // returns on its own -- so this branch is exactly the "ran to the end of its life" case
+        // without needing to ask how it died.
+        //
+        // Rolled rather than certain, because fire spreads faster than it ends and a grain per
+        // flame would bury a burnt forest in grey. fireAshChance is what tunes the depth of the
+        // drift, and zero turns the whole material off.
+        uint remains = (fract(randVal * 83.0f) < tuning.fireAshChance) ? pack(ASH, 0u, 0u, 0u) : 0u;
+        atomicExchange(grid[currentIndex], remains);
         return;
     }
 
@@ -3137,6 +3287,9 @@ void main() {
             break;
         case 19u:
             updateLeaf(pos, currentIndex, rawValue, currentAge, randVal);
+            break;
+        case 20u:
+            updateAsh(pos, currentIndex, rawValue, currentSleep, randVal);
             break;
         default:
             break;

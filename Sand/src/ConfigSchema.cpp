@@ -159,6 +159,30 @@ const ConfigField kConfigFields[] = {
     { "Physics", "physics.fire_spread_chance", "Fire spread chance", FieldKind::Float,
       offsetof(TuningParams, fireSpreadChance), 0.0, 1.0,
       nullptr },
+
+    // ---- Ash ----
+    // Kept together in their own tab rather than filed under Physics with the fire settings,
+    // because the interesting knob is not how fire ends but how much ash a burnt landscape is left
+    // holding and how fast it turns back into grass.
+    { "Ash", "ash.fire_ash_chance", "From burnt-out fire", FieldKind::Float,
+      offsetof(TuningParams, fireAshChance), 0.0, 1.0,
+      "chance a fire that burns out leaves ash; a fire put out by water never does. "
+      "0 turns ash off" },
+    { "Ash", "ash.drift_chance", "Drift chance", FieldKind::Float,
+      offsetof(TuningParams, ashDriftChance), 0.0, 1.0,
+      "chance settling ash steps sideways instead of holding still -- what makes a heap of ash "
+      "spread flat where sand would stand up in a cone" },
+    { "Ash", "ash.settle_ticks", "Settle ticks", FieldKind::UInt,
+      offsetof(TuningParams, ashSettleTicks), 0.0, 255.0,
+      "how long a grain goes on slumping after it lands, in ticks. Together with drift chance this "
+      "sets how far a drift spreads; 0 makes ash pile like sand" },
+    { "Ash", "ash.enrich_chance", "Enrich chance", FieldKind::Float,
+      offsetof(TuningParams, ashEnrichChance), 0.0, 1.0,
+      "chance per tick that a grain resting on dirt works into it and disappears" },
+    { "Ash", "ash.enrich_amount", "Enrich amount", FieldKind::UInt,
+      offsetof(TuningParams, ashEnrichAmount), 1.0, 99.0,
+      "flora one worked-in grain is worth, out of the 100 that is full grass. Capped at 99 so the "
+      "last step is still taken by the normal grass roll, which is what the tree bloom hangs off" },
     { "Physics", "physics.steam_scatter_chance", "Steam scatter chance", FieldKind::Float,
       offsetof(TuningParams, steamScatterChance), 0.0, 1.0,
       nullptr },
