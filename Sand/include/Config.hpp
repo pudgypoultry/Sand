@@ -296,7 +296,11 @@ struct TuningParams {
     // and 24 blocks deep is a lot of cloud to demand before the sky looks solid.
     float cloudColumnFullCount = 10.0f;
     // World units of cloud drawn per cloud block in the column, rising from the top of the pile.
-    float cloudThicknessPerBlock = 1.5f;
+    // How many cloud blocks in a column buy one whole cloud cell of drawn height. This replaced a
+    // world-units-per-block figure that was the reason the deck looked flat: 1.5 units per block
+    // against a 3-unit cell meant two blocks per cell of height, so the whole interesting part of
+    // the count range was quantised away and the sky was one or two cells deep everywhere.
+    float cloudBlocksPerLevel = 1.0f;
     // Cloud neighbours (of 26) at which a block counts as clumped and stops trying to move. The
     // counterpart of sandClumpThreshold, and it does the same job: without it a pile slumps into a
     // flat even sheet, and with it the field holds lumpy, cloud-shaped mounds.
@@ -351,6 +355,10 @@ struct TuningParams {
     // by default -- about two sideways steps, which is not visibly flatter than sand. Capped at 255
     // by the sleep byte it counts in.
     uint32_t ashSettleTicks = 24;
+    // The most steps of height the drawn cloud deck spans. Also the thing that bounds the cloud
+    // march: the band the renderer clips to is this many cloud cells deep, so raising it makes
+    // every cloud ray longer and cloud.max_steps may need to follow.
+    float cloudHeightLevels = 5.0f;
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

@@ -106,10 +106,15 @@ const ConfigField kConfigFields[] = {
       offsetof(TuningParams, cloudColumnFullCount), 1.0, 512.0,
       "How many cloud blocks stacked in one column read as a fully dense cloud. Lower makes thin "
       "cloud look solid sooner. This is what keeps cloud density from depending on world size." },
-    { "Clouds", "cloud.thickness_per_block", "Thickness per block", FieldKind::Float,
-      offsetof(TuningParams, cloudThicknessPerBlock), 0.1, 16.0,
-      "World units of cloud drawn per cloud block in the column, measured upward from the top of "
-      "the pile. Larger makes the same amount of cloud stand taller over the world." },
+    { "Clouds", "cloud.blocks_per_level", "Blocks per height step", FieldKind::Float,
+      offsetof(TuningParams, cloudBlocksPerLevel), 0.1, 32.0,
+      "How many cloud blocks in a column buy one whole cloud cell of drawn height. Lower gives the "
+      "deck more relief for the same amount of cloud; raise it to flatten the sky out." },
+    { "Clouds", "cloud.height_levels", "Height steps", FieldKind::Float,
+      offsetof(TuningParams, cloudHeightLevels), 1.0, 16.0,
+      "The most steps of height the cloud deck spans. This also bounds the cloud march: the band "
+      "clipped to is this many cloud cells deep, so raising it lengthens every cloud ray and "
+      "cloud.max_steps may need raising with it." },
     { "Clouds", "cloud.clump_threshold", "Clump threshold", FieldKind::UInt,
       offsetof(TuningParams, cloudClumpThreshold), 0.0, 26.0,
       "How many of a cloud block's 26 neighbours must also be cloud before it stops trying to move. "

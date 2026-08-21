@@ -207,7 +207,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint cloudCheckIntervalTicks; // dispatches between storm checks
     uint rainWaitMaxTicks;        // ceiling of a raincloud's wait, 0..2047
     float cloudColumnFullCount;   // cloud blocks in a column that read as fully dense
-    float cloudThicknessPerBlock; // world units of cloud drawn per block in the column
+    float cloudBlocksPerLevel;    // cloud blocks in a column per step of drawn height
     uint cloudClumpThreshold;     // UNUSED: cloud spreads like sand, no cohesion
     uint rainWaitMinTicks;        // floor of a raincloud's wait at the ceiling
     uint steamCondenseTicks;      // dispatches of stillness before steam condenses in place
@@ -218,6 +218,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint ashAbsorbTicks;          // dispatches a grain rests on soil before it works in
     uint ashEnrichAmount;         // flora a worked-in grain of ash is worth
     uint ashSettleTicks;          // dispatches a grain slumps for after landing, then sets
+    float cloudHeightLevels;      // most steps of height the drawn cloud deck spans
 } tuning;
 
 #define LAYER_SIZE (uint(WIDTH) * uint(HEIGHT)) // one layer of the world

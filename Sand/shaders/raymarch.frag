@@ -159,7 +159,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint cloudCheckIntervalTicks; // dispatches between storm checks
     uint rainWaitMaxTicks;        // ceiling of a raincloud's wait, 0..2047
     float cloudColumnFullCount;   // cloud blocks in a column that read as fully dense
-    float cloudThicknessPerBlock; // world units of cloud drawn per block in the column
+    float cloudBlocksPerLevel;    // cloud blocks in a column per step of drawn height
     uint cloudClumpThreshold;     // UNUSED: cloud spreads like sand, no cohesion
     uint rainWaitMinTicks;        // floor of a raincloud's wait at the ceiling
     uint steamCondenseTicks;      // dispatches of stillness before steam condenses in place
@@ -170,6 +170,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint ashAbsorbTicks;          // dispatches a grain rests on soil before it works in
     uint ashEnrichAmount;         // flora a worked-in grain of ash is worth
     uint ashSettleTicks;          // dispatches a grain slumps for after landing, then sets
+    float cloudHeightLevels;      // most steps of height the drawn cloud deck spans
 } tuning;
 
 // Per-frame state the CPU writes: camera pose, cursor position, brush.
@@ -1041,7 +1042,8 @@ void smoothedCloudColumn(int x, int z, int spread, out float count, out float to
 // not boil.
 //
 // The slab sits ABOVE the pile: its underside rests on the highest cloud block in the column and it
-// rises cloudThicknessPerBlock world units for every block beneath it. Cloud blocks are invisible
+// rises one whole cloud cell for every cloudBlocksPerLevel blocks beneath it, up to
+// cloudHeightLevels of them. Cloud blocks are invisible
 // and pile against the ceiling, so this puts the visible cloud just over the roof of the world --
 // which is where clouds were drawn before any of this, and what makes a deep pile read as a tall
 // bank of cloud rather than a thicker lid. Its density -- how much of the slab is filled rather than
@@ -1103,9 +1105,24 @@ bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, float tEnter, float tExit, ve
                 // outside, so the boundary only changes when the count moves a whole cell's worth
                 // -- rarely, and by a whole cell when it does.
                 float cell = max(tuning.cloudVoxelSize, 0.5f);
-                float thickness = count * max(tuning.cloudThicknessPerBlock, 0.01f);
+
+                // Height is counted in WHOLE CELLS, from the column's depth, rather than being
+                // derived from a world-units-per-block figure and then floored to the lattice. The
+                // old form was thickness = count * 1.5 against a 3-unit cell, so it took two cloud
+                // blocks to buy one cell of height and the deck was one or two cells everywhere --
+                // flat, because the interesting part of the count range was quantised away before
+                // it could show. Expressed as a step per cloudBlocksPerLevel blocks, the same range
+                // of counts spreads over cloudHeightLevels distinct heights instead.
+                //
+                // Clamped rather than left to run: the band-clipping below has to bound the march,
+                // and it can only do that if the tallest possible slab is known ahead of time.
+                float levels = max(tuning.cloudHeightLevels, 1.0f);
+                float perLevel = max(tuning.cloudBlocksPerLevel, 0.01f);
+                float cells = clamp(1.0f + floor(count / perLevel), 1.0f, levels);
+
                 baseY = floor(baseY / cell) * cell;
-                float capY = baseY + max(floor(thickness / cell), 1.0f) * cell;
+                float thickness = cells * cell;
+                float capY = baseY + thickness;
 
                 if (cellCenter.y >= baseY && cellCenter.y <= capY) {
                     float density = clamp(count / max(tuning.cloudColumnFullCount, 1.0f),
@@ -1554,8 +1571,18 @@ void main() {
             // it moves as blocks come and go -- and starting the march exactly on it risks beginning
             // inside the first fillable cell rather than before it, which would change the first hit
             // as the floor drifted. Starting a cell early is always safe; starting late is not.
-            float slabMax = max(tuning.cloudColumnFullCount, 1.0f)
-                          * max(tuning.cloudThicknessPerBlock, 0.01f);
+            // The tallest slab marchBlockyCloud can draw, which is what makes the band bounded:
+            // its height clamps to cloudHeightLevels whole cells. This has to track that clamp
+            // exactly -- too small and the tops of the deepest columns are clipped away, too large
+            // and every ray pays for band it can never hit.
+            //
+            // Worth noting for the step budget: at the defaults this is 5 * 3 = 15 world units,
+            // the same figure the old cloudColumnFullCount * cloudThicknessPerBlock produced. The
+            // band is therefore no deeper than it was, and the 98-cell worst case that cloud.max_steps
+            // was measured against still holds. Raising cloud.height_levels does change it, which is
+            // why the two are documented together.
+            float slabMax = max(tuning.cloudHeightLevels, 1.0f)
+                          * max(tuning.cloudVoxelSize, 0.5f);
             float bandHi = float(cloudMaxY) + slabMax;
 
             // Floored, not just taken from the lowest block in the world. cloudMinY is a true

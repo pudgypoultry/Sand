@@ -4,7 +4,7 @@
 // Edit falling_sand.comp and re-run that script instead; edits here are overwritten and, worse,
 // silently diverge from the shader the desktop build uses.
 //
-// source-sha256: 5c40603dd18684076cce768a8eaee55acdd743202e76d13042ba05e6d31cbc92
+// source-sha256: 941ed79b9227bf0bb97bf80396d8a9674436b7577d6aad4af3faf5c88245b40c
 
 struct VoxelGrid {
     grid: array<u32>,
@@ -114,7 +114,7 @@ struct TuningParams {
     cloudCheckIntervalTicks: u32,
     rainWaitMaxTicks: u32,
     cloudColumnFullCount: f32,
-    cloudThicknessPerBlock: f32,
+    cloudBlocksPerLevel: f32,
     cloudClumpThreshold: u32,
     rainWaitMinTicks: u32,
     steamCondenseTicks: u32,
@@ -125,6 +125,7 @@ struct TuningParams {
     ashAbsorbTicks: u32,
     ashEnrichAmount: u32,
     ashSettleTicks: u32,
+    cloudHeightLevels: f32,
 }
 
 struct CloudGrid {

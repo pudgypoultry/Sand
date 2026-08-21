@@ -80,9 +80,21 @@ cloud.rain_wait_min_ticks=256
 cloud.steam_condense_ticks=10
 # How fast the drawn cloud surface follows the block field. Lower is steadier.
 cloud.smooth_rate=0.08
-# Column depth that reads as fully dense, and how far a cloud hangs per block under it.
+# Column depth that reads as fully dense -- this drives the cloud's OPACITY, not its height.
 cloud.column_full_count=10.0
-cloud.thickness_per_block=1.5
+# Height of the drawn deck, counted in whole cloud cells. A column gains a step for every
+# blocks_per_level cloud blocks in it, up to height_levels of them.
+#
+# These replaced a world-units-per-block figure that was why the sky looked flat: it was 1.5 units
+# against a 3-unit cell, so it took two blocks to buy one cell of height and the deck was one or
+# two cells deep almost everywhere. Counting in whole cells directly spreads the same range of
+# column depths over height_levels distinct heights.
+#
+# height_levels also bounds the cloud march -- the clipped band is this many cells deep -- so
+# raising it lengthens every cloud ray and cloud.max_steps may need to follow. At the defaults the
+# band is 5*3=15 units, exactly what the old 10*1.5 gave, so max_steps is unchanged.
+cloud.blocks_per_level=1.0
+cloud.height_levels=5.0
 # UNUSED: cloud spreads like sand, with no cohesion rule.
 cloud.clump_threshold=9
 
