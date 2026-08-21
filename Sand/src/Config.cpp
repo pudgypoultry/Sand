@@ -155,6 +155,10 @@ void sanitizeTuning(TuningParams& t) {
     // The trunk's height counter and the leaf's distance counter are each one byte, and a max height
     // of 0 would leave a sapling unable to ever be a crown -- so it would never put out a leaf.
     t.treeMaxHeight = std::clamp(t.treeMaxHeight, 1u, 255u);
+    // Clamped against treeMaxHeight rather than against 255, so a hand-edited file cannot invert
+    // the pair. treeTargetHeight defends itself against that too, but silently -- it would widen
+    // the range back out to a single value and leave the config saying something it is not doing.
+    t.treeMinHeight = std::clamp(t.treeMinHeight, 1u, t.treeMaxHeight);
     t.treeLeafReach = std::clamp(t.treeLeafReach, 1u, 200u);
     t.treeWaterMax = std::clamp(t.treeWaterMax, 1u, 255u);
 

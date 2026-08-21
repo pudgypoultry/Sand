@@ -164,6 +164,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint rainWaitMinTicks;        // floor of a raincloud's wait at the ceiling
     uint steamCondenseTicks;      // dispatches of stillness before steam condenses in place
     float cloudSmoothRate;        // how fast the drawn cloud surface follows the block field
+    uint treeMinHeight;           // shortest a tree may top out at; treeMaxHeight is the tallest
 } tuning;
 
 // Per-frame state the CPU writes: camera pose, cursor position, brush.

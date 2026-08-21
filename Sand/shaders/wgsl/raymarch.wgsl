@@ -4,7 +4,7 @@
 // Edit raymarch.frag and re-run that script instead; edits here are overwritten and, worse,
 // silently diverge from the shader the desktop build uses.
 //
-// source-sha256: 0b27604fb15a4f2164d1eb791d410eb7217a6e934fd64071ef761cc81ce4ecb6
+// source-sha256: d228fb6fda69d2c91fa6e3d556b84c75d76f68ee4dd0c7eac4fc03d7ba2d7b88
 
 struct TuningParams {
     gridWidth: u32,
@@ -115,6 +115,7 @@ struct TuningParams {
     rainWaitMinTicks: u32,
     steamCondenseTicks: u32,
     cloudSmoothRate: f32,
+    treeMinHeight: u32,
 }
 
 struct SimStats {

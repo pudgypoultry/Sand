@@ -294,7 +294,11 @@ const ConfigField kConfigFields[] = {
       "1 in 1000 grass blocks sprouts a tree instead" },
     { "Trees", "tree.max_height", "Max height", FieldKind::UInt,
       offsetof(TuningParams, treeMaxHeight), 1.0, 64.0,
-      "trunk voxels in a full-grown column" },
+      "tallest a tree may grow, in trunk voxels" },
+    { "Trees", "tree.min_height", "Min height", FieldKind::UInt,
+      offsetof(TuningParams, treeMinHeight), 1.0, 64.0,
+      "shortest a tree may grow; each tree draws its own limit between the two, "
+      "so setting this equal to max height makes every tree the same height again" },
     { "Trees", "tree.soil_reserve", "Soil reserve", FieldKind::UInt,
       offsetof(TuningParams, treeSoilReserve), 0.0, 255.0,
       "soil moisture a trunk will not drink below" },

@@ -317,6 +317,16 @@ struct TuningParams {
     // this dispatch's counts changes every dispatch, and the deck boils. Easing it means the shape
     // drifts smoothly instead. 1.0 disables the smoothing and restores the boiling.
     float cloudSmoothRate = 0.08f;
+    // The shortest a tree is allowed to top out at, in trunk voxels. treeMaxHeight is the tallest,
+    // and every tree draws its own limit from somewhere between the two.
+    //
+    // The draw is hashed from the column's x/z rather than rolled and stored, because there is
+    // nowhere to store it: a trunk voxel's dir byte is its height and its age byte is its water,
+    // and every voxel in the column has to agree on the answer -- the tip to know when to stop
+    // growing, and the leaves to know which voxel is the crown they anchor to. A hash of the
+    // ground position gives all of them the same number for free. Equal values here restore the
+    // old behaviour, where every tree grew to exactly treeMaxHeight.
+    uint32_t treeMinHeight = 3;
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

@@ -336,7 +336,13 @@ tree.bloom_chance=0.001
 #                  under the tree, not just the single square it stands on.
 #   flow_chance  = chance per tick to pump one unit up to the trunk above. Pumped, not shared: water
 #                  has to reach the tip, because that is where both growing and leafing happen.
+#   max_height   = the tallest a tree may grow. min_height is the shortest, and each tree draws its
+#   min_height     own limit from between the two -- hashed from where it stands, so a tree keeps
+#                  the same limit for its whole life and neighbours differ from each other. Most
+#                  come out near the middle of the range; the extremes are meant to be rare. Set
+#                  the two equal for the old behaviour, where every tree topped out identically.
 tree.max_height=6
+tree.min_height=3
 tree.soil_reserve=5
 tree.water_max=255
 tree.drink_chance=0.20

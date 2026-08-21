@@ -212,6 +212,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint rainWaitMinTicks;        // floor of a raincloud's wait at the ceiling
     uint steamCondenseTicks;      // dispatches of stillness before steam condenses in place
     float cloudSmoothRate;        // how fast the drawn cloud surface follows the block field
+    uint treeMinHeight;           // shortest a tree may top out at; treeMaxHeight is the tallest
 } tuning;
 
 #define LAYER_SIZE (uint(WIDTH) * uint(HEIGHT)) // one layer of the world
@@ -632,6 +633,36 @@ bool isTree(uint type) { return type == TREE_TRUNK || type == TREE_LEAF; }
 // FUNCTION: treeInBounds
 bool treeInBounds(ivec3 p) {
     return p.x > 0 && p.x < WIDTH - 1 && p.y > 0 && p.y < HEIGHT - 1 && p.z > 0 && p.z < DEPTH - 1;
+}
+
+// FUNCTION: treeTargetHeight
+// How tall the tree standing on this column is allowed to grow, between treeMinHeight and
+// treeMaxHeight inclusive.
+//
+// Hashed from x and z rather than rolled once and stored, for want of anywhere to store it: a
+// trunk voxel's dir byte already holds its height and its age byte its water. Deriving it instead
+// costs nothing and buys the property that actually matters here -- every voxel that needs the
+// answer computes the same one. The growing tip needs it to know when to stop, and updateLeaf
+// needs it to recognise a crown in a NEIGHBOURING column, which is why this takes the position it
+// is asked about rather than reading any per-invocation state.
+//
+// y is dropped from the hash deliberately. Sharing one answer down the whole column is the entire
+// point; feeding y in would give each voxel of the same tree a different limit.
+//
+// The two hashes are averaged rather than one used alone. A single uniform draw puts as many runts
+// in a forest as middling trees, which reads as noise rather than as a stand of trees; averaging
+// two gives a triangular distribution, so most trees come out near the middle of the range and the
+// extremes are the exception. That is what a real canopy looks like from outside.
+uint treeTargetHeight(ivec3 pos) {
+    uint lo = max(tuning.treeMinHeight, 1u);
+    uint hi = max(tuning.treeMaxHeight, lo);
+    if (hi == lo) return lo;
+
+    float a = hash(vec3(float(pos.x), 0.0f, float(pos.z)));
+    float b = hash(vec3(float(pos.z) * 3.0f + 11.0f, 7.0f, float(pos.x) * 5.0f + 3.0f));
+    float t = clamp((a + b) * 0.5f, 0.0f, 0.999f);
+
+    return lo + uint(t * float(hi - lo + 1u));
 }
 
 // FUNCTION: tree26
@@ -1955,7 +1986,9 @@ void updateTrunk(ivec3 pos, uint currentIndex, uint rawValue, uint currentDir, u
     }
 
     // --- Grow, or crown ---------------------------------------------------------------------------
-    if (height + 1u < tuning.treeMaxHeight) {
+    // Against this column's own limit rather than treeMaxHeight, which is what stops every tree in
+    // the world topping out at the same voxel. See treeTargetHeight.
+    if (height + 1u < treeTargetHeight(pos)) {
         // Still a sapling: put the water into height. Growing into a leaf is allowed and wanted --
         // a crown put out early would otherwise cap the tree at whatever height it first branched.
         if (water >= tuning.treeGrowCost && treeInBounds(upPos)) {
@@ -2063,7 +2096,11 @@ void updateLeaf(ivec3 pos, uint currentIndex, uint rawValue, uint currentAge, fl
         // the trunk, spread their full reach outward from all of them, and the result is a solid
         // rectangular hedge running from the soil to the tip with a pole buried in it. Anchoring
         // only at the top gives a canopy centred where a canopy belongs.
-        if (t == TREE_TRUNK && getDir(v) + 1u >= tuning.treeMaxHeight) {
+        // treeTargetHeight(c), not treeTargetHeight(pos): the question is whether that trunk is the
+        // crown of ITS column, and a leaf sitting diagonally off the trunk is in a different column
+        // with a different limit. Asking about the leaf's own column would misjudge every tree
+        // whose neighbour happens to be taller or shorter, which after this change is most of them.
+        if (t == TREE_TRUNK && getDir(v) + 1u >= treeTargetHeight(c)) {
             touchesTrunk = true;
         } else if (t == TREE_LEAF) {
             nearest = min(nearest, getAge(v));
