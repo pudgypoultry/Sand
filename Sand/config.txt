@@ -126,7 +126,12 @@ physics.steam_scatter_chance=0.3
 #                     its own budget here rather than borrowing physics.wake_sleep_threshold: that
 #                     is 5, which is about two sideways steps and no flatter than sand, and it is a
 #                     knob for something else. 0 makes ash pile up like sand.
-#   enrich_chance   = chance per tick that a grain resting on dirt works into it and disappears.
+#   absorb_ticks    = how long a grain rests on dirt before it works in and disappears. Nothing
+#                     grows under ash while it is there -- no grass, no tree bloom, and a trunk
+#                     cannot draw water through it -- so this is also how long a burn keeps the
+#                     ground dead. Capped at 255 by the byte it counts in, but a drift absorbs from
+#                     the bottom one grain at a time, so a deep fall of ash stifles for a multiple
+#                     of this. Counted in ticks, so the speed slider scales it.
 #   enrich_amount   = flora that grain is worth, out of the 100 that is full grass. Capped at 99 in
 #                     the shader so the last step is still taken by the normal grass roll -- the
 #                     tree bloom only fires on that step, so ash gives you grassland and the water
@@ -134,7 +139,7 @@ physics.steam_scatter_chance=0.3
 ash.fire_ash_chance=0.25
 ash.drift_chance=0.35
 ash.settle_ticks=24
-ash.enrich_chance=0.02
+ash.absorb_ticks=200
 ash.enrich_amount=25
 
 # --- Black hole ---

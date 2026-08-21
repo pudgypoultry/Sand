@@ -176,9 +176,13 @@ const ConfigField kConfigFields[] = {
       offsetof(TuningParams, ashSettleTicks), 0.0, 255.0,
       "how long a grain goes on slumping after it lands, in ticks. Together with drift chance this "
       "sets how far a drift spreads; 0 makes ash pile like sand" },
-    { "Ash", "ash.enrich_chance", "Enrich chance", FieldKind::Float,
-      offsetof(TuningParams, ashEnrichChance), 0.0, 1.0,
-      "chance per tick that a grain resting on dirt works into it and disappears" },
+    { "Ash", "ash.absorb_ticks", "Absorb ticks", FieldKind::UInt,
+      offsetof(TuningParams, ashAbsorbTicks), 1.0, 255.0,
+      "How long a grain rests on dirt before it works in and disappears, in ticks. Nothing grows "
+      "under ash while it is there -- no grass, no tree bloom, and a trunk cannot drink through it "
+      "-- so this is also how long a burn keeps the ground dead. Capped at 255 by the byte it "
+      "counts in, but a drift absorbs from the bottom one grain at a time, so a deep fall stifles "
+      "for a multiple of it." },
     { "Ash", "ash.enrich_amount", "Enrich amount", FieldKind::UInt,
       offsetof(TuningParams, ashEnrichAmount), 1.0, 99.0,
       "flora one worked-in grain is worth, out of the 100 that is full grass. Capped at 99 so the "

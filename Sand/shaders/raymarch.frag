@@ -167,7 +167,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint treeMinHeight;           // shortest a tree may top out at; treeMaxHeight is the tallest
     float fireAshChance;          // chance a fire that burns out leaves ash behind
     float ashDriftChance;         // chance settling ash slumps sideways instead of holding still
-    float ashEnrichChance;        // chance per dispatch that ash resting on soil works into it
+    uint ashAbsorbTicks;          // dispatches a grain rests on soil before it works in
     uint ashEnrichAmount;         // flora a worked-in grain of ash is worth
     uint ashSettleTicks;          // dispatches a grain slumps for after landing, then sets
 } tuning;

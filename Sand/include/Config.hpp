@@ -335,8 +335,13 @@ struct TuningParams {
     // what makes ash settle flatter than sand -- see the slump rule in updateAsh, which bounds it
     // against wakeSleepThreshold so a drift stops spreading instead of creeping for ever.
     float ashDriftChance = 0.35f;
-    // Chance per dispatch that ash resting on dirt works into it and disappears.
-    float ashEnrichChance = 0.02f;
+    // How many dispatches a grain of ash rests on dirt before it works in and disappears. A
+    // counter rather than a per-dispatch chance: absorption is meant to take a watchable amount of
+    // time, and a roll gives a geometric distribution where the median grain goes early and no two
+    // agree on how long "a while" is. Capped at 255 by the age byte it counts in -- but a drift is
+    // many grains deep and absorbs from the bottom one at a time, so a heavy fall of ash stifles
+    // the ground under it for a multiple of this.
+    uint32_t ashAbsorbTicks = 200;
     // How much flora a worked-in grain of ash is worth. Capped at 99 inside the shader, one short
     // of full, so the last step is still taken by the normal grass roll and the tree bloom that
     // hangs off it can still fire.
