@@ -32,7 +32,7 @@ render.shadow_max_steps=256
 
 # Pixels rendered as a fraction of the window. 0.5 quarters the pixel count -- most of the cost
 # of a raymarcher is pixels rather than what is in the scene. Web build only at present.
-render.resolution_scale=1
+render.resolution_scale=1.0
 
 # --- Rain ---
 # A storm begins once the water deficit (peak level minus current level) exceeds start_layers
@@ -49,7 +49,7 @@ render.resolution_scale=1
 rain.start_layers=2
 rain.drops_per_tick=50
 rain.overshoot=0.05
-rain.darken_delay=6
+rain.darken_delay=6.0
 
 # --- Clouds ---
 # A fixed group of `count` clouds drifts along +X at drift_speed and wraps around, each one
@@ -60,11 +60,11 @@ rain.darken_delay=6
 #   charge_saturation = cloud water at which the sky is fully charged.
 #   min_alpha         = opacity with no evaporation at all. Set 0 for a totally clear sky.
 cloud.count=32
-cloud.drift_speed=2
-cloud.edge_fade_dist=20
-cloud.charge_saturation=20000
+cloud.drift_speed=2.0
+cloud.edge_fade_dist=20.0
+cloud.charge_saturation=20000.0
 cloud.charge_ease_rate=0.02
-cloud.min_alpha=0
+cloud.min_alpha=0.0
 cloud.max_alpha=0.9
 # World units per cell of drawn cloud. The biggest lever on what the cloud march costs: steps scale
 # inversely with it in every axis at once, since the band is this many units per cell deep AND a ray
@@ -73,7 +73,7 @@ cloud.max_alpha=0.9
 # a 128 step budget at 3, and 22 at 6. The price is granularity: 21 cells across the world instead
 # of 43, with coarser holes and a chunkier silhouette. Drop it toward 2 for finer cloud if the
 # machine can afford it.
-cloud.voxel_size=6
+cloud.voxel_size=6.0
 cloud.edge_threshold_min=0.15
 cloud.edge_threshold_max=0.7
 cloud.max_steps=128
@@ -81,7 +81,7 @@ cloud.max_steps=128
 # previous one. If none did it has settled, and every cloud block becomes a raincloud; each then
 # waits between rain_wait_min_ticks and rain_wait_max_ticks at the ceiling before falling as water.
 cloud.check_interval_ticks=5000
-cloud.rain_wait_max_ticks=2047
+cloud.rain_wait_max_ticks=2048
 cloud.rain_wait_min_ticks=256
 # Failsafe: steam that has not moved for this many dispatches condenses where it stands.
 cloud.steam_condense_ticks=10
@@ -102,7 +102,7 @@ cloud.update_interval=0.5
 cloud.smooth_rate=0.5
 # Column depth that reads as fully dense. OPACITY only -- how solid a given depth of cloud looks.
 # It does not decide how tall the deck stands; nothing here does any more. See below.
-cloud.column_full_count=10
+cloud.column_full_count=10.0
 # The shape of the drawn deck.
 #
 # The deck is the pile turned over. Cloud blocks are invisible and stack downward from the ceiling,
@@ -128,8 +128,8 @@ cloud.column_full_count=10
 # from it, so it is as deep as the sky that exists rather than as deep as the worst sky possible. A
 # shallow sky costs a shallow march. A very deep pile does lengthen every cloud ray, so
 # cloud.max_steps is the thing to watch if cloud starts disappearing at a distance.
-cloud.blocks_per_level=1
-cloud.height_levels=8
+cloud.blocks_per_level=1.0
+cloud.height_levels=8.0
 # UNUSED: cloud spreads like sand, with no cohesion rule.
 cloud.clump_threshold=9
 
@@ -235,7 +235,7 @@ blackhole.infall=0.16
 blackhole.plane_grip=0.5
 blackhole.glow=0.85
 blackhole.orbit_planes=16
-blackhole.growth_cost=2
+blackhole.growth_cost=2.0
 blackhole.max_level=8
 
 # --- Water shadows ---
@@ -305,7 +305,7 @@ water.wave_speed=0.4
 #                   result into [floor, 1] scales that residual by (1 - floor). Physical enough:
 #                   light in water is scattered, not occluded, so a shadowed water cell should not
 #                   go black. 0 disables it.
-water.spec_power=12
+water.spec_power=12.0
 water.spec_strength=0.7
 water.normal_flatten=0.6
 water.diffuse_flatten=0.75
@@ -423,7 +423,7 @@ locust.climb_chance=0.5
 locust.subdivision=4
 locust.density_min=0.18
 locust.density_max=0.62
-locust.crawl_rate=6
+locust.crawl_rate=6.0
 
 # --- Trees --------------------------------------------------------------------------------------
 # Trees are not placed, they happen. When a patch of dirt finishes growing its turf, one time in a
@@ -460,8 +460,8 @@ tree.max_height=6
 tree.min_height=3
 tree.soil_reserve=5
 tree.water_max=255
-tree.drink_chance=0.2
-tree.flow_chance=0.5
+tree.drink_chance=0.20
+tree.flow_chance=0.50
 #   What the water is spent on. Growing a voxel of trunk, putting out one leaf, and seeding a
 #   sapling on the grass next door. spread_cost is capped by water_max -- a cost above the tank size
 #   can never be paid and spreading stops entirely -- so past 255 the only lever left is
@@ -488,7 +488,7 @@ tree.leaf_tick_chance=0.06
 #                  trunk brings its crown down as falling leaves rather than deleting it in place.
 #                  Rolled rather than immediate so a canopy comes apart leaf by leaf. Detached
 #                  leaves are drawn brown, and cannot re-attach to anything on the way down.
-tree.leaf_fall_chance=0.1
+tree.leaf_fall_chance=0.10
 #   Appearance. A trunk does not fill its voxel -- it is one or two slender stems with air around
 #   them, drawn by the same sub-voxel march the locusts use. The stem layout is seeded from the
 #   voxel's X and Z only, never its Y, so every voxel of a column produces the same stems and the
@@ -550,5 +550,5 @@ purge.decay_rate=200
 #                  at 2.2 / 0.16 a voxel in the far corner needs ~2100 ticks, about 35 seconds. At
 #                  8.0 / 0.5 it is ~3.5 seconds, and half of every move is still sideways so the
 #                  world visibly swirls in instead of collapsing straight to the middle.
-purge.orbit_speed=8
+purge.orbit_speed=8.0
 purge.infall=0.5

@@ -99,6 +99,7 @@ set(SAND_CORE_SOURCES
     "${SAND_DIR}/src/AssetPaths.cpp"
     "${SAND_DIR}/src/CursorRay.cpp"
     "${SAND_DIR}/src/Storage.cpp"
+    "${SAND_DIR}/src/WorldFile.cpp"
     "${SAND_DIR}/src/FrameLoop.cpp"
     "${SAND_DIR}/src/Window.cpp"
     "${SAND_DIR}/src/main.cpp")
@@ -213,7 +214,10 @@ if(EMSCRIPTEN)
         # reachable from C++. Without the list they vanish and the config silently stops
         # persisting -- which is exactly the failure the storage seam exists to prevent.
         "-sEXPORTED_RUNTIME_METHODS=['UTF8ToString','stringToUTF8','lengthBytesUTF8']"
-        "-sEXPORTED_FUNCTIONS=['_main','_malloc','_free']"
+        # _sandUserFileRead is the world loader's way back in from the file picker's JS: it has
+        # no C++ caller at all, so without naming it here the linker drops it and Load fails with
+        # an undefined function the moment a file is chosen.
+        "-sEXPORTED_FUNCTIONS=['_main','_malloc','_free','_sandUserFileRead']"
         "-sSTACK_SIZE=1048576"
         # On while the port is being brought up. Without it an abort prints "Aborted(undefined)"
         # and the actual reason is discarded, which has already cost several rounds of guessing.

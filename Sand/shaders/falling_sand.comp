@@ -63,6 +63,16 @@ layout(std430, binding = 1) buffer SimStats {
     uint cloudMaxYAcc;
     uint cloudMinY;
     uint cloudMaxY;
+    // The deepest single column in the field, in sixteenths of a block, taken over the PUBLISHED
+    // per-column depths rather than the raw tallies -- accumulator and published, rotated with the
+    // rest.
+    //
+    // The drawn deck mirrors each column's pile one-for-one, so nothing caps how tall it can stand;
+    // the deepest column is what caps it, and the march band needs that number to stay bounded. A
+    // global figure rather than a tuned constant is the point: the band is then exactly as deep as
+    // the sky happens to be, and a shallow sky costs a shallow march.
+    uint cloudPeakColumnAcc;
+    uint cloudPeakColumn;
     uint blackHoleCount;         // live table entries; 0 lets every voxel skip the scan entirely
     uint maxOccupiedY;           // ceiling on where matter can be; lets the renderer skip empty sky
     uint blackHoles[BLACK_HOLE_MAX];      // 0 = free slot, else BH_ACTIVE | linear voxel index
@@ -160,6 +170,11 @@ layout(std140, binding = 2) uniform TuningParams {
     float waterWaveStrength; // render-only; declared here to keep the shared UBO layouts identical
     float waterWaveScale;
     float waterWaveSpeed;
+    float waterSpecPower;      // render-only, as above
+    float waterSpecStrength;
+    float waterNormalFlatten;
+    float waterDiffuseFlatten;
+    float waterShadowFloor;
     uint lavaStageSize;
     float lavaViscosity;
     uint lavaSpreadRadius;
@@ -207,7 +222,7 @@ layout(std140, binding = 2) uniform TuningParams {
     uint cloudCheckIntervalTicks; // dispatches between storm checks
     uint rainWaitMaxTicks;        // ceiling of a raincloud's wait, 0..2047
     float cloudColumnFullCount;   // cloud blocks in a column that read as fully dense
-    float cloudBlocksPerLevel;    // cloud blocks in a column per step of drawn height
+    float cloudBlocksPerLevel;    // UNUSED: height is a proportion of cloudColumnFullCount
     uint cloudClumpThreshold;     // UNUSED: cloud spreads like sand, no cohesion
     uint rainWaitMinTicks;        // floor of a raincloud's wait at the ceiling
     uint steamCondenseTicks;      // dispatches of stillness before steam condenses in place
@@ -218,7 +233,8 @@ layout(std140, binding = 2) uniform TuningParams {
     uint ashAbsorbTicks;          // dispatches a grain rests on soil before it works in
     uint ashEnrichAmount;         // flora a worked-in grain of ash is worth
     uint ashSettleTicks;          // dispatches a grain slumps for after landing, then sets
-    float cloudHeightLevels;      // most steps of height the drawn cloud deck spans
+    float cloudHeightLevels;      // UNUSED: the deck mirrors the pile, with no ceiling
+    float cloudUpdateInterval;    // seconds between republishes of the drawn cloud shape
 } tuning;
 
 #define LAYER_SIZE (uint(WIDTH) * uint(HEIGHT)) // one layer of the world
@@ -2811,6 +2827,12 @@ void updateSimState() {
     cloudMinYAcc = 0xFFFFFFFFu;
     cloudMaxYAcc = 0u;
 
+    // The deepest column, rotated alongside. Starts at zero and climbs by atomicMax, so an empty
+    // sky publishes zero and the renderer's band collapses to nothing -- which is right, and is
+    // caught anyway by the min > max test above.
+    cloudPeakColumn = cloudPeakColumnAcc;
+    cloudPeakColumnAcc = 0u;
+
     // --- Group cloud charge ---------------------------------------------------------------------
     // One value the whole sky renders from, so it thickens and greys together rather than cloud by
     // cloud. Clear while gathering, full once it is raining. Eased rather than assigned, so the
@@ -3035,40 +3057,59 @@ void updateCloudBlock(ivec3 pos) {
     uint base = cloudColumnBase(pos.x, pos.z);
 
     // Rotate this column's census. y == 0 is in every column and is visited exactly once per
-    // dispatch, which makes it the natural single writer for the column.
+    // dispatch, which makes it the natural single writer for the column -- and that is what makes
+    // the clock below safe to keep per column rather than globally. Nothing else writes these
+    // words, so no ordering between columns has to be assumed within a dispatch.
     if (pos.y == 0) {
-        // Eased into the published pair rather than copied, and held in sixteenths.
+        // The drawn shape is republished on a clock, not every dispatch.
         //
-        // The block field is never still, so a surface drawn straight from this dispatch's tally
-        // changes every dispatch and the deck boils -- which is what the edge flicker is, once the
-        // fill pattern itself was made stable. An exponential average lets the drawn shape drift
-        // toward the truth over tens of dispatches instead of chasing it every one.
+        // The window index is computed from pc.time, which every invocation in the dispatch reads
+        // identically, and compared against the window this column last published in -- kept in
+        // slot 3. So the decision needs no shared state and cannot race: each column asks "have we
+        // crossed into a new window since I last wrote?" and answers it from its own word.
         //
-        // Sixteenths because the average has to be able to move by less than a whole block: at
-        // integer resolution a rate of 0.08 against a difference of one truncates to zero and the
-        // value sticks forever, one short of where it should be.
-        float rate = clamp(tuning.cloudSmoothRate, 0.01f, 1.0f);
-        uint tallied = cloudColumn[base + 0u];
+        // Slot 3 used to hold the column's published top Y. Nothing reads that any more -- the deck
+        // stands on the roof of the cube rather than on the blocks, so the height stopped shaping
+        // anything -- which left the word free for this.
+        float interval = max(tuning.cloudUpdateInterval, 0.0f);
+        uint window = (interval <= 0.0f) ? 0u : uint(pc.time / interval);
+        bool due = (interval <= 0.0f) || (cloudColumn[base + 3u] != window);
 
-        cloudColumn[base + 2u] = easeTowards(cloudColumn[base + 2u], float(tallied) * 16.0f, rate);
+        if (due) {
+            // Eased into the published depth rather than copied, and held in sixteenths.
+            //
+            // Sixteenths because the average has to be able to move by less than a whole block: at
+            // integer resolution a small rate against a difference of one truncates to zero and the
+            // value sticks forever, one short of where it should be.
+            //
+            // The rate is now per PUBLISH, not per dispatch, and that is a different quantity by two
+            // orders of magnitude -- 0.08 sixty times a second is nothing like 0.08 twice a second.
+            // See cloudSmoothRate, which was retuned for the new unit. What the easing is for has
+            // changed with it: the clock is what stops the deck boiling now, so the ease is left
+            // only with the job of keeping a single step from being a jump.
+            float rate = clamp(tuning.cloudSmoothRate, 0.01f, 1.0f);
+            uint tallied = cloudColumn[base + 0u];
 
-        // The height is only eased when this window actually counted something, and that guard is
-        // the whole point of it.
-        //
-        // The height accumulator is an atomicMax reset to zero, so a column that happened to hold no
-        // block during one window publishes a height of zero -- not "unchanged", but "the floor".
-        // Easing toward that dragged the drawn surface down through the world and then let it climb
-        // back as blocks reappeared, which is the cloud seen bubbling upward from under the roof,
-        // with pieces of deck stranded well below it. A window with nothing in it says nothing about
-        // where the cloud is; the previous height stands, and the count easing to zero is what makes
-        // an emptied column fade out.
-        if (tallied > 0u) {
-            cloudColumn[base + 3u] = easeTowards(cloudColumn[base + 3u],
-                                                 float(cloudColumn[base + 1u]) * 16.0f, rate);
+            cloudColumn[base + 2u] = easeTowards(cloudColumn[base + 2u],
+                                                 float(tallied) * 16.0f, rate);
+            cloudColumn[base + 3u] = window;
         }
 
+        // Feed the field-wide peak from the EASED depth, not from `tallied`, and do it EVERY
+        // dispatch rather than only on a publish.
+        //
+        // Every dispatch because the peak accumulator is cleared every dispatch: skipping it
+        // between publishes would leave the renderer's band at zero for most frames and the sky
+        // would strobe. The published depth is what the renderer draws whether or not it changed
+        // this dispatch, so it is what the band must cover, and it is still the right number to
+        // read on a dispatch that published nothing.
+        //
+        // The eased value rather than the raw tally because the tally can sit well above the drawn
+        // depth while a column is filling, and would buy band that nothing occupies. Still in
+        // sixteenths -- the renderer divides once, as it does for the column itself.
+        atomicMax(cloudPeakColumnAcc, cloudColumn[base + 2u]);
+
         cloudColumn[base + 0u] = 0u;
-        cloudColumn[base + 1u] = 0u;
     }
 
     uint cell = cloudCells[idx];
@@ -3077,7 +3118,10 @@ void updateCloudBlock(ivec3 pos) {
 
     atomicAdd(cloudBlockCount, 1u);
     atomicAdd(cloudColumn[base + 0u], 1u);
-    atomicMax(cloudColumn[base + 1u], uint(pos.y));
+    // Slot 1, the column's top-Y accumulator, is gone with the published height it fed. The deck
+    // rests on the roof rather than on the blocks, so how high a column's topmost block reaches
+    // stopped shaping anything, and an atomicMax per cloud block per dispatch is not worth paying
+    // to maintain a number nothing reads.
     atomicMin(cloudMinYAcc, uint(pos.y));
     atomicMax(cloudMaxYAcc, uint(pos.y));
 

@@ -59,15 +59,30 @@ struct TuningParams {
     float cloudChargeEaseRate = 0.02f; // per dispatch, so it is framerate-dependent by design
     float cloudMinAlpha = 0.00f;       // set to 0 for a completely clear sky until steam appears
     float cloudMaxAlpha = 0.9f;
-    float cloudVoxelSize = 3.0f;
+    // The cell the drawn cloud is built from, in world units, and the single biggest lever on what
+    // the cloud march costs. Steps scale inversely with it in EVERY axis at once: the band is this
+    // many units per cell deep, and a ray skimming it crosses the world in world/cell cells. Going
+    // from 3 to 6 roughly halves both, which is what paid for the deck's height being uncapped --
+    // a near-full column used to make a band about 45 cells deep against a 128 step budget, and at
+    // 6 the same column makes it 22.
+    //
+    // The price is granularity, and it is a fair trade here specifically because the shape being
+    // drawn is a mound of cloud: 21 cells across the world instead of 43, with the hash's holes and
+    // the silhouette's ragged edge growing to match. It would be the wrong trade for anything with
+    // a form to preserve. Raise it further if the sky is still costing too much; drop it toward 2
+    // for finer cloud on a machine that can afford it.
+    float cloudVoxelSize = 6.0f;
     float cloudEdgeThresholdMin = 0.15f;
     float cloudEdgeThresholdMax = 0.7f;
     // Must exceed the cells a ray crosses within the cloud band, or cloud goes missing at a
     // distance -- distance is what makes a ray shallow, and a shallow ray skims the band for the
-    // whole width of the world. Measured worst case, with the band depth capped as the renderer
-    // caps it, is 98 cells at a 128-cube and 184 at a 256-cube: so 128 covers the default world
-    // with room, and a larger world wants this raised to match. Only pixels whose ray actually
-    // traverses the band pay for it.
+    // whole width of the world. Only pixels whose ray actually traverses the band pay for it.
+    //
+    // The worst case is world/cloudVoxelSize cells of lateral travel plus the band's own depth, so
+    // it moves with BOTH the world size and the cell size. At the old 3-unit cell it was 98 cells
+    // on a 128-cube and 184 on a 256-cube; the 6-unit cell halves the lateral term, which is what
+    // keeps an uncapped deck inside this budget. A larger world or a smaller cell wants it raised
+    // to match -- those are the two things that move it.
     uint32_t maxCloudSteps = 128;
     // --- Physics ---
     uint32_t sandMoistureCapacity = 10;
@@ -191,6 +206,39 @@ struct TuningParams {
     float waterWaveStrength = 0.9f;
     float waterWaveScale = 0.6f;
     float waterWaveSpeed = 0.4f;
+    // --- Water surface steadiness ---
+    // Four knobs on the terms DOWNSTREAM of the normal. calculateShadow and getWaterNormal took the
+    // jitter out at source; what is left is how loudly the shading AMPLIFIES whatever wobble remains,
+    // and that is a separate question with separate controls.
+    //
+    // The specular exponent is the loudest amplifier. getWaterNormal measured itself against an
+    // exponent of 32 -- a ~14 degree half-angle, against a residual normal swing of ~3 degrees. That
+    // is margin, not comfort. Widening the lobe buys more of it for nothing: at 12 the half-angle is
+    // ~23 degrees, so the same wobble moves the highlight roughly half as far. Strength comes up
+    // alongside it because a broader lobe is a dimmer one at its peak -- the trade is a sheen you can
+    // see across the surface instead of a hard glint on a handful of cells.
+    float waterSpecPower = 12.0f;
+    float waterSpecStrength = 0.7f;
+    // Still water is very nearly planar; the density gradient is reporting how the voxels happen to
+    // be PACKED, which is exactly the thing that churns. Pulling the normal toward straight up by
+    // this fraction cuts the per-frame angular swing by the same fraction. Weighted by how up-facing
+    // the surface already is, for the reason applyWaterWaves is: on a waterfall face or a pool wall
+    // "up" is not the answer the surface is trying to give, and forcing it there would look worse
+    // than the jitter. 0 restores the raw gradient normal; 1 makes flat water perfectly planar.
+    float waterNormalFlatten = 0.6f;
+    // The same idea for the diffuse term specifically. Waves drive diffuse as well as specular
+    // deliberately -- perturbing only the highlight lights the surface flat and glosses a pattern
+    // over it, which reads as moving texture rather than moving water -- but that also means normal
+    // wobble moves the whole base lighting, not just the highlight. Diffuse is a broad cosine and
+    // barely resolves the waves anyway, so it can be flattened much harder than the specular normal
+    // without losing anything visible. Applied on top of waterNormalFlatten, not instead of it.
+    float waterDiffuseFlatten = 0.75f;
+    // Floor on water's own shadow term. waterShadowTransmit made each crossing a soft 10% step
+    // rather than a hard block, but a surface voxel hopping still changes how many crossings a ray
+    // makes. Compressing the result into [floor, 1] scales that residual by (1 - floor). Defensible
+    // rather than a fudge: light inside water is scattered, not occluded, so a fully "shadowed"
+    // water cell genuinely should not go black. 0 disables the compression.
+    float waterShadowFloor = 0.5f;
     // --- Lava ---
     // Lava carries one 8-bit number, "coolness", and everything about its life is a function of it.
     // Absorbing water raises it, boiling moisture out of soil raises it, and simply sitting still
@@ -294,12 +342,18 @@ struct TuningParams {
     // density independent of world size.
     // Lowered from 24: with density no longer thinning the fill pattern it drives opacity alone,
     // and 24 blocks deep is a lot of cloud to demand before the sky looks solid.
+    //
+    // OPACITY only. It briefly drove the deck's height too, as the reference a column's depth was
+    // measured against; that was still a cap wearing another hat, and it flattened the sky the same
+    // way every other cap did. Height is the pile mirrored one for one now and answers to nothing
+    // here -- this decides how solid a given depth looks, not how tall it stands.
     float cloudColumnFullCount = 10.0f;
-    // World units of cloud drawn per cloud block in the column, rising from the top of the pile.
-    // How many cloud blocks in a column buy one whole cloud cell of drawn height. This replaced a
-    // world-units-per-block figure that was the reason the deck looked flat: 1.5 units per block
-    // against a 3-unit cell meant two blocks per cell of height, so the whole interesting part of
-    // the count range was quantised away and the sky was one or two cells deep everywhere.
+    // How many cloud blocks in a column buy one whole cloud cell of drawn height.
+    //
+    // UNUSED. There is no blocks-per-cell conversion left to tune: a cloud block is one voxel deep
+    // and buys one world unit of drawn height, because the deck is a mirror of the pile rather than
+    // a rendering of it at some chosen scale. Rounding to the cloud lattice is the only step
+    // between the two, and cloud.voxel_size already governs that.
     float cloudBlocksPerLevel = 1.0f;
     // Cloud neighbours (of 26) at which a block counts as clumped and stops trying to move. The
     // counterpart of sandClumpThreshold, and it does the same job: without it a pile slumps into a
@@ -315,12 +369,21 @@ struct TuningParams {
     // neither rule fires and it hangs there. Rather than enumerate the ways that can happen, steam
     // that has gone nowhere for this long simply becomes cloud.
     uint32_t steamCondenseTicks = 10;
-    // How fast the drawn cloud surface follows the block field, per dispatch, 0..1.
+    // How fast the drawn cloud surface follows the block field, per PUBLISH, 0..1.
     //
-    // The field is never still -- blocks rise, rainclouds fall -- so a surface drawn straight from
-    // this dispatch's counts changes every dispatch, and the deck boils. Easing it means the shape
-    // drifts smoothly instead. 1.0 disables the smoothing and restores the boiling.
-    float cloudSmoothRate = 0.08f;
+    // Per publish, not per dispatch, and the unit change is why the number moved from 0.08 to 0.5.
+    // Republishes happen every cloudUpdateInterval seconds -- twice a second at the default, against
+    // the sixty-odd dispatches a second this used to run at. 0.08 in the new unit is a time constant
+    // of six seconds and a settling time nearer twenty, which is not smoothing, it is the sky
+    // refusing to respond.
+    //
+    // What the easing is for changed with the unit. It used to be the whole defence against the deck
+    // boiling: the field is never still, blocks rise and rainclouds fall, and a surface drawn
+    // straight from one dispatch's counts changes every dispatch. The clock does that job now and
+    // does it better -- the deck is genuinely motionless between ticks rather than always drifting
+    // slightly. All that is left for the ease is keeping one tick from landing as a visible jump,
+    // and half the distance per tick is enough for that. 1.0 makes each publish a hard cut.
+    float cloudSmoothRate = 0.5f;
     // The shortest a tree is allowed to top out at, in trunk voxels. treeMaxHeight is the tallest,
     // and every tree draws its own limit from somewhere between the two.
     //
@@ -355,10 +418,33 @@ struct TuningParams {
     // by default -- about two sideways steps, which is not visibly flatter than sand. Capped at 255
     // by the sleep byte it counts in.
     uint32_t ashSettleTicks = 24;
-    // The most steps of height the drawn cloud deck spans. Also the thing that bounds the cloud
-    // march: the band the renderer clips to is this many cloud cells deep, so raising it makes
-    // every cloud ray longer and cloud.max_steps may need to follow.
-    float cloudHeightLevels = 5.0f;
+    // The most steps of height the drawn cloud deck spans.
+    //
+    // UNUSED. The deck mirrors each column's pile one for one and has no ceiling at all now, which
+    // is the third and last answer to a sky that kept coming out flat. The first two both capped the
+    // height -- at five cells, then at eight -- and a cap is the problem rather than the size of it:
+    // a settled bank is deeper than any fixed ceiling everywhere except its rim, so the deck pinned
+    // to maximum across its whole area and the pile's profile never reached the screen no matter how
+    // the counts were scaled into the range.
+    //
+    // What made the cap seem necessary was the march needing a bounded band, and that is now
+    // answered properly -- falling_sand.comp publishes the field's deepest column each dispatch, so
+    // the band is measured from the sky that actually exists instead of reserved for the worst one
+    // that could.
+    float cloudHeightLevels = 8.0f;
+    // Seconds between republishes of the drawn cloud shape. The block field still simulates every
+    // dispatch; this is only how often the surface drawn from it is allowed to change.
+    //
+    // Rate-limited rather than eased harder, because the two do different things. Easing makes every
+    // frame a small step toward the truth, so the deck is always moving -- gently, but continuously,
+    // and a large surface in continuous low-amplitude motion is what reads as the sky crawling.
+    // Republishing on a clock leaves it genuinely still between ticks, which is what a settled bank
+    // of cloud actually does.
+    //
+    // Costs nothing and saves nothing. The march runs per pixel per frame regardless of whether the
+    // shape it reads changed, so this is a look, not an optimisation -- cloudVoxelSize is the lever
+    // for the latter. 0 republishes every dispatch, i.e. restores the old behaviour.
+    float cloudUpdateInterval = 0.5f;
 };
 
 // Config: everything loaded from the config file. Currently just the shader tuning params;

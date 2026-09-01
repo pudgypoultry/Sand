@@ -24,6 +24,7 @@
     <ClCompile Include="src\AssetPaths.cpp" />
     <ClCompile Include="src\CursorRay.cpp" />
     <ClCompile Include="src\Storage.cpp" />
+    <ClCompile Include="src\WorldFile.cpp" />
     <ClCompile Include="src\FrameLoop.cpp" />
     <ClCompile Include="src\UiBackendVulkan.cpp" />
     <ClCompile Include="src\main.cpp" />
@@ -51,6 +52,7 @@
     <ClInclude Include="include\SimStats.hpp" />
     <ClInclude Include="include\Renderer.hpp" />
     <ClInclude Include="include\Storage.hpp" />
+    <ClInclude Include="include\WorldFile.hpp" />
     <ClInclude Include="include\FrameLoop.hpp" />
     <ClInclude Include="include\UiBackend.hpp" />
     <ClInclude Include="include\UiBackendVulkan.hpp" />

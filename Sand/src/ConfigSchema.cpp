@@ -61,7 +61,9 @@ const ConfigField kConfigFields[] = {
       nullptr },
     { "Clouds", "cloud.voxel_size", "Voxel size", FieldKind::Float,
       offsetof(TuningParams, cloudVoxelSize), 1.0, 16.0,
-      nullptr },
+      "World units per cell of drawn cloud, and the biggest lever on what the cloud march costs -- "
+      "steps scale inversely with it in every axis, so doubling it roughly halves the march. Lower "
+      "gives finer cloud for more work. This also sets how coarsely the deck's height is stepped." },
     { "Clouds", "cloud.edge_threshold_min", "Edge threshold min", FieldKind::Float,
       offsetof(TuningParams, cloudEdgeThresholdMin), 0.0, 1.0,
       nullptr },
@@ -72,8 +74,9 @@ const ConfigField kConfigFields[] = {
       offsetof(TuningParams, maxCloudSteps), 1.0, 256.0,
       "Step budget for the cloud march. It has to exceed the cells a ray crosses inside the cloud "
       "band or cloud vanishes at a distance -- a distant ray is a shallow one, and a shallow ray "
-      "skims the band for the whole width of the world. Measured worst case is 98 cells at a "
-      "128-cube and 184 at a 256-cube, so raise this alongside sim.grid_size." },
+      "skims the band for the whole width of the world. The worst case moves with sim.grid_size and "
+      "inversely with cloud.voxel_size: it was 98 cells at a 128-cube with 3-unit cells, and the "
+      "6-unit default halves the lateral half of that. Raise it if you lower either one." },
     { "Clouds", "cloud.check_interval_ticks", "Storm check interval", FieldKind::UInt,
       offsetof(TuningParams, cloudCheckIntervalTicks), 1.0, 100000.0,
       "Dispatches between storm checks. On each multiple of this the simulation asks whether any "
@@ -98,23 +101,30 @@ const ConfigField kConfigFields[] = {
       "cloud without being under it. Rather than enumerate those cases, stalled steam condenses." },
     { "Clouds", "cloud.smooth_rate", "Surface smooth rate", FieldKind::Float,
       offsetof(TuningParams, cloudSmoothRate), 0.01, 1.0,
-      "How fast the drawn cloud surface follows the block field, per dispatch. The field is never "
-      "still -- blocks rise, rainclouds fall -- so a surface drawn straight from this dispatch's "
-      "counts changes every dispatch and the deck boils. Easing it lets the shape drift instead. "
-      "1.0 disables the smoothing." },
+      "How far the drawn cloud surface moves toward the block field on each republish -- per "
+      "publish, not per dispatch, so it is paced by cloud.update_interval. The clock is what keeps "
+      "the deck still; this only keeps a tick from landing as a jump. 1.0 makes each one a cut." },
+    { "Clouds", "cloud.update_interval", "Update interval", FieldKind::Float,
+      offsetof(TuningParams, cloudUpdateInterval), 0.0, 10.0,
+      "Seconds between republishes of the drawn cloud shape. The sky simulates every dispatch; this "
+      "is only how often the surface drawn from it may change, so it stays genuinely still between "
+      "ticks. A look, not an optimisation -- the march runs every frame either way. 0 = every "
+      "dispatch." },
     { "Clouds", "cloud.column_full_count", "Column full count", FieldKind::Float,
       offsetof(TuningParams, cloudColumnFullCount), 1.0, 512.0,
-      "How many cloud blocks stacked in one column read as a fully dense cloud. Lower makes thin "
-      "cloud look solid sooner. This is what keeps cloud density from depending on world size." },
+      "How many cloud blocks stacked in one column read as a fully dense cloud. Opacity only -- the "
+      "deck's height mirrors the pile directly and answers to nothing here. Lower makes thin cloud "
+      "look solid sooner. This is what keeps cloud opacity from depending on world size." },
     { "Clouds", "cloud.blocks_per_level", "Blocks per height step", FieldKind::Float,
       offsetof(TuningParams, cloudBlocksPerLevel), 0.1, 32.0,
-      "How many cloud blocks in a column buy one whole cloud cell of drawn height. Lower gives the "
-      "deck more relief for the same amount of cloud; raise it to flatten the sky out." },
+      "How many cloud blocks in a column buy one whole cloud cell of drawn height. UNUSED. A block "
+      "is one voxel deep and buys one world unit, because the deck mirrors the pile rather than "
+      "rendering it at a chosen scale; cloud.voxel_size handles the rounding to the lattice." },
     { "Clouds", "cloud.height_levels", "Height steps", FieldKind::Float,
       offsetof(TuningParams, cloudHeightLevels), 1.0, 16.0,
-      "The most steps of height the cloud deck spans. This also bounds the cloud march: the band "
-      "clipped to is this many cloud cells deep, so raising it lengthens every cloud ray and "
-      "cloud.max_steps may need raising with it." },
+      "The most steps of height the cloud deck spans. UNUSED. The deck mirrors each column's pile "
+      "with no ceiling -- any cap pinned a settled bank to maximum across its whole area. The march "
+      "band is bounded by the field's deepest column, which the sim publishes each dispatch." },
     { "Clouds", "cloud.clump_threshold", "Clump threshold", FieldKind::UInt,
       offsetof(TuningParams, cloudClumpThreshold), 0.0, 26.0,
       "How many of a cloud block's 26 neighbours must also be cloud before it stops trying to move. "
@@ -244,6 +254,21 @@ const ConfigField kConfigFields[] = {
     { "Water", "water.wave_speed", "Wave speed", FieldKind::Float,
       offsetof(TuningParams, waterWaveSpeed), 0.0, 10.0,
       nullptr },
+    { "Water", "water.spec_power", "Specular power", FieldKind::Float,
+      offsetof(TuningParams, waterSpecPower), 1.0, 64.0,
+      "lower = wider highlight, less jitter amplified" },
+    { "Water", "water.spec_strength", "Specular strength", FieldKind::Float,
+      offsetof(TuningParams, waterSpecStrength), 0.0, 2.0,
+      nullptr },
+    { "Water", "water.normal_flatten", "Normal flatten", FieldKind::Float,
+      offsetof(TuningParams, waterNormalFlatten), 0.0, 1.0,
+      "pull up-facing normals toward planar" },
+    { "Water", "water.diffuse_flatten", "Diffuse flatten", FieldKind::Float,
+      offsetof(TuningParams, waterDiffuseFlatten), 0.0, 1.0,
+      "extra flattening for the diffuse term only" },
+    { "Water", "water.shadow_floor", "Shadow floor", FieldKind::Float,
+      offsetof(TuningParams, waterShadowFloor), 0.0, 1.0,
+      "darkest water's own shadow term may go" },
 
     // ---- Lava ----
     { "Lava", "lava.stage_size", "Stage size", FieldKind::UInt,

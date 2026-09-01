@@ -5,6 +5,7 @@
 #include "FrameLoop.hpp"
 #include "CursorRay.hpp"
 #include "SimStats.hpp"
+#include "WorldFile.hpp"
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -426,6 +427,209 @@ void VulkanRenderer::beginPurge() {
     std::cout << "Purge started: one black hole at the centre, eating the world.\n";
 }
 
+/// resolveWorldPath: turns the name typed in the panel into a path.
+//
+// Relative names resolve beside config.txt rather than against the working directory, so a save
+// made by double-clicking the executable and one made from a terminal land in the same place. An
+// absolute path, or anything with a separator already in it, is taken as given -- someone who typed
+// a directory meant it.
+std::string VulkanRenderer::resolveWorldPath(const char* name) const {
+    const std::string n(name ? name : "");
+    if (n.empty()) return n;
+    if (n.find('/') != std::string::npos || n.find('\\') != std::string::npos) return n;
+
+    const size_t slash = configPath.find_last_of("/\\");
+    if (slash == std::string::npos) return n;
+    return configPath.substr(0, slash + 1) + n;
+}
+
+// saveWorld: the grid, the cloud field and the black hole table, out to text.
+//
+// Safe to map the buffers here for the same reason beginPurge is: the caller has waited on the
+// frame fence, so the GPU is not reading them.
+void VulkanRenderer::saveWorld() {
+    const std::string path = resolveWorldPath(uiManager.worldFileName());
+    if (path.empty()) {
+        uiManager.setWorldStatus("No file name given.", true);
+        return;
+    }
+
+    WorldFile::World world;
+    world.width = config.tuning.gridWidth;
+    world.height = config.tuning.gridHeight;
+    world.depth = config.tuning.gridDepth;
+
+    const size_t total = voxelCount();
+    world.grid.resize(total);
+    world.cloud.resize(total);
+
+    const uint32_t* grid = static_cast<const uint32_t*>(ssboBuffer->mapMemory());
+    memcpy(world.grid.data(), grid, sizeof(uint32_t) * total);
+    ssboBuffer->unmapMemory();
+
+    const uint32_t* cloud = static_cast<const uint32_t*>(cloudBuffer->mapMemory());
+    memcpy(world.cloud.data(), cloud, sizeof(uint32_t) * total);
+    cloudBuffer->unmapMemory();
+
+    {
+        const uint32_t* stats = static_cast<const uint32_t*>(steamCounterBuffer->mapMemory());
+        for (uint32_t i = 0; i < SimStats::kBlackHoleMax; i++) {
+            world.holeSlot[i] = stats[SimStats::kHoles + i];
+            world.holeMass[i] = stats[SimStats::kMass + i];
+            world.holeStarve[i] = stats[SimStats::kStarve + i];
+        }
+        world.holeCount = stats[SimStats::kCount];
+        steamCounterBuffer->unmapMemory();
+    }
+
+    const std::string text = WorldFile::encode(world);
+    std::string error;
+    if (!Storage::writeUserFile(path, text, error)) {
+        uiManager.setWorldStatus("Save failed: " + error, true);
+        std::cout << "World save failed: " << error << "\n";
+        return;
+    }
+
+    char note[192];
+    std::snprintf(note, sizeof(note), "Saved %u^3 to %s (%.1f KB).", world.width,
+                  uiManager.worldFileName(), text.size() / 1024.0);
+    uiManager.setWorldStatus(note, false);
+    std::cout << "World saved to " << path << " (" << text.size() << " bytes)\n";
+}
+
+// loadWorld: read a file back over the live world.
+//
+// A file whose grid size differs from the running one is applied rather than refused: the world is
+// rebuilt at the file's size first, through the same path the options screen uses, and the contents
+// go in after. Refusing would mean a save could only be opened by someone who already knew what
+// size to set, which is a thing the file itself knows.
+void VulkanRenderer::loadWorld() {
+    const std::string path = resolveWorldPath(uiManager.worldFileName());
+    if (path.empty()) {
+        uiManager.setWorldStatus("No file name given.", true);
+        return;
+    }
+
+    // `path` by value: on the desktop this callback runs before readUserFile returns, but the
+    // browser's runs long after, and a reference would dangle by then. Same lambda either way.
+    Storage::readUserFile(path, [this, path](bool ok, std::string contents, std::string error) {
+        if (!ok) {
+            uiManager.setWorldStatus("Load failed: " + error, true);
+            return;
+        }
+
+        WorldFile::World world;
+        std::string decodeError;
+        if (!WorldFile::decode(contents, world, decodeError)) {
+            uiManager.setWorldStatus("Load failed: " + decodeError, true);
+            std::cout << "World load failed: " << decodeError << "\n";
+            return;
+        }
+
+        applyLoadedWorld(world);
+        if (uiManager.worldFileName()[0] != '\0') {
+            char note[192];
+            std::snprintf(note, sizeof(note), "Loaded %u^3 from %s.", world.width,
+                          uiManager.worldFileName());
+            uiManager.setWorldStatus(note, false);
+        }
+        std::cout << "World loaded from " << path << "\n";
+    });
+}
+
+// loadTextAsWorld: read any file and stretch it across the cube.
+//
+// The size the world is loaded AT is the current one: unlike loadWorld, which takes the file's
+// dimensions and resizes to match, a raw text file has no size of its own to negotiate about. If
+// the user wants a bigger canvas for the same file, that is what the options screen is for.
+void VulkanRenderer::loadTextAsWorld() {
+    const std::string path = resolveWorldPath(uiManager.worldFileName());
+    if (path.empty()) {
+        uiManager.setWorldStatus("No file name given.", true);
+        return;
+    }
+
+    Storage::readUserFile(path, [this, path](bool ok, std::string contents, std::string error) {
+        if (!ok) {
+            uiManager.setWorldStatus("Load failed: " + error, true);
+            return;
+        }
+        WorldFile::World world;
+        WorldFile::worldFromText(contents, config.tuning.gridWidth, config.tuning.gridHeight,
+                                 config.tuning.gridDepth, world);
+        applyLoadedWorld(world);
+
+        char note[192];
+        std::snprintf(note, sizeof(note), "Loaded %zu bytes as %u^3 from %s.",
+                      contents.size(), world.width,
+                      uiManager.worldFileName()[0] ? uiManager.worldFileName() : path.c_str());
+        uiManager.setWorldStatus(note, false);
+        std::cout << "Text-as-world loaded from " << path << " (" << contents.size() << " bytes)\n";
+    });
+}
+
+// applyLoadedWorld: upload a decoded/built world over the live buffers. Shared by both loaders.
+//
+// The GPU is already known idle here for the same reason the callers can be: they run at the
+// post-fence point in frame(), same as beginPurge and applyOptions.
+void VulkanRenderer::applyLoadedWorld(WorldFile::World& world) {
+    if (world.width != config.tuning.gridWidth || world.height != config.tuning.gridHeight ||
+        world.depth != config.tuning.gridDepth) {
+        // applyOptions rebuilds the buffers, reseeds and rewrites config.txt -- everything a
+        // resize needs -- so the world that comes back is the right shape and empty, ready to be
+        // filled in below. loadTextAsWorld never asks for a resize (it builds at the current
+        // dimensions), so this branch is loadWorld's.
+        TuningParams resized = config.tuning;
+        resized.gridWidth = world.width;
+        resized.gridHeight = world.height;
+        resized.gridDepth = world.depth;
+        applyOptions(resized);
+    }
+
+    const size_t total = voxelCount();
+    if (world.grid.size() != total || world.cloud.size() != total) {
+        uiManager.setWorldStatus("Load failed: the world could not be resized to match.", true);
+        return;
+    }
+
+    uint32_t* grid = static_cast<uint32_t*>(ssboBuffer->mapMemory());
+    memcpy(grid, world.grid.data(), sizeof(uint32_t) * total);
+    ssboBuffer->unmapMemory();
+
+    uint32_t* cloud = static_cast<uint32_t*>(cloudBuffer->mapMemory());
+    memcpy(cloud, world.cloud.data(), sizeof(uint32_t) * total);
+    cloudBuffer->unmapMemory();
+
+    {
+        uint32_t* stats = static_cast<uint32_t*>(steamCounterBuffer->mapMemory());
+
+        // Scalars and the per-column cloud census are cleared rather than restored. They are a
+        // running commentary on the world being replaced -- water counts, rain phase, cloud charge,
+        // the drawn cloud surface -- and carrying them across would have the sky describing the
+        // world that just went away. They rebuild within a few dispatches from the blocks loaded.
+        for (uint32_t i = 0; i < SimStats::kCloudScalarCount; i++) stats[i] = 0u;
+        const uint32_t columnWords =
+            config.tuning.gridWidth * config.tuning.gridDepth * SimStats::kColumnWords;
+        for (uint32_t i = 0; i < columnWords; i++) stats[SimStats::kColumnBase + i] = 0u;
+
+        uint32_t live = 0;
+        for (uint32_t i = 0; i < SimStats::kBlackHoleMax; i++) {
+            stats[SimStats::kHoles + i] = world.holeSlot[i];
+            stats[SimStats::kMass + i] = world.holeMass[i];
+            stats[SimStats::kStarve + i] = world.holeStarve[i];
+            if (world.holeSlot[i] != 0u) live++;
+        }
+        stats[SimStats::kCount] = live;
+
+        // Starts at the roof: over-reporting costs the renderer some empty sky to march, under-
+        // reporting hides matter that is really there.
+        stats[SimStats::kMaxY] = config.tuning.gridHeight;
+        steamCounterBuffer->unmapMemory();
+    }
+
+    uiManager.resetTicks();
+}
+
 // createFramebuffers: Connects swapchain image views to the render pass format
 void VulkanRenderer::createFramebuffers() {
     const auto& imageViews = swapchain->getImageViews();
@@ -669,6 +873,13 @@ void VulkanRenderer::drawFrame() {
     if (uiManager.consumeCameraResetRequest()) {
         window->resetCamera();
     }
+
+    // Both sit with the purge and the options apply, after the fence and before any recording, for
+    // the one reason all four share: that is the only point in the frame where the GPU is known to
+    // be finished with the buffers and the CPU may read or rewrite them.
+    if (uiManager.consumeSaveWorldRequest()) saveWorld();
+    if (uiManager.consumeLoadWorldRequest()) loadWorld();
+    if (uiManager.consumeLoadTextRequest())  loadTextAsWorld();
 
     uint32_t imageIndex;
     const auto acquireStart = std::chrono::high_resolution_clock::now();

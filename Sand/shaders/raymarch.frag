@@ -37,6 +37,16 @@ layout(std430, binding = 1) readonly buffer SimStats {
     uint cloudMaxYAcc;
     uint cloudMinY;
     uint cloudMaxY;
+    // The deepest single column in the field, in sixteenths of a block, taken over the PUBLISHED
+    // per-column depths rather than the raw tallies -- accumulator and published, rotated with the
+    // rest.
+    //
+    // The drawn deck mirrors each column's pile one-for-one, so nothing caps how tall it can stand;
+    // the deepest column is what caps it, and the march band needs that number to stay bounded. A
+    // global figure rather than a tuned constant is the point: the band is then exactly as deep as
+    // the sky happens to be, and a shallow sky costs a shallow march.
+    uint cloudPeakColumnAcc;
+    uint cloudPeakColumn;
     uint blackHoleCount;
     uint maxOccupiedY;
     uint blackHoles[BLACK_HOLE_MAX];
@@ -112,6 +122,11 @@ layout(std140, binding = 2) uniform TuningParams {
     float waterWaveStrength;
     float waterWaveScale;
     float waterWaveSpeed;
+    float waterSpecPower;
+    float waterSpecStrength;
+    float waterNormalFlatten;
+    float waterDiffuseFlatten;
+    float waterShadowFloor;
     uint lavaStageSize;
     float lavaViscosity;
     uint lavaSpreadRadius;
@@ -158,8 +173,8 @@ layout(std140, binding = 2) uniform TuningParams {
     float renderScale;
     uint cloudCheckIntervalTicks; // dispatches between storm checks
     uint rainWaitMaxTicks;        // ceiling of a raincloud's wait, 0..2047
-    float cloudColumnFullCount;   // cloud blocks in a column that read as fully dense
-    float cloudBlocksPerLevel;    // cloud blocks in a column per step of drawn height
+    float cloudColumnFullCount;   // cloud blocks in a column that read as fully dense (opacity)
+    float cloudBlocksPerLevel;    // UNUSED: height is a proportion of cloudColumnFullCount
     uint cloudClumpThreshold;     // UNUSED: cloud spreads like sand, no cohesion
     uint rainWaitMinTicks;        // floor of a raincloud's wait at the ceiling
     uint steamCondenseTicks;      // dispatches of stillness before steam condenses in place
@@ -170,7 +185,8 @@ layout(std140, binding = 2) uniform TuningParams {
     uint ashAbsorbTicks;          // dispatches a grain rests on soil before it works in
     uint ashEnrichAmount;         // flora a worked-in grain of ash is worth
     uint ashSettleTicks;          // dispatches a grain slumps for after landing, then sets
-    float cloudHeightLevels;      // most steps of height the drawn cloud deck spans
+    float cloudHeightLevels;      // UNUSED: the deck mirrors the pile, with no ceiling
+    float cloudUpdateInterval;    // seconds between republishes of the drawn cloud shape
 } tuning;
 
 // Per-frame state the CPU writes: camera pose, cursor position, brush.
@@ -425,6 +441,28 @@ vec3 getWaterNormal(ivec3 p) {
     return normalize(n);
 }
 
+// FUNCTION: flattenWaterNormal
+// Pulls a water normal toward straight up by `amount`, weighted by how up-facing it already is.
+//
+// getWaterNormal answers "which way does the boundary between water and air face", and answers it
+// honestly -- which is the problem, because on a settled pool that boundary is a lattice of voxels
+// reshuffling by a cell, not the smooth plane the water actually is. The gradient kernel made each
+// cell's vote small; this makes the whole vote count for less against the plane it is scattered
+// around. The two compose: the kernel decides how big the wobble is, this decides how much of it
+// survives into the normal.
+//
+// The upness weight is not optional. On a waterfall face or the wall of a pool, "up" is not a
+// smoothed version of the right answer, it is a different answer, and blending toward it would tilt
+// those normals somewhere the surface never faces. Vertical faces therefore keep the raw gradient
+// exactly, and only surfaces already close to horizontal -- the ones whose plane really is the XZ
+// plane -- get flattened at full strength.
+vec3 flattenWaterNormal(vec3 n, float amount) {
+    float upness = clamp(n.y, 0.0f, 1.0f);
+    float a = clamp(amount, 0.0f, 1.0f) * upness;
+    if (a <= 0.0f) return n;
+    return normalize(mix(n, vec3(0.0f, 1.0f, 0.0f), a));
+}
+
 // FUNCTION: renderSand
 vec3 renderSand(uint rawVoxel, vec3 baseLighting) {
     uint moisture = (rawVoxel >> 24) & 0xFFu;
@@ -513,9 +551,15 @@ vec3 renderWater(ivec3 voxelPos, vec3 normal, vec3 rayOrigin, vec3 sunDir, vec3 
     
     vec3 viewDir = normalize(rayOrigin - vec3(voxelPos));
     vec3 reflectDir = reflect(-sunDir, normal);
-    float spec = pow(max(dot(viewDir, reflectDir), 0.0f), 32.0f);
+    // Exponent and strength are both tuned rather than fixed, because the exponent is the gain this
+    // whole surface's remaining jitter is multiplied through: a narrow lobe turns a few degrees of
+    // normal wobble into a highlight snapping on and off, a wide one turns the same wobble into a
+    // highlight that slides. See waterSpecPower in Config.hpp for the numbers. Clamped at 1 because
+    // pow with an exponent below that flares rather than tightens, which is not a look worth having
+    // reachable by dragging a slider to its end.
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0f), max(tuning.waterSpecPower, 1.0f));
     
-    vec3 finalLighting = baseLighting + (sunColor * spec * 0.5f * shadow);
+    vec3 finalLighting = baseLighting + (sunColor * spec * tuning.waterSpecStrength * shadow);
     return baseColor * finalLighting;
 }
 
@@ -991,13 +1035,19 @@ vec3 accretionGlow(vec3 color, ivec3 voxelPos) {
 uint cloudColumnBase(int x, int z) { return uint(x + z * WIDTH) * 4u; }
 
 // FUNCTION: sampleCloudColumn
-// One column's published depth and the height of its topmost block, or zeroes off the edge.
-void sampleCloudColumn(int x, int z, out float count, out float topY) {
-    if (x < 0 || x >= WIDTH || z < 0 || z >= DEPTH) { count = 0.0f; topY = 0.0f; return; }
+// One column's published depth, or zero off the edge.
+//
+// The depth is the only thing read. A column's top Y used to live in slot 3 and be the deck's
+// underside, and that is exactly what made the sky look like a plate: cloud blocks pile against the
+// ceiling, so every occupied column reports a top within a block or two of the roof, and a surface
+// laid on those tops is flat by construction no matter what the pile beneath is doing. The deck
+// rests on one fixed level now and takes its whole shape from the depth, which left slot 3 free --
+// falling_sand.comp keeps the republish clock's per-column window in it.
+void sampleCloudColumn(int x, int z, out float count) {
+    if (x < 0 || x >= WIDTH || z < 0 || z >= DEPTH) { count = 0.0f; return; }
     uint b = cloudColumnBase(x, z);
     // Sixteenths -- see the easing in falling_sand.comp's column rotation.
     count = float(cloudColumn[b + 2u]) * (1.0f / 16.0f);
-    topY  = float(cloudColumn[b + 3u]) * (1.0f / 16.0f);
 
     // Taper toward the world's edges. Without it the deck ends in a straight vertical wall exactly
     // on the boundary, because a column off the edge reads as empty -- which is correct and looks
@@ -1018,17 +1068,39 @@ void sampleCloudColumn(int x, int z, out float count, out float topY) {
 // hash-filled shell tapers instead of ending. Still blocky -- the fill is per cloud-cell and that is
 // the point -- but blocky in a rounded envelope.
 //
-// The top is a max rather than an average, so a smoothed edge hangs below its neighbours rather than
-// sinking the whole bank toward the lowest one.
-void smoothedCloudColumn(int x, int z, int spread, out float count, out float topY) {
-    float c0, y0, c1, y1, c2, y2, c3, y3, c4, y4;
-    sampleCloudColumn(x, z, c0, y0);
-    sampleCloudColumn(x - spread, z, c1, y1);
-    sampleCloudColumn(x + spread, z, c2, y2);
-    sampleCloudColumn(x, z - spread, c3, y3);
-    sampleCloudColumn(x, z + spread, c4, y4);
-    count = (c0 * 2.0f + c1 + c2 + c3 + c4) / 6.0f;
-    topY  = max(max(max(y0, y1), max(y2, y3)), y4);
+// It matters more now than it did. The depth is the only thing shaping the deck, so every bit of
+// relief in the sky comes through this one number; blurring it is what turns a column-by-column
+// staircase into a mound.
+float smoothedCloudColumn(int x, int z, int spread) {
+    float c0, c1, c2, c3, c4;
+    sampleCloudColumn(x, z, c0);
+    sampleCloudColumn(x - spread, z, c1);
+    sampleCloudColumn(x + spread, z, c2);
+    sampleCloudColumn(x, z - spread, c3);
+    sampleCloudColumn(x, z + spread, c4);
+    return (c0 * 2.0f + c1 + c2 + c3 + c4) / 6.0f;
+}
+
+// FUNCTION: cloudDeckBaseY
+// The one flat level the whole deck stands on: the roof of the world cube, exactly.
+//
+// A single level for every column, not a per-column figure. The deck is the pile turned over -- it
+// rests on the roof the way the pile rests against it, and grows upward by however deep the pile
+// below it runs. Anchoring the underside is also what lets the relief be seen at all: with the base
+// fixed, every bit of variation in the depth goes into the silhouette instead of being cancelled by
+// a base that moved with it.
+//
+// Deliberately NOT snapped to the cloud lattice, which it was at first. Snapping exists to keep a
+// face from landing part way through a cell, because a partly-covered cell sits either side of its
+// edge threshold and blinks -- but that only matters for a face that MOVES, and this one never
+// does. What snapping did instead was lift the deck to the next cell boundary above the roof and
+// leave it hovering there: harmless at a 3-unit cell, a visible gap at 6, and growing with any
+// further rise. The cap above still snaps, because the cap is the face that moves.
+//
+// The cells drawn are those whose centre falls in [base, cap], so the underside renders on the cell
+// boundary just below the roof either way -- resting on the cube rather than floating over it.
+float cloudDeckBaseY() {
+    return float(HEIGHT);
 }
 
 // FUNCTION: marchBlockyCloud
@@ -1041,14 +1113,21 @@ void smoothedCloudColumn(int x, int z, int spread, out float count, out float to
 // integer coordinates -- clouds no longer drift, so a world-anchored pattern is stationary and will
 // not boil.
 //
-// The slab sits ABOVE the pile: its underside rests on the highest cloud block in the column and it
-// rises one whole cloud cell for every cloudBlocksPerLevel blocks beneath it, up to
-// cloudHeightLevels of them. Cloud blocks are invisible
-// and pile against the ceiling, so this puts the visible cloud just over the roof of the world --
-// which is where clouds were drawn before any of this, and what makes a deep pile read as a tall
-// bank of cloud rather than a thicker lid. Its density -- how much of the slab is filled rather than
-// holes -- scales with the count against cloudColumnFullCount, so a thin column is wispy and a deep
-// one is solid.
+// The slab is the pile turned over. Cloud blocks are invisible and stack downward from the ceiling,
+// so the deck stands on the roof of the cube -- one flat level shared by every column, the surface
+// the pile itself rests against -- and rises above it by exactly as far as the pile below hangs
+// down: one world unit per block, with no ceiling on it. A bank that hangs thickest at its middle
+// therefore draws highest at its middle, tapering to a single cell at its edges: the pile's own
+// profile, mirrored through the roof and rendered in ragged cloud cells rather than in blocks.
+//
+// The underside is flat on purpose and the relief is all on top. An earlier version laid the
+// underside on each column's topmost block, which sounds like it should give the same shape and
+// gives the opposite: the blocks pile AGAINST the ceiling, so every occupied column's top is within
+// a block or two of the roof, and a deck hung from those tops is a flat plate whichever way the
+// pile runs beneath it. Fixing the base is what lets the depth become shape.
+//
+// Density -- how much of the slab is filled rather than holes -- scales with the same count against
+// cloudColumnFullCount, so a thin column is wispy and a deep one is solid.
 //
 // One march for the whole sky, where this used to be one march per cloud inside a loop over up to
 // 64 of them. Colour blends from white/light-grey toward storm-grey as `greyness` rises.
@@ -1091,12 +1170,11 @@ bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, float tEnter, float tExit, ve
         int cz = int(floor(cellCenter.z));
 
         if (cx >= 0 && cx < WIDTH && cz >= 0 && cz < DEPTH) {
-            float count, baseY;
-            smoothedCloudColumn(cx, cz, spread, count, baseY);
+            float count = smoothedCloudColumn(cx, cz, spread);
 
             if (count > 0.0f) {
-                // Bottom on the pile's top block, growing upward with the pile's depth -- and both
-                // faces snapped to the cloud-cell lattice.
+                // Flat underside on the roof of the cube, growing upward with the pile's depth.
+                // The cap is snapped to the cloud-cell lattice; the base is already on it.
                 //
                 // Snapping is what stops the edges shimmering. The slab's extent still follows the
                 // block count, which changes every dispatch, and an unsnapped face lands part way
@@ -1106,21 +1184,22 @@ bool marchBlockyCloud(vec3 rayOrigin, vec3 rayDir, float tEnter, float tExit, ve
                 // -- rarely, and by a whole cell when it does.
                 float cell = max(tuning.cloudVoxelSize, 0.5f);
 
-                // Height is counted in WHOLE CELLS, from the column's depth, rather than being
-                // derived from a world-units-per-block figure and then floored to the lattice. The
-                // old form was thickness = count * 1.5 against a 3-unit cell, so it took two cloud
-                // blocks to buy one cell of height and the deck was one or two cells everywhere --
-                // flat, because the interesting part of the count range was quantised away before
-                // it could show. Expressed as a step per cloudBlocksPerLevel blocks, the same range
-                // of counts spreads over cloudHeightLevels distinct heights instead.
+                // Height is the column's pile, one for one. A cloud block is one voxel deep, so a
+                // column holding `count` of them hangs `count` world units below the ceiling, and
+                // the deck stands that same distance above the roof: the pile reflected in the
+                // surface it rests against. Rounded to whole cells because the deck is drawn on the
+                // cloud lattice, and floored at one so a column with any cloud in it draws
+                // something rather than winking out below half a cell.
                 //
-                // Clamped rather than left to run: the band-clipping below has to bound the march,
-                // and it can only do that if the tallest possible slab is known ahead of time.
-                float levels = max(tuning.cloudHeightLevels, 1.0f);
-                float perLevel = max(tuning.cloudBlocksPerLevel, 0.01f);
-                float cells = clamp(1.0f + floor(count / perLevel), 1.0f, levels);
+                // Nothing caps it. Two earlier versions capped it and both flattened the sky for
+                // the same reason: whatever the ceiling was, a settled bank is deeper than it
+                // everywhere except its rim, so the whole deck pinned to maximum and the profile
+                // never reached the screen. A mirror has no maximum -- however deep the pile runs is
+                // how high the cloud stands -- and the march stays bounded because the compute
+                // stage publishes the deepest column instead of the ceiling being assumed.
+                float cells = max(1.0f, floor(count / cell + 0.5f));
 
-                baseY = floor(baseY / cell) * cell;
+                float baseY = cloudDeckBaseY();
                 float thickness = cells * cell;
                 float capY = baseY + thickness;
 
@@ -1377,7 +1456,11 @@ void main() {
         // Water gets the wider density-gradient normal; everything else keeps the cheap binary one,
         // which is fine for materials that are not in constant motion at their surface.
         if (hitType == 2u) {
-            normal = applyWaterWaves(getWaterNormal(voxelPos), voxelPos);
+            // Flatten before the waves, not after: the waves are the motion that is SUPPOSED to be
+            // there, and damping them along with the churn would only mean turning wave strength
+            // back up to compensate.
+            normal = applyWaterWaves(
+                flattenWaterNormal(getWaterNormal(voxelPos), tuning.waterNormalFlatten), voxelPos);
         } else if (isLocustType(hitType) || hitType == TREE_TRUNK) {
             // The sub-cube's own face. Smoothing across the voxel's neighbours would be actively
             // wrong here: the surface the ray met is a small cube inside this voxel, and it has
@@ -1398,8 +1481,24 @@ void main() {
         vec3 sunColor = vec3(1.0f, 0.95f, 0.85f); 
         vec3 ambientColor = vec3(0.15f, 0.2f, 0.3f); 
         
-        float diffuse = max(dot(normal, sunDir), 0.0f);
+        // Water shades its diffuse term off a flatter normal than its specular term. Both terms
+        // still see the waves -- lighting the surface flat and glossing a pattern over it is what
+        // reads as moving texture rather than moving water -- but diffuse is a broad cosine that
+        // barely resolves a wave crest, while it responds to every bit of packing churn just as
+        // strongly as the highlight does. So it is the term with the worst ratio of what it gains
+        // from the normal to what it suffers from it, and the one worth flattening hardest.
+        vec3 diffuseNormal = (hitType == 2u)
+            ? flattenWaterNormal(normal, tuning.waterDiffuseFlatten)
+            : normal;
+
+        float diffuse = max(dot(diffuseNormal, sunDir), 0.0f);
         float shadow = calculateShadow(voxelPos, ddaNormal, sunDir, ceilingY);
+        // Compress water's own shadow into [floor, 1]. A surface voxel hopping changes how many
+        // water voxels a shadow ray crosses, and each crossing is a real step in transmittance; this
+        // scales what that step is worth on screen by (1 - floor) without touching the march.
+        if (hitType == 2u) {
+            shadow = mix(clamp(tuning.waterShadowFloor, 0.0f, 1.0f), 1.0f, shadow);
+        }
         vec3 baseLighting = ambientColor + (sunColor * diffuse * shadow);
         
         vec3 finalVoxelColor = vec3(1.0f, 0.0f, 1.0f) * baseLighting; 
@@ -1556,8 +1655,8 @@ void main() {
             // footprint with Y left open, because the cloud blocks are inside the world but the
             // cloud drawn from them stands above it -- clipping to the cube would cut off every
             // slab at the roof.
-            // Clipped to the band the cloud field actually occupies, which the compute stage
-            // publishes each dispatch. This is what makes a fixed step budget sufficient.
+            // Clipped to the band the deck can occupy. This is what makes a fixed step budget
+            // sufficient.
             //
             // Bounding the box to the world was not enough: a ray entering low still had to cross
             // the whole cube before reaching cloud that sits against the roof, so at some angles it
@@ -1565,38 +1664,27 @@ void main() {
             // because distance is what makes a ray enter low and travel far. Starting at the band
             // makes the march a few cells regardless of where the camera is.
             //
-            // Published min above max is the shader's way of saying there is no cloud at all, in
-            // which case there is nothing to march.
-            // Backed off by one cloud cell. The band's floor is the lowest cloud block anywhere, so
-            // it moves as blocks come and go -- and starting the march exactly on it risks beginning
-            // inside the first fillable cell rather than before it, which would change the first hit
-            // as the floor drifted. Starting a cell early is always safe; starting late is not.
-            // The tallest slab marchBlockyCloud can draw, which is what makes the band bounded:
-            // its height clamps to cloudHeightLevels whole cells. This has to track that clamp
-            // exactly -- too small and the tops of the deepest columns are clipped away, too large
-            // and every ray pays for band it can never hit.
+            // The band is exactly the slab's own extent: the deck stands on cloudDeckBaseY() and
+            // rises as far as the deepest column in the field, which the compute stage publishes.
+            // Measured rather than assumed, which is what lets the height be uncapped -- a tuned
+            // ceiling would have to be set for the worst sky that could ever occur and then be paid
+            // for by every ray on every other sky. A shallow sky now costs a shallow march.
             //
-            // Worth noting for the step budget: at the defaults this is 5 * 3 = 15 world units,
-            // the same figure the old cloudColumnFullCount * cloudThicknessPerBlock produced. The
-            // band is therefore no deeper than it was, and the 98-cell worst case that cloud.max_steps
-            // was measured against still holds. Raising cloud.height_levels does change it, which is
-            // why the two are documented together.
-            float slabMax = max(tuning.cloudHeightLevels, 1.0f)
-                          * max(tuning.cloudVoxelSize, 0.5f);
-            float bandHi = float(cloudMaxY) + slabMax;
-
-            // Floored, not just taken from the lowest block in the world. cloudMinY is a true
-            // minimum, so ONE stray block far below the deck -- a steam voxel that condensed in
-            // mid-air and has not finished rising -- stretched the band across the whole world. A
-            // shallow ray then crossed a tall band for its entire width, which is many cells, and
-            // ran out of budget: cloud went missing at a distance, because distance is what makes a
-            // ray shallow. Capping the depth bounds that traversal.
+            // It used to allow for a per-column underside that tracked the block field, giving a
+            // band roughly twice the slab height straddling cloudMaxY with most of it holding
+            // nothing. Anchoring the underside removed that half.
             //
-            // The cost is that cloud more than slabMax below the top of the field is not drawn. That
-            // is the transient risers, which is the better answer anyway -- they were showing up as
-            // isolated grey cubes down at water level.
-            float bandLo = max(float(cloudMinY), float(cloudMaxY) - slabMax)
-                         - max(tuning.cloudVoxelSize, 1.0f);
+            // The one cell of margin covers the publish lag: the peak is gathered while columns are
+            // still easing, so it can trail the tallest drawn column by a fraction of a block.
+            //
+            // Published min above max is the compute stage's way of saying there is no cloud at
+            // all, in which case there is nothing to march. cloudMinY/cloudMaxY are read for that
+            // emptiness test alone now; they no longer position anything.
+            float cloudCell = max(tuning.cloudVoxelSize, 0.5f);
+            float peakCount = float(cloudPeakColumn) * (1.0f / 16.0f);
+            float slabMax = max(1.0f, floor(peakCount / cloudCell + 0.5f)) * cloudCell;
+            float bandHi = cloudDeckBaseY() + slabMax + cloudCell;
+            float bandLo = cloudDeckBaseY() - max(tuning.cloudVoxelSize, 1.0f);
             vec2 cloudClip = (cloudMinY > cloudMaxY)
                 ? vec2(1.0f, -1.0f)   // empty interval: the tests below reject it
                 : intersectAABB(rayOrigin, rayDir,

@@ -9,6 +9,7 @@
 #include "UIManager.hpp"
 #include "UiBackendVulkan.hpp"
 #include "Config.hpp"
+#include "WorldFile.hpp"
 #include <vector>
 #include <memory>
 #include <chrono>
@@ -32,6 +33,15 @@ private:
     void createWorldBuffers();
     void writeDescriptorSet();
     void applyOptions(const TuningParams& requested);
+    void saveWorld();
+    void loadWorld();
+    void loadTextAsWorld();
+    // The tail shared by loadWorld and loadTextAsWorld: assume `world` is decoded/built and upload it.
+    void applyLoadedWorld(WorldFile::World& world);
+    // The path a typed name resolves to. Relative names land beside config.txt rather than in
+    // whatever the working directory happens to be, so a save made from a shortcut and one made
+    // from a terminal go to the same place.
+    std::string resolveWorldPath(const char* name) const;
     void uploadTuning();
     void createCommandPoolAndBuffer();
     void createSyncObjects();

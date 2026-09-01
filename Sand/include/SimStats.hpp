@@ -12,15 +12,19 @@ namespace SimStats {
 
 inline constexpr uint32_t kBlackHoleMax = 8;
 
-// The eighteen scalars at the top: waterVoxelCount, waterHighMark, cloudWaterCount, rainPhase,
+// The twenty scalars at the top: waterVoxelCount, waterHighMark, cloudWaterCount, rainPhase,
 // rainPhaseTimeBits, rainTargetLevel, rainCandidateCount, rainCandidateEstimate, cloudChargeBits,
 // cloudBlockCount, cloudMovedCount, cloudStillTicks, simTick, lastRainTick, cloudMinYAcc,
-// cloudMaxYAcc, cloudMinY, cloudMaxY.
+// cloudMaxYAcc, cloudMinY, cloudMaxY, cloudPeakColumnAcc, cloudPeakColumn.
 //
 // waterHighMark, cloudWaterCount and rainTargetLevel are dead -- weather is driven by the cloud
 // field going still rather than by a water deficit -- but they are still declared, in the shaders
 // too, so that removing them cannot shift the offset of anything after them.
-inline constexpr uint32_t kCloudScalarCount = 18;
+//
+// The peak pair was appended AFTER cloudMaxY and before blackHoleCount, so the three indices named
+// individually below (all under 14, read back by the profiler) keep their values and everything
+// past them moves by two together, which the derived constants handle on their own.
+inline constexpr uint32_t kCloudScalarCount = 20;
 
 // Individually named because the profiler reads these three back rather than the whole block.
 inline constexpr uint32_t kRainPhase   = 3;
@@ -40,7 +44,13 @@ inline constexpr uint32_t kFieldCount = kStarveEnd;
 
 // Past kFieldCount the buffer carries a per-column cloud census, four words per column, laid out
 // at (x + z * gridWidth) * kColumnWords:
-//   +0 accumulator count, +1 accumulator top Y, +2 published count, +3 published top Y.
+//   +0 accumulator count, +1 unused, +2 published count, +3 the publish window this column last
+//   wrote in.
+//
+// Slots 1 and 3 both used to serve the column's top Y, accumulated and published. Nothing reads a
+// column's height any more -- the drawn deck stands on the roof of the cube rather than on the
+// blocks -- so the accumulation is gone and the published word was taken over by the republish
+// clock, which needs one word of per-column state and has a single writer available for it.
 //
 // This makes the stats buffer VARIABLE LENGTH -- it is kFieldCount + gridWidth * gridDepth *
 // kColumnWords words, and both renderers must size it that way and resize it when the world does.

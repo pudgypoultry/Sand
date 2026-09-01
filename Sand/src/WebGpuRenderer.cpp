@@ -10,6 +10,7 @@
 #include "Storage.hpp"
 #include "FrameLoop.hpp"
 #include "SimStats.hpp"
+#include "WorldFile.hpp"
 
 #include <GLFW/glfw3.h>
 #include <emscripten/html5.h>
@@ -302,7 +303,11 @@ void WebGpuRenderer::createWorldBuffers() {
 
     WGPUBufferDescriptor desc = WGPU_BUFFER_DESCRIPTOR_INIT;
     desc.label = sv("grid");
-    desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+    // CopySrc as well as CopyDst: saving the world copies both fields into a mappable buffer, and
+    // WebGPU rejects a copy out of a buffer that was not created expecting one. Costs nothing to
+    // declare; without it the save fails at the copy with a validation error rather than anywhere
+    // near the code that asked for it.
+    desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst | WGPUBufferUsage_CopySrc;
     desc.size = gridBytes;
     gridBuffer = wgpuDeviceCreateBuffer(device, &desc);
 
@@ -597,6 +602,233 @@ void WebGpuRenderer::releaseWorldBuffers() {
     // releaseWorldBuffers clears, so a late completion for a buffer that is gone does nothing.
     if (statsReadback) { wgpuBufferDestroy(statsReadback); wgpuBufferRelease(statsReadback); statsReadback = nullptr; }
     readbackPending = false;
+    // The save staging buffer goes the same way and for the same reason: its callback checks
+    // worldSavePending, which is cleared here, so a completion arriving after a resize is a no-op
+    // rather than a use of a destroyed buffer.
+    if (worldReadback) { wgpuBufferDestroy(worldReadback); wgpuBufferRelease(worldReadback); worldReadback = nullptr; }
+    worldSavePending = false;
+    uiManager.setWorldBusy(false);
+}
+
+/// saveWorld: copy the grid, the cloud field and the stats block into one mappable buffer, and
+// finish the job when the browser hands it over.
+//
+// The desktop reads all three straight off host-visible memory. WebGPU offers no such thing for a
+// storage buffer, so this is the same dance pollSimState does for three scalars, at the scale of
+// the whole world: copy, submit, ask to map, take delivery later. The UI is told it is busy for the
+// duration, because a second request landing mid-flight would copy into a buffer that is currently
+// mapped, which is invalid.
+void WebGpuRenderer::saveWorld() {
+    if (worldSavePending || !gridBuffer || !cloudBuffer || !statsBuffer) return;
+
+    pendingSaveName = uiManager.worldFileName();
+    if (pendingSaveName.empty()) {
+        uiManager.setWorldStatus("No file name given.", true);
+        return;
+    }
+
+    const uint64_t gridBytes = (uint64_t)voxelCount() * sizeof(uint32_t);
+    const uint64_t statsBytes =
+        (uint64_t)SimStats::statsWordCount(config.tuning.gridWidth, config.tuning.gridDepth)
+        * sizeof(uint32_t);
+    const uint64_t total = gridBytes * 2ull + statsBytes;
+
+    WGPUBufferDescriptor desc = WGPU_BUFFER_DESCRIPTOR_INIT;
+    desc.label = sv("world readback");
+    desc.usage = WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst;
+    desc.size = total;
+    worldReadback = wgpuDeviceCreateBuffer(device, &desc);
+    if (!worldReadback) {
+        uiManager.setWorldStatus("Save failed: could not allocate a readback buffer.", true);
+        return;
+    }
+
+    WGPUCommandEncoderDescriptor encDesc = WGPU_COMMAND_ENCODER_DESCRIPTOR_INIT;
+    encDesc.label = sv("world readback");
+    WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+    wgpuCommandEncoderCopyBufferToBuffer(enc, gridBuffer,  0, worldReadback, 0,               gridBytes);
+    wgpuCommandEncoderCopyBufferToBuffer(enc, cloudBuffer, 0, worldReadback, gridBytes,       gridBytes);
+    wgpuCommandEncoderCopyBufferToBuffer(enc, statsBuffer, 0, worldReadback, gridBytes * 2ull, statsBytes);
+
+    WGPUCommandBufferDescriptor cbDesc = WGPU_COMMAND_BUFFER_DESCRIPTOR_INIT;
+    WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc, &cbDesc);
+    wgpuQueueSubmit(queue, 1, &cb);
+    wgpuCommandBufferRelease(cb);
+    wgpuCommandEncoderRelease(enc);
+
+    worldSavePending = true;
+    uiManager.setWorldBusy(true);
+    uiManager.setWorldStatus("Saving...", false);
+
+    WGPUBufferMapCallbackInfo cbInfo = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
+    // AllowSpontaneous for the same reason pollSimState uses it: nothing here ever calls
+    // wgpuInstanceProcessEvents, so the browser's own event loop has to be allowed to deliver.
+    cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    cbInfo.userdata1 = this;
+    cbInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* userdata1, void*) {
+        auto* self = static_cast<WebGpuRenderer*>(userdata1);
+        // A resize between the request and its completion destroys the buffer and clears the flag,
+        // exactly as it can for the stats readback. Landing here with the flag down means the
+        // buffer named below is already gone.
+        if (!self->worldSavePending || !self->worldReadback) return;
+
+        if (status == WGPUMapAsyncStatus_Success) {
+            self->finishWorldSave();
+        } else {
+            self->uiManager.setWorldStatus("Save failed: the world could not be read back.", true);
+        }
+
+        if (self->worldReadback) {
+            wgpuBufferUnmap(self->worldReadback);
+            wgpuBufferDestroy(self->worldReadback);
+            wgpuBufferRelease(self->worldReadback);
+            self->worldReadback = nullptr;
+        }
+        self->worldSavePending = false;
+        self->uiManager.setWorldBusy(false);
+    };
+    wgpuBufferMapAsync(worldReadback, WGPUMapMode_Read, 0, (size_t)total, cbInfo);
+}
+
+// finishWorldSave: the mapped bytes are here; turn them into a file.
+//
+// Split out of the callback purely so the callback stays about lifetime -- unmapping, releasing and
+// clearing the flag happen on every outcome, and burying the encode inside that made it hard to see
+// that they do.
+void WebGpuRenderer::finishWorldSave() {
+    const uint64_t gridBytes = (uint64_t)voxelCount() * sizeof(uint32_t);
+    const uint32_t statsWords =
+        SimStats::statsWordCount(config.tuning.gridWidth, config.tuning.gridDepth);
+    const uint64_t total = gridBytes * 2ull + (uint64_t)statsWords * sizeof(uint32_t);
+
+    const uint32_t* mapped =
+        static_cast<const uint32_t*>(wgpuBufferGetConstMappedRange(worldReadback, 0, (size_t)total));
+    if (!mapped) {
+        uiManager.setWorldStatus("Save failed: the readback buffer would not map.", true);
+        return;
+    }
+
+    const size_t voxels = voxelCount();
+    WorldFile::World world;
+    world.width = config.tuning.gridWidth;
+    world.height = config.tuning.gridHeight;
+    world.depth = config.tuning.gridDepth;
+    world.grid.assign(mapped, mapped + voxels);
+    world.cloud.assign(mapped + voxels, mapped + voxels * 2);
+
+    const uint32_t* stats = mapped + voxels * 2;
+    for (uint32_t i = 0; i < SimStats::kBlackHoleMax; i++) {
+        world.holeSlot[i] = stats[SimStats::kHoles + i];
+        world.holeMass[i] = stats[SimStats::kMass + i];
+        world.holeStarve[i] = stats[SimStats::kStarve + i];
+    }
+    world.holeCount = stats[SimStats::kCount];
+
+    const std::string text = WorldFile::encode(world);
+    std::string error;
+    if (!Storage::writeUserFile(pendingSaveName, text, error)) {
+        uiManager.setWorldStatus("Save failed: " + error, true);
+        return;
+    }
+
+    char note[192];
+    std::snprintf(note, sizeof(note), "Saved %u^3 to %s (%.1f KB).", world.width,
+                  pendingSaveName.c_str(), text.size() / 1024.0);
+    uiManager.setWorldStatus(note, false);
+}
+
+// loadWorld: the browser's file picker, then the file back over the live world.
+//
+// No busy flag on this one, deliberately. A cancelled picker fires no event in most browsers, so
+// there would be nothing to clear the flag on and the buttons would be dead for the rest of the
+// session the first time someone pressed Escape -- see the note in Storage.cpp.
+void WebGpuRenderer::loadWorld() {
+    Storage::readUserFile(std::string(), [this](bool ok, std::string contents, std::string error) {
+        if (!ok) {
+            uiManager.setWorldStatus("Load failed: " + error, true);
+            return;
+        }
+
+        WorldFile::World world;
+        std::string decodeError;
+        if (!WorldFile::decode(contents, world, decodeError)) {
+            uiManager.setWorldStatus("Load failed: " + decodeError, true);
+            return;
+        }
+        applyLoadedWorld(world);
+
+        char note[192];
+        std::snprintf(note, sizeof(note), "Loaded %u^3 from file.", world.width);
+        uiManager.setWorldStatus(note, false);
+    });
+}
+
+// loadTextAsWorld: read any file and stretch it across the cube at the current dimensions.
+//
+// See VulkanRenderer::loadTextAsWorld for the wider comment on why this does not renegotiate
+// the size the way loadWorld does. Same shape here: read, build, upload -- all through the same
+// applyLoadedWorld the save format takes.
+void WebGpuRenderer::loadTextAsWorld() {
+    Storage::readUserFile(std::string(), [this](bool ok, std::string contents, std::string error) {
+        if (!ok) {
+            uiManager.setWorldStatus("Load failed: " + error, true);
+            return;
+        }
+        WorldFile::World world;
+        WorldFile::worldFromText(contents, config.tuning.gridWidth, config.tuning.gridHeight,
+                                 config.tuning.gridDepth, world);
+        applyLoadedWorld(world);
+
+        char note[192];
+        std::snprintf(note, sizeof(note), "Loaded %zu bytes as %u^3 from file.",
+                      contents.size(), world.width);
+        uiManager.setWorldStatus(note, false);
+    });
+}
+
+// applyLoadedWorld: upload a decoded/built world to the live buffers. Shared by both loaders.
+//
+// Fresh stats block rather than a read-modify-write, for the reason beginPurge gives: reading
+// one back needs an asynchronous staging copy, and there is nothing in the old block worth
+// waiting for. The scalars and the cloud census describe the world being replaced and rebuild
+// within a few dispatches; the black hole table is the one part that cannot rebuild itself,
+// and it comes with the world.
+void WebGpuRenderer::applyLoadedWorld(WorldFile::World& world) {
+    if (world.width != config.tuning.gridWidth || world.height != config.tuning.gridHeight ||
+        world.depth != config.tuning.gridDepth) {
+        // Rebuilds the buffers at the file's size, through the same path the options screen uses.
+        // Never reached from loadTextAsWorld -- that one builds at the current dimensions -- so
+        // this branch is only ever loadWorld's.
+        TuningParams resized = config.tuning;
+        resized.gridWidth = world.width;
+        resized.gridHeight = world.height;
+        resized.gridDepth = world.depth;
+        applyOptions(resized);
+    }
+
+    const size_t total = voxelCount();
+    if (world.grid.size() != total || world.cloud.size() != total || !gridBuffer) {
+        uiManager.setWorldStatus("Load failed: the world could not be resized to match.", true);
+        return;
+    }
+
+    wgpuQueueWriteBuffer(queue, gridBuffer, 0, world.grid.data(), total * sizeof(uint32_t));
+    wgpuQueueWriteBuffer(queue, cloudBuffer, 0, world.cloud.data(), total * sizeof(uint32_t));
+
+    std::vector<uint32_t> stats(
+        SimStats::statsWordCount(config.tuning.gridWidth, config.tuning.gridDepth), 0u);
+    uint32_t live = 0;
+    for (uint32_t i = 0; i < SimStats::kBlackHoleMax; i++) {
+        stats[SimStats::kHoles + i] = world.holeSlot[i];
+        stats[SimStats::kMass + i] = world.holeMass[i];
+        stats[SimStats::kStarve + i] = world.holeStarve[i];
+        if (world.holeSlot[i] != 0u) live++;
+    }
+    stats[SimStats::kCount] = live;
+    stats[SimStats::kMaxY] = config.tuning.gridHeight;
+    wgpuQueueWriteBuffer(queue, statsBuffer, 0, stats.data(), stats.size() * sizeof(uint32_t));
+
+    uiManager.resetTicks();
 }
 
 // beginPurge: what Clear Grid does -- one enormous black hole at the centre, eating the world.
@@ -842,6 +1074,9 @@ void WebGpuRenderer::frame() {
 
     // The three UI actions. Safe to do here between frames: everything below touches buffers only
     // through the queue, which orders them against work already submitted.
+    if (uiManager.consumeSaveWorldRequest())    saveWorld();
+    if (uiManager.consumeLoadWorldRequest())    loadWorld();
+    if (uiManager.consumeLoadTextRequest())     loadTextAsWorld();
     if (uiManager.consumeResetRequest())        beginPurge();
     if (uiManager.consumeApplyOptions())        applyOptions(uiManager.pendingTuning());
     if (uiManager.consumeCameraResetRequest())  window->resetCamera();

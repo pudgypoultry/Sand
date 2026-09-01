@@ -10,6 +10,7 @@
 #include "UIManager.hpp"
 #include "UiBackendWebGpu.hpp"
 #include "Config.hpp"
+#include "WorldFile.hpp"
 #include "FrameConstants.hpp"
 #include "CursorRay.hpp"
 
@@ -54,6 +55,12 @@ private:
     void resetWorld();
     void beginPurge();
     void applyOptions(const TuningParams& requested);
+    void saveWorld();
+    void loadWorld();
+    void loadTextAsWorld();
+    void finishWorldSave();   // the far end of saveWorld's buffer map
+    // The tail shared by loadWorld and loadTextAsWorld: assume `world` is decoded/built and upload it.
+    void applyLoadedWorld(WorldFile::World& world);
     void releaseWorldBuffers();
     void uploadTuning();
     void uploadFrameConstants();
@@ -101,6 +108,21 @@ private:
     // buffer, so the same three values cost a staging buffer, a copy and an asynchronous map.
     WGPUBuffer statsReadback = nullptr;
     bool       readbackPending = false;   // a map is in flight; do not copy into or re-map it
+
+    // --- Saving the world -------------------------------------------------------------------
+    // One staging buffer holding all three sources end to end -- grid, then cloud, then the whole
+    // stats block -- rather than three buffers with three maps to sequence. A map is asynchronous,
+    // so three of them would have to be chained through each other's callbacks; one copy pass into
+    // one buffer needs a single callback and cannot half-succeed.
+    //
+    // Allocated per save and released in the callback. It is twice the grid plus the census, which
+    // is 17 MB on a 128-cube, and holding that permanently for a button pressed occasionally is not
+    // a reasonable trade.
+    WGPUBuffer worldReadback = nullptr;
+    bool       worldSavePending = false;
+    // Captured when the save is requested. The name in the UI could be edited while the map is in
+    // flight, and the file that arrives should be the one that was asked for.
+    std::string pendingSaveName;
 
     // Two of each, because the grid's usage differs by stage and a bind group is only valid with
     // the layout it was created against. The render pass binds it read-only -- WebGPU permits

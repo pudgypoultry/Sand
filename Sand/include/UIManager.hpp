@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include "ConfigSchema.hpp"
+#include "GfxBackend.hpp"
 #include "UiBackend.hpp"
 
 enum class MaterialType {
@@ -159,6 +160,8 @@ public:
 
         ImGui::PopItemWidth();
 
+        buildWorldFileControls();
+
         ImGui::Separator();
         ImGui::Checkbox("Show Profiler", &m_showProfiler);
         if (ImGui::Button("Options...")) m_showOptions = true;
@@ -303,6 +306,41 @@ public:
     void setTuning(const TuningParams& t) { m_pendingTuning = t; m_liveTuning = t; }
     const TuningParams& pendingTuning() const { return m_pendingTuning; }
 
+    // Save and load are requests in the same sense the others are: the UI raises a flag and the
+    // renderer acts on it between frames, where it can be sure the GPU is idle. Doing the work
+    // inside buildUI would touch buffers mid-frame.
+    bool consumeSaveWorldRequest() {
+        bool requested = m_saveWorldRequested;
+        m_saveWorldRequested = false;
+        return requested;
+    }
+
+    bool consumeLoadWorldRequest() {
+        bool requested = m_loadWorldRequested;
+        m_loadWorldRequested = false;
+        return requested;
+    }
+
+    bool consumeLoadTextRequest() {
+        bool requested = m_loadTextRequested;
+        m_loadTextRequested = false;
+        return requested;
+    }
+
+    const char* worldFileName() const { return m_worldFileName; }
+
+    // The one line under the buttons. Errors are worth keeping on screen -- a decode failure names
+    // the line that broke -- so nothing clears this on a timer; the next save or load replaces it.
+    void setWorldStatus(const std::string& text, bool isError) {
+        m_worldStatus = text;
+        m_worldStatusIsError = isError;
+    }
+
+    // Greys both buttons while an operation is outstanding. The desktop is synchronous and never
+    // sets it; the web backend does, because its export waits on a buffer map and a second request
+    // arriving mid-flight would be a second readback into the same staging buffer.
+    void setWorldBusy(bool busy) { m_worldBusy = busy; }
+
     bool consumeApplyOptions() {
         bool requested = m_applyOptions;
         m_applyOptions = false;
@@ -362,6 +400,22 @@ private:
     bool     m_simStateValid = false;
     bool m_showOptions = false;
     bool m_firstFrame = true; // drives the one-shot startup window placement in buildUI
+
+    // --- Save and load ----------------------------------------------------------------------
+    // The desktop resolves this name itself and so needs one before it can read; the browser's
+    // file picker supplies its own, so Load there does not depend on the box being filled.
+#if SAND_FILESYSTEM_IS_PERSISTENT
+    static constexpr bool kLoadNeedsName = true;
+#else
+    static constexpr bool kLoadNeedsName = false;
+#endif
+    char m_worldFileName[128] = "world.sand.txt";
+    bool m_saveWorldRequested = false;
+    bool m_loadWorldRequested = false;
+    bool m_loadTextRequested = false;
+    bool m_worldBusy = false;
+    std::string m_worldStatus;
+    bool m_worldStatusIsError = false;
 
     // The options screen edits a COPY and hands it over only when Apply is pressed. Editing the live
     // values would mean every intermediate position of every slider was a config the simulation
@@ -533,6 +587,57 @@ private:
         }
 
         if (f.help && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", f.help);
+    }
+
+    // FUNCTION: buildWorldFileControls
+    // Save and load, as a section of the main panel rather than a window of its own -- it is two
+    // buttons and a name, and a modal for that would be more ceremony than the feature is.
+    //
+    // The name box is a plain text field because there is no file dialog to be had. GLFW does not
+    // provide one and no picker library is vendored, so the desktop resolves this against the
+    // directory config.txt came from. In the browser the same string names the download; the load
+    // side there goes through the page's own file picker and ignores it.
+    void buildWorldFileControls() {
+        ImGui::Separator();
+
+        ImGui::PushItemWidth(ImGui::GetFontSize() * 10.0f);
+        ImGui::InputText("World file", m_worldFileName, sizeof(m_worldFileName));
+        ImGui::PopItemWidth();
+
+        // Empty name disables Save rather than silently inventing one, so the button never writes
+        // somewhere the user did not name. Load is disabled with it on the desktop for the same
+        // reason; in the browser the picker supplies the name, so it stays live.
+        const bool named = m_worldFileName[0] != '\0';
+
+        ImGui::BeginDisabled(!named || m_worldBusy);
+        if (ImGui::Button("Save World")) m_saveWorldRequested = true;
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+
+        ImGui::BeginDisabled((!named && kLoadNeedsName) || m_worldBusy);
+        if (ImGui::Button("Load World")) m_loadWorldRequested = true;
+        ImGui::EndDisabled();
+
+        // "Load as Text" reads ANY file and stretches its bytes to fill the cube. Distinct from
+        // Load World, which insists on the save format -- this one gives up meaning for the freedom
+        // to take anything. Same file-name box, same busy gate. See worldFromText in WorldFile for
+        // what the bytes get turned into.
+        ImGui::SameLine();
+        ImGui::BeginDisabled((!named && kLoadNeedsName) || m_worldBusy);
+        if (ImGui::Button("Load as Text")) m_loadTextRequested = true;
+        ImGui::EndDisabled();
+
+        // One status line, sized to be present whether or not there is anything to say, so the
+        // panel does not change height as saves come and go -- the same reason the black hole hint
+        // above always emits a row.
+        if (m_worldStatus.empty()) {
+            ImGui::TextDisabled(" ");
+        } else if (m_worldStatusIsError) {
+            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", m_worldStatus.c_str());
+        } else {
+            ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), "%s", m_worldStatus.c_str());
+        }
     }
 
     // FUNCTION: buildOptions
